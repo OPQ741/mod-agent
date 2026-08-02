@@ -36,6 +36,10 @@ Desktop.ini
 # docs 阅读页自动生成的截图（本地预览产物，不入库）
 docs/_shots/
 
+# VitePress 缓存与构建产物
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # TypeScript 增量构建信息
 *.tsbuildinfo
 
