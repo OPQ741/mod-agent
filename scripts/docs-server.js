@@ -5,6 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 const { marked } = require('marked');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -73,7 +74,13 @@ function start(port) {
   }).on('error', (e) => {
     if (e.code === 'EADDRINUSE') { console.warn(`端口 ${port} 被占用，尝试 ${port + 1} ...`); start(port + 1); }
     else throw e;
-  }).listen(port, () => console.log(`docs running at http://localhost:${port}`));
+  }).listen(port, () => {
+    const url = `http://localhost:${port}`;
+    console.log(`docs running at ${url}`);
+    // 自动打开浏览器（Windows: start, macOS: open, Linux: xdg-open）
+    const opener = process.platform === 'win32' ? 'start ""' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+    exec(`${opener} ${url}`);
+  });
 }
 
 start(PORT);
