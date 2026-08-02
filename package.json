@@ -1,0 +1,19 @@
+{
+  "name": "mod-agent",
+  "version": "1.0.0",
+  "description": "TypeScript 实现的 AI Coding Agent CLI",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "docs": "node scripts/docs-server.js"
+  },
+  "keywords": ["ai", "coding-agent", "llm", "cli"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "marked": "^12.0.2",
+    "mermaid": "^10.9.8"
+  }
+}

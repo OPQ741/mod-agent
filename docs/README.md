@@ -32,6 +32,7 @@
 
 | 文档 | 回答的问题 |
 | --- | --- |
+| [README.md](./README.md) | 项目定位 + 技术栈 + 全文导航 |
 | [overview.md](./overview.md) | 目标与边界、设计原则、任务模式、MVP 做 / 不做 |
 | [research.md](./research.md) | 领域调研：主流产品、评测基准、架构范式、失败模式与安全实证 |
 | [architecture.md](./architecture.md) | 总体分层架构、架构决策记录（ADR）、技术选型、monorepo 结构 |
