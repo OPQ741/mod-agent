@@ -6,10 +6,15 @@ export default withMermaid(defineConfig({
   description: 'AI Coding Agent 设计文档',
   lang: 'zh-CN',
   lastUpdated: true,
+  head: [
+    // 自定义 favicon（可选）
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+  ],
   themeConfig: {
     search: { provider: 'local' },
     outline: { level: [2, 3], label: '本页目录' },
     docFooter: { prev: '上一篇', next: '下一篇' },
+    returnToTopLabel: '返回顶部',
     sidebar: [
       { text: '01 · 首页', link: '/' },
       { text: '02 · Overview', link: '/overview' },
@@ -28,7 +33,7 @@ export default withMermaid(defineConfig({
       { text: '15 · References', link: '/references' },
     ],
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/' }
+      { icon: 'github', link: 'https://github.com/OPQ741/mod-agent' }
     ],
   },
 }))
