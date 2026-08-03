@@ -1,10 +1,12 @@
 # Data & Events · 事件流与持久化
 
-> 任务状态不能只存在内存的对话历史里。这篇讲 append-only 事件模型、SQLite 持久化与一致性规则。
+> **这篇讲什么**：一次任务做了什么、改了哪些文件、哪一步要审批——这些不能只放在聊天窗口的内存里，一关就没。mod-agent 把每一步都落成一条「不可改的记录」写进 SQLite，崩了能重放、出错能审计。
+>
+> **给谁看**：设计存储层、任务状态机的人。**读完你该知道**：为什么状态要用「追加事件」而不是直接改一行数据库，以及审批为什么要和参数哈希绑死。
 
 ## 1. EventStream 事件模型
 
-所有状态 = 按时间排序的不可变事件序列（action + observation），可 replay / condense / audit。
+先打个比方：EventStream（事件流）像一本只能往后翻页、写上去就不能改的流水账。所有状态 = 按时间排序的不可变事件序列（action + observation，即「动作」和「观察结果」），可 replay（重放）、condense（压缩）、audit（审计）。
 
 ```mermaid
 flowchart LR
@@ -21,13 +23,13 @@ flowchart LR
     Store --> R["Replay / Condense / Audit"]
 ```
 
-事件包络：
+事件包络（每条事件长这样）：
 
 ```ts
 interface TaskEvent<T = unknown> {
   eventId: string;        // task_id + sequence 的稳定标识
   taskId: string;
-  seq: number;
+  seq: number;            // 同任务内自增序号
   type: string;
   timestamp: string;
   payload: T;
@@ -37,6 +39,29 @@ interface TaskEvent<T = unknown> {
 事件类型：`task.status_changed`、`task.plan_ready`、`agent.message_delta`、`tool.started`、`tool.progress`、`tool.completed`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`。
 
 > 不把每个 token 都永久写库：流式发送文本增量，但只持久化重要生命周期事件、完成消息与必要审计内容。
+> 举个例子（示意）：agent 边想边往外蹦字，这些中间增量在屏幕上流式显示，但不会逐字写进数据库；真正落库的是「任务开始了」「工具跑完了」「审批点了同意」这种关键节点。
+
+下面这张时序图画了「一次工具调用从发起到落库」会产生哪些事件：
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant L as Agent主循环
+    participant T as 工具
+    participant DB as EventStream (SQLite)
+    U->>L: 提交任务请求
+    L->>DB: 追加 task.plan_ready
+    L->>T: tool.started
+    T-->>L: 返回结果
+    L->>DB: 追加 tool.completed + file.changed
+    alt 该动作需要审批
+        L->>U: approval.required
+        U-->>L: approval.decided(与参数哈希绑定)
+    end
+    L->>DB: 追加 checkpoint.created / task.completed
+```
+
+**这张图在说什么**：每一步动作和它的结果都落成一条新事件往后追加，从不覆盖旧记录；凡是要审批的动作，「问」和「答」各记一条，而且答的那条和当时的参数哈希绑死——防止审批通过后模型偷偷把参数换掉。
 
 ### 1.1 事件化会话对象（OpenHands SDK 实证）
 
@@ -48,7 +73,7 @@ OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https:
 
 ## 2. 持久化表（SQLite）
 
-PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模型。
+PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模型（先跑起来，逻辑不变，以后换库只换驱动）。
 
 **`coding_tasks`**
 `id`、`title`、`user_request`、`mode`、`status`、`risk_level`、`base_commit`、`worktree_ref`、`current_checkpoint_id`、`state_version`、`budget_json`、`usage_json`、`deadline_at`、`cancel_requested_at`、`last_error_code`、时间戳。
@@ -74,8 +99,10 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 ## 3. 数据一致性规则
 
 - 每次状态转换带 `state_version` 乐观锁，防两个执行方同时推进任务；
+  > 通俗地说：乐观锁 = 「我基于版本 5 改的，如果改之前版本已经变成 6 了，说明别人动过，我这次不算数」。
 - 每任务任一时刻只有一个有效执行租约，租约可续期、过期回收；
 - 工具调用开始与结果分别持久化；结果未知的非幂等调用进入 `outcome_unknown`，而非自动标失败后重试；
+  > 举个例子（示意）：agent 已经发出「创建 PR」的请求，但网络断了，不知道服务端到底建没建。这时不能盲目重试——万一第一次其实成功了，重试就建出两个 PR。正确做法是记成「结果未知」，等人或去查一下再决定。
 - 事件按 `seq` 发送，断线后可从序号补拉；
 - 审批只生效一次并与 `parameter_hash` 绑定，防审批后模型偷偷改操作参数；
 - 每次状态转换在同一事务里「更新状态 + 追加事件」；
@@ -93,6 +120,7 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 - 主流工具已原生兼容：GitHub Copilot coding agent、Devin、Factory、Cursor、Codex、Gemini CLI、Windsurf、Zed、Warp、VS Code 等；
 - 官方明确「Rather than introducing another proprietary file, we chose a name and format that could work for anyone」——跟着标准走，用户跨工具复用同一份项目规则；
 - 加载语义：**离被编辑文件最近的 AGENTS.md 优先**；用户当场聊天指令优先级最高；支持 monorepo 嵌套（详见 [context-engineering.md](./context-engineering.md) §2.1）。
+> 举个例子（示意）：仓库根放一份全局 `AGENTS.md`（如「用 pnpm 不用 npm」），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
 
 **兼容读取策略（Devin 实证，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：Devin 提供 `read_config_from` 开关，可选择性导入 `AGENTS.md`（含 `AGENTS.local.md`、历史名 `AGENT.md`、`.windsurfrules`）以及 Cursor / Windsurf / Claude / OpenCode / Zed 等竞品的规则文件。mod-agent 启动时同样以开关方式兼容读取 `AGENTS.md` + 已知竞品规则文件，逐项可关。
 

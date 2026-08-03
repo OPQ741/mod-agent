@@ -4,6 +4,8 @@
 
 > 项目阶段：**设计阶段**。本文档集描述目标架构与工程约定，尚未开始编码。
 
+> 这堆文档是干什么的（一句话）：mod-agent 还没写一行代码，这里先把「它该长成什么样、怎么一步步搭、哪些坑前人踩过」白纸黑字定下来。类比装修：这是全套施工图，不是样板间成品。
+
 ## 设计目标
 
 在持久隔离的工作区里接收自然语言需求或 issue，自主完成仓库探索、多文件修改、测试验证与自我修正，最终产出可审查的分支 diff。它是一个**人在环上（human-in-the-loop）**的委托执行系统，而不是完全无人值守的「AI 软件工程师」：人负责需求决策与最终审查，Agent 负责探索、实现、验证与迭代。
@@ -48,6 +50,30 @@
 | [observability-evaluation.md](./observability-evaluation.md)       | Trace/指标/日志/成本，以及评测体系与发布门禁                                              |
 | [roadmap.md](./roadmap.md)                                         | 分阶段路线（Phase 0–6）、优先开发顺序、MVP 验收清单                                       |
 | [references.md](./references.md)                                   | 参考来源汇总                                                                              |
+
+### 从哪篇开始读
+
+不用从头读到尾，按你的身份挑入口：
+
+| 你是谁             | 建议先读                                                                                        | 目的                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------- |
+| 第一次来、只想快速了解 | [overview.md](./overview.md) → [research.md](./research.md) 前两节                              | 5 分钟知道它做什么、不做什么          |
+| 要参与开发         | [architecture.md](./architecture.md) → [agent-loop.md](./agent-loop.md) → [roadmap.md](./roadmap.md) | 先看分层与开发顺序，再钻细节专题       |
+| 想判断设计靠不靠谱 | [research.md](./research.md) → [security.md](./security.md) → [coding-agents.md](./coding-agents.md) | 看业界事实依据、安全边界与对标图鉴     |
+
+下图是这份文档集的阅读主线（箭头表示「先读哪篇再读哪篇」）：
+
+```mermaid
+flowchart LR
+    A["overview.md<br/>做什么 / 不做什么"] --> B["research.md<br/>业界依据"]
+    A --> C["architecture.md<br/>怎么分层"]
+    C --> D["agent-loop.md<br/>主循环"]
+    C --> E["security.md<br/>安全边界"]
+    D --> F["roadmap.md<br/>怎么落地"]
+    B -. 对标 .-> G["coding-agents.md<br/>45 个产品图鉴"]
+```
+
+这张图在说什么：先有「做什么」，才谈「业界怎么做、我们怎么分层」；细节专题都是主干上的分支，开发路线收在 roadmap。
 
 ## 设计原则（速览）
 
