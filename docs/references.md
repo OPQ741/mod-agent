@@ -248,3 +248,14 @@
 **OpenHands**
 
 - https://github.com/OpenHands/software-agent-sdk — Conversation 对象化、events 一等公民、本地 vs 临时容器工作区、内核与界面分离
+
+## 从零实现教程（Claude Code 逆向学习，2026-10 逐章核实）
+
+贯穿各专题的「最小可运行实现 + 真实 Claude Code 对照」一手参考，补充本设计文档的落地细节（Agent Loop 的 continue reason、工具延迟加载 / 并行、read-before-edit 与 mtime、双后端流式与前缀缓存、分层压缩、记忆语义召回、Skills inline/fork、Plan 四选项、子 Agent 配置化、MCP 握手、自治续跑、测试方法论）。
+
+- **claude-code-from-scratch（Di Wang）** — 从零构建 Claude Code 的 16 章教程（约 4300 行可运行 Python，配「真实 Claude Code 多做了什么 / 简化决策」对照）：
+  在线阅读 https://diwang.info/claude-code-from-scratch/#/
+  源码仓库 https://github.com/Windy3f3f3f3f/claude-code-from-scratch
+  章节：00 引言 / 01 Agent Loop / 02 工具 / 03 System Prompt / 04 CLI 与会话 / 05 流式双后端 / 06 权限 / 07 上下文 / 08 记忆 / 09 Skills / 10 Plan Mode / 11 多 Agent / 12 MCP / 13 架构对比 / 14 测试 / 15 自治与续跑
+
+> 定位说明：该教程是「教学用最小实现」（readline REPL、文件持久化、无沙箱），mod-agent 是「生产级目标架构」（Ink TUI、Zod、SQLite、Docker、Worktree）。本设计文档引用的是其**机制设计与边界处理思路**，不照搬其最小实现代码；凡涉及安全 / 持久化 / 隔离，以本设计文档的工程化选型为准。

@@ -148,7 +148,33 @@ flowchart TD
 - 交接必须传递：任务目标、相关证据、候选文件、未确认假设、约束、当前提交、期望输出 Schema、禁止动作——不传无边界长对话作为唯一状态；
 - 综合时显式检查跨文件一致性（多 Agent 失败约 44% 源于此），不一致则派修补 worker 或 replan。
 
-### 5.4 业界实证：子代理与并行的强制机制
+### 5.4 子 Agent 的实现模式：一个 Agent 类，配置不同
+
+一个常见误区是以为「主 Agent 一个类、子 Agent 另写一套类」。更简单也更一致的做法是：**子 Agent 就是同一个 Agent 类，用不同的配置实例化**，通过构造参数控制它的能力与行为：
+
+```ts
+new Agent({
+  tools: customTools,          // 收窄后的工具集（见下方四层过滤）
+  customSystemPrompt,          // 角色定义（explore / plan / 自定义 .agents/*.md）
+  isSubAgent: true,            // 打开「子代理行为」开关
+})
+```
+
+- **内置三类角色 + 自定义**：`explore`（只读探索，工具最少、最省 token，仅输出观察不做结论）、`plan`（规划，只读 + 计划工具）、`general`（通用，工具最全）；用户也可在 `.agents/<name>.md`（或 `.mod-agent/agents/`）写自定义角色文件，结构与 `SKILL.md` 类似——YAML frontmatter（名称 / 描述 / 允许工具）+ 正文（角色与职责）；
+- **输出捕获，不回流父会话**：子 Agent 内部的模型对话、工具调用、流式输出原本会写入会话存储 / 打到 TUI；在 `isSubAgent` 下这些都被**重定向到一个 `outputBuffer`**——不保存进父会话历史、不打印到主界面。子 Agent 跑完只把 buffer 里的最终结果作为 `Task` 工具结果返回给父代理，父代理的上下文因此只增加一条摘要（对齐 §5.3 的「只回 1–2k token」）；
+- **token 汇总**：子 Agent 的 token 用量与成本计入父代理的账单，不另开账户；
+- 这样主 Agent 和子 Agent 共享同一套循环、工具执行、权限、压缩逻辑，维护成本最低。
+
+**四层工具过滤（确定性的能力收窄，不靠提示词）**。子 Agent 拿到的工具集按下面顺序逐层收敛：
+
+1. **只读类型过滤**：explore / plan 类角色先移除所有写文件、命令执行、网络类工具（物理拿不到，而非提示词叮嘱）；
+2. **移除子代理派生工具**：默认不挂载 `Task`（派生子代理）工具，**禁止递归创建子代理**，防止无限扇出；确需「子代理再派子代理」的能力必须显式开启；
+3. **权限模式强制继承**：父代理处于 `plan` 或 `auto` 等模式时，子代理**必须继承同一模式**，不能提权（见 [autonomy.md §3.5](./autonomy.md#35-权限必须传播给子代理)）；
+4. **角色白名单**：自定义角色文件 frontmatter 的 `allowed-tools` 再做一次白名单收窄。
+
+这四层是**确定性的**——工具不在集合里，模型无论如何都拿不到手；系统提示词里的角色约束只是补充。它解决了一个真实的安全漏洞：若不强制继承权限，模型可以在主对话每步都要确认的情况下，把敏感操作派给一个「全自动」的子代理去绕过审批。
+
+### 5.5 业界实证：子代理与并行的强制机制
 
 **Plan 只读靠「不注册写工具」，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal——"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：§5.2 的分析型子代理（Repository Analyst / Patch Reviewer）应在**代码层**就不注册写工具，而不是靠 prompt 叮嘱。
 

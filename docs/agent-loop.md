@@ -130,6 +130,53 @@ flowchart TD
 
 举个例子（示意）：任务是「给登录接口加超时处理」。模型第一轮读完 auth.ts，想直接 `sed` 改文件——但这属于写操作，policy 判 `approval_required`，于是循环存下审批请求、把任务挂在 `awaiting_approval` 就退出了，而不是傻等你点确认。你批准后，调度器从同一检查点恢复，模型带着「已读 auth.ts」的上下文继续，不用从头再读一遍。
 
+### 2.1 「继续还是停」不止一条判断
+
+最小实现里，循环的判断只有一条：模型这一轮返回了工具调用就继续，没有就结束。但生产级运行时要处理的「为什么还要再转一圈」远不止此。逆向 Claude Code 的运行时可见其把继续循环分成约七类（参考 [claude-code-from-scratch · Agent Loop](https://diwang.info/claude-code-from-scratch/#/docs/01-agent-loop)）：
+
+| # | 继续原因 | 触发情形 | 处理 |
+| --- | --- | --- | --- |
+| 1 | 模型调用了工具 | 响应含 tool_use | 执行工具、回灌结果、继续 |
+| 2 | 折叠后重试 | 上下文超限且暂存了可折叠的旧操作 | 提交折叠腾空间后重试 |
+| 3 | 强制压缩后重试 | 折叠空间仍不够 | 触发全量摘要压缩后重试 |
+| 4 | 输出截断升级 | 到达输出 token 上限（第一次） | 升到更高输出上限（如 16K→64K）重试 |
+| 5 | 截断续写 | 升级已用尽仍被截断 | 注入续写提示，最多重试约 3 次 |
+| 6 | Stop Hook 拦截 | 模型认为做完了，但 Stop Hook 要求继续 | 执行 Hook 后继续循环 |
+| 7 | 预算续跑 | 服务端侧生成预算耗尽但任务未竟 | 续接生成 |
+
+这些大多是**可恢复的边界情况**。成熟运行时的做法是先把这类错误「扣留」在循环内部、尝试自恢复，成功则用户无感，失败才最终抛出——而不是一遇到截断或超长就把错误甩到界面上。
+
+### 2.2 两层循环与异步背压
+
+对应上表，成熟运行时倾向把一层 while 拆成两层：
+
+- **外层（任务 / 查询生命周期）**：管用户输入、token 与费用预算、会话恢复；
+- **内层（单次查询）**：管上下文压缩、模型调用、工具执行、错误恢复。
+
+内层常实现为**异步生成器（`async function*`）**：一是天然背压——消费端（TUI）没处理完，生产端就不继续产生事件，不会堆积；二是让所有分支都能用普通的 `continue` / `break` 表达，不必手写状态机。中断用一个贯穿全程的 `AbortController`（`abort()` 后在检查点退出，连在飞的网络请求一并取消）。
+
+### 2.3 工具错误是「数据」，不是异常：最轻的自修复
+
+工具层的任何失败——模型幻觉出一个不存在的工具名、`edit_file` 的待替换串没找到、命令退出码非零、权限被拒——都**不要抛异常中断循环**，而是转成一条带 `is_error: true` 的 `tool_result` 正常回喂给模型：
+
+```text
+{ role: "user", content: [{ type: "tool_result", tool_use_id: "...", is_error: true,
+  content: "Error: old_string not found in auth.ts. Re-read the file first." }] }
+```
+
+模型看到错误后通常会自己纠正：重新读文件、修正参数、换一条命令。这是成本最低的「自修复」——**默认分支返回 `Unknown tool: xxx` 而不是抛错，就是让模型能纠正自己幻觉的工具名**。
+
+要把它和 [verification-and-multiagent.md](./verification-and-multiagent.md) 的 Repair Loop 区分开：
+
+- **错误回喂（本篇）**：单步、即时——工具一报错，模型下一轮顺手改对；
+- **Repair Loop**：多步、跨阶段——验证流水线跑完测试失败后，带错误分类与诊断重新规划、改完再验。
+
+权限被拒也同理：把 `User denied this action.` 作为工具结果返回，模型会换方案，而不是崩溃或反复硬闯。
+
+### 2.4 流式窗口里提前执行工具
+
+一次模型响应通常有 5–30 秒的流式生成窗口。运行时不必等整段响应结束才执行工具：当某个 `tool_use` 的参数 JSON 在流中拼完整（Anthropic 的 `content_block_stop` 事件）时，若该工具是**只读、并发安全**且权限已放行，就立刻启动执行，把工具耗时「藏进」模型继续生成后续内容的窗口里；多个只读工具自然并行。写操作和命令执行不在此列，必须等响应完整、权限确认后再跑。具体事件与双后端差异见 [tools-and-extensions.md §并行执行](./tools-and-extensions.md) 与 [model-gateway.md](./model-gateway.md)。
+
 ## 3. 分层循环
 
 - **主循环（任务级）**：上面的 `runTask`，负责中断 / 恢复 / 预算；
@@ -146,6 +193,24 @@ flowchart TD
 
 对 mod-agent：任务分级建议——小任务直接执行；中任务 plan → edit；大任务走「后台规划 agent + 可人工编辑的计划产物 + 动态 replan」结构，规划产物随上下文推进动态调整。
 
+### 3.2 Plan Mode 的落地：只读契约 + 计划文件 + 审批四选项
+
+规划模式不是「在提示词里叮嘱模型先别动手」，而是**在运行时物理上收回写权限**，其机制由四部分组成：
+
+1. **一对进入 / 退出工具**：`enter_plan_mode`、`exit_plan_mode`。这两个工具不常用，做**延迟加载**（平时不占 schema，需要时再激活，见 [tools-and-extensions.md](./tools-and-extensions.md)）；
+2. **只读契约**：进入规划模式后，权限层对所有写 / 编辑 / shell 工具一律返回 `deny`，模型只能读、搜索、分析；
+3. **唯一可写的计划文件**：进入时生成一个计划文件（如 `plans/plan-<sessionId>.md`），它是规划模式下**唯一**被加入写白名单的路径——模型把计划写进这个文件，而不是直接改源码。这复用了 [security.md](./security.md) 的权限判定：规划模式的硬拦截在规则之后、放行之前，优先级高于普通 allow；
+4. **退出时的审批四选项**。模型调用 `exit_plan_mode` 提交计划后，由用户决定：
+
+| 选项 | 含义 | 之后的动作 |
+| --- | --- | --- |
+| 清空计划并执行 | 放弃这份计划、按新的理解直接执行 | 退出规划，重新开工 |
+| 按计划执行 | 认可计划 | 退出规划，按计划逐步执行 |
+| 我来手动处理 | 不交给 agent | 结束，用户自己改 |
+| 继续规划 | 计划还不成熟 | 留在规划模式，继续打磨 |
+
+计划文件是**持久化、可人工编辑**的产物（对齐 Windsurf 可查看 / 修改的 Todo），退出规划模式进入执行后它仍作为上下文锚点；执行中发现计划需要调整，可重新进入规划模式 replan，而不是闷头执行一份过期计划。
+
 ## 4. 端到端时序
 
 ```mermaid
@@ -153,7 +218,7 @@ sequenceDiagram
     actor User as 用户
     participant CLI as CLI/TUI
     participant Plan as Planner
-    participant Loop as Agent Loop
+    participant AL as AgentLoop
     participant Tool as 工具层
     participant Sand as 沙箱
     participant Mem as 记忆层
@@ -164,15 +229,15 @@ sequenceDiagram
     CLI->>User: 请求确认计划
     User-->>CLI: 确认
     loop Agent 核心循环
-        Loop->>Tool: 发 Action 读文件 / 改代码
+        AL->>Tool: 发 Action 读文件 / 改代码
         Tool->>Sand: 沙箱内执行
         Sand-->>Tool: 裁剪后 Observation
-        Tool-->>Loop: 回灌 Observation
-        Loop->>Mem: 装配上下文并按需压缩
+        Tool-->>AL: 回灌 Observation
+        AL->>Mem: 装配上下文并按需压缩
     end
-    Loop->>Sand: 跑测试与 lint
-    Sand-->>Loop: VerificationResult
-    Loop->>CLI: blocker 或完成请求评审
+    AL->>Sand: 跑测试与 lint
+    Sand-->>AL: VerificationResult
+    AL->>CLI: blocker 或完成请求评审
     CLI->>User: Diff 与交付报告
 ```
 

@@ -36,6 +36,33 @@ MCP 是互操作协议，不天然代表可信或安全。每个 MCP Server 单�
 2. 调用有副作用的工具前走显式确认（与 §5 审批、agent-loop 的阻塞式校验同源）；
 3. Host 必须让用户理解每个工具干什么再授权。
 
+### 1.1 MCP 连接生命周期：JSON-RPC 握手与工具路由
+
+第 1 节的角色模型回答「谁是谁」，这里补「连接怎么建、工具怎么发现、调用怎么路由」。以最常用的 stdio 传输为例，Host 为每个 MCP Server 拉起一个独立子进程，通过标准输入输出跑 JSON-RPC 2.0：
+
+```mermaid
+sequenceDiagram
+    participant H as "Host (CLI)"
+    participant C as "Client (连接器)"
+    participant S as "MCP Server (子进程)"
+    H->>S: 启动 stdio 子进程（按需懒加载）
+    C->>S: initialize（协议版本 / 客户端能力）
+    S-->>C: 响应（服务端能力：tools/resources/prompts）
+    C->>S: notifications/initialized（握手完成通知）
+    C->>S: tools/list（发现工具及其 inputSchema）
+    S-->>C: 工具清单
+    Note over C: 重命名为 mcp__<server>__<tool> 并合并进工具池
+    C->>S: tools/call（name + arguments）
+    S-->>C: 结果 / isError（按不可信内容处理）
+```
+
+落地要点：
+
+- **三段式命名**：每个外部工具重命名为 `mcp__<serverName>__<toolName>`，既避免不同 server 同名工具冲突，也让模型与权限规则能精确路由到具体 server；
+- **懒加载 + 失败隔离**：server 可按需启动而非开局全拉起；单个 server 启动失败、握手超时或调用超时，只让它名下的工具不可用，**不得拖垮主进程或其他 server**；连接、发现、调用各设独立超时；
+- **合并进工具池时分区排序**：内置工具按字母序在前、MCP 工具追加在后，不做全局混排——缓存断点设在最后一个内置工具之后，动态挂接的 MCP 工具不影响内置工具部分的前缀缓存命中（见 [system-prompt.md §6](./system-prompt.md)、[model-gateway.md](./model-gateway.md)）；
+- **工具 schema 也要过校验**：server 声明的参数模式在注册时做兼容性校验，畸形 schema 不注册；工具结果一律标记为不可信数据，走 [context-engineering.md §6](./context-engineering.md#6-输入注入与不可信内容) 的注入防护。
+
 ## 2. 工具描述契约（ACI）
 
 ```ts
@@ -76,6 +103,65 @@ flowchart TD
 这张图在说什么：模型想跑的任何一条命令，都要先过「参数对不对 → 允不允许 → 黑不黑名单 → 要不要问人」这一串关卡，最后拿到的都是一份格式统一、标了截断、带耗时和退出码的结果。这样模型拿到的反馈是确定的，不会因为一次报错文本措辞不同就判断失误。
 
 举个例子（示意）：你刚批准模型跑 `npm test`。下一轮它想跑 `npm install lodash`——这是另一条命令、带网络副作用，不能因为你批过 npm 相关的命令就自动放行。审批必须和「具体参数」绑定，系统会按参数 hash 重新问你一次。
+
+### 2.1 工具注册：三层流水线与 fail-closed 默认值
+
+「这一轮模型到底能看到哪些工具」不是一次性的静态清单，而是每轮按上下文组装的结果：
+
+```mermaid
+flowchart LR
+    L1["① 基础集：内置工具直接装配<br/>+ 按功能开关条件加载"] --> L2["② 运行时过滤：任务模式 / deny 规则 /<br/>isEnabled / 权限档位"]
+    L2 --> L3["③ 组装工具池：内置 + MCP 桥接<br/>分区排序、去重"]
+    L3 --> F["最终下发给模型的工具集"]
+    style L1 fill:#e8e0ff
+    style L3 fill:#7c5cfc,color:#fff
+```
+
+工具元数据（只读 / 并发安全 / 破坏性）的默认值必须 **fail-closed**：
+
+| 标记 | 安全默认 | 为什么默认成这样 |
+| --- | --- | --- |
+| `isConcurrencySafe` | 默认 `false` | 误标「可并发」会让写操作在无保护下并发；误标「不可并发」顶多串行慢一点 |
+| `isReadOnly` | 默认 `false` | 误标「只读」可能绕过写权限检查；误标「非只读」只是多一次确认 |
+| `isDestructive` | 默认 `false` | 破坏性由更上层的命令 / 路径策略显式判定 |
+
+原则：标记出错时，后果应落在「多打扰用户（烦人但安全）」的方向，而不是「静默放行（危险且隐蔽）」的方向。
+
+### 2.2 单次工具执行的八阶段生命周期
+
+一次工具调用从「模型吐出 tool_use」到「结果回到模型」，生产级实现拆成固定阶段，把横切关注点（校验、Hook、权限、裁剪）插在标准位置：
+
+1. **工具查找**：按名解析，找不到就回 `Unknown tool` 作为工具结果（不抛异常）；
+2. **输入验证（两阶段）**：先做低成本的 Zod schema 校验（字段类型），再做业务校验（如 `edit_file` 的待替换串是否唯一、配置文件改完是否仍是合法 JSON）——先做便宜的检查，减少无谓磁盘 I/O；
+3. **并行启动**：Pre-Tool Hook 与命令安全分类器**同时启动**，各耗时几十到几百毫秒，并行化压低权限判定总延迟；
+4. **权限检查**：Hook → 工具自带 `checkPermissions` → 规则引擎 → 分类器 → 交互式确认，顺序裁决（见 §5 与 [security.md](./security.md)）；
+5. **执行**：在沙箱内运行，支持流式进度回调（长命令、多文件任务可回报进度）；
+6. **结果处理**：标准化、裁剪；超过 `maxResultSizeChars` 的**大结果落盘**，模型只收到「路径 + 短预览 + 用 read 取回全文」的指示（与 [context-engineering.md §5](./context-engineering.md#5-压缩compaction与外置记忆) 的分层裁剪衔接）；
+7. **Post-Tool Hook**：可向上下文追加事实或替换输出（如把 stdout 里的密钥打码）；
+8. **返回 `tool_result`**：成功或失败都以数据形式回灌模型（见 [agent-loop.md §2.3](./agent-loop.md#23-工具错误是数据不是异常最轻的自修复)）。
+
+> 每个工具还可自带两类渲染：`prompt()` 向系统提示词注入该工具的专属使用指南（内聚于工具），`renderToolUse / renderToolResult` 决定它在 TUI 里怎么展示——新增工具无需改全局渲染。
+
+### 2.3 延迟加载（deferred tools / tool_search）
+
+工具一旦多起来，把所有工具的完整 schema 都下发给模型，会固定占用大量 token。成熟做法是**延迟加载**：
+
+- 不常用工具打 `deferred` 标记，下发时**只给名字、不给完整 schema**；系统提示词里告知模型「这些工具可以通过 `tool_search` 按需激活」；
+- 模型需要时调用 `tool_search`（按名字 / 关键词检索），匹配到的工具被加入「已激活集合」，**下一次模型请求**才带上其完整 schema；
+- 典型例子是 `enter_plan_mode` / `exit_plan_mode`（见 [agent-loop.md §3.2](./agent-loop.md#32-plan-mode-的落地只读契约--计划文件--审批四选项)）：只在用户要规划时才值得占 schema。
+
+这与 §6 Skills 的「常驻只放 frontmatter 摘要、正文按需加载」是同一思路：**把能力的「目录」给模型，把「详情」推迟到真正使用的时刻**。
+
+### 2.4 并行工具执行
+
+模型一轮可能请求多个工具（如同时读 5 个文件）。全部串行会让只读等待白白累加：
+
+- 并发安全判定**按参数而非按工具**：`isConcurrencySafe(input)` 接收本次入参——同一个 shell 工具，对 `ls` 判只读、对 `rm` 判非并发，比给整个工具贴标签精确；
+- 调度规则：**有非并发安全工具在执行时，它独占执行；只存在并发安全工具时可并行**，并设并发上限（如 10）；
+- 与流式配合：流式响应中某个只读工具的参数 JSON 一旦完整（`content_block_stop`）就提前开跑（见 [agent-loop.md §2.4](./agent-loop.md#24-流式窗口里提前执行工具)）；对不支持「工具 block 级」流式事件的后端，则把**连续的并发安全工具分组**用 `Promise.all` 并行执行；
+- 混合序列要保持语义：`[读, 读, 写, 读]` 被切成 `[读‖读] → [写] → [读]` 三个批次，写操作前后的读不会跨越写操作并行，避免读到中间态。
+
+典型收益：模型一轮读 3–5 个文件时，并行通常带来 2–3 倍的提速，且文件读取（毫秒级）几乎能完全藏进模型流式生成（数秒到数十秒）的窗口里。
 
 ## 3. 统一执行结果
 
@@ -195,14 +281,39 @@ my-skill/
 - **`SKILL.md` 建议 ≤ 500 行**：详细参考拆到 `reference.md` / `examples.md`，正文用相对路径引用，由模型按需自读；
 - frontmatter 的 `description` 决定模型何时自动触发；`paths`（glob）限定只在命中某类文件时触发；命令名取自目录名，用户可 `/name` 手动调用。
 
-### 6.2 选择与版本管理
+### 6.2 触发路径与执行模式（inline / fork）
+
+技能有两条等价的触发路径，最终汇合到同一个「展开技能 prompt」的逻辑：
+
+1. **用户手动调用**：输入 `/commit [参数]`，CLI 解析出技能名与参数，展开 prompt 后交给主循环；
+2. **模型程序化调用**：用户只说「帮我提交代码」，模型理解意图后调用 `skill` 工具，工具返回的是**展开后的指令文本**（「元工具」——返回值不是数据，而是给模型的指令），模型在随后的回合按它执行。
+
+只支持手动会漏掉「用户根本不知道有这个技能」的场景；只支持模型自动调用又失去精确触发时机，两条路径都要有。
+
+技能 prompt 在执行前做模板替换：
+
+- `$ARGUMENTS` / `${ARGUMENTS}`：替换用户传入的参数；
+- `${CLAUDE_SKILL_DIR}`（mod-agent 对应 `${AGENT_SKILL_DIR}`）：替换技能目录，便于技能正文引用同目录下的模板、脚本（`scripts/` 下的脚本由工具调用执行，而不是读进上下文）。
+
+执行模式有两种：
+
+| 模式 | 行为 | 适用 |
+| --- | --- | --- |
+| **inline（默认）** | 把展开后的 prompt 直接注入当前对话，由主 agent 继续 | 一两步、不污染上下文的轻量流程（如规范一次提交信息） |
+| **fork** | 派生一个**独立子 agent**，以技能 prompt 为其系统提示、按 `allowed-tools` 白名单收敛工具，单独跑完只回传最终结果 | 需要多轮工具调用、会读很多文件的流程（如代码审查）——避免这些中间过程污染主对话 |
+
+fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制；未指定时至少摘除 `agent` / 子代理派生工具以**防止递归**；fork 出去的子 agent 必须继承主 agent 的权限模式（不能借 fork 提权，见 [verification-and-multiagent.md](./verification-and-multiagent.md) 与 [autonomy.md §3.5](./autonomy.md#35-权限必须传播给子代理)）。
+
+> 技能发现遵循「项目级覆盖用户级」（先加载用户目录、再加载项目目录，同名以项目为准）；启动时只载入 frontmatter，正文调用时才读取。技能清单也要受 token 预算约束：预算充足时全量展示描述，紧张时保留内置常用技能的完整描述、其余降级为仅列名称。
+
+### 6.3 选择与版本管理
 
 - 由轻量 Router 按任务类型召回候选；明确的用户指令优先；
 - 每个 Skill 带 `id`、`version`、`source`、`content_hash`、`trust_level`；
 - 仓库内 Skill 是项目辅助指引而非安全策略；启用外部来源 Skill 前审阅并固定版本；
 - Skill 作为可评测资产：维护标准任务与成败案例，验证它是否真的降低步骤错误、修改范围与成本。
 
-### 6.3 规则加载的激活矩阵（Cursor 实证，出处：https://cursor.com/docs/rules ）
+### 6.4 规则加载的激活矩阵（Cursor 实证，出处：https://cursor.com/docs/rules ）
 
 规则不是「一股脑全塞进 prompt」。用 frontmatter 三个开关决定一条规则何时注入上下文，避免撑爆上下文还能装很多规则：
 
@@ -218,7 +329,7 @@ my-skill/
 
 **嵌套规则文件（就近优先，出处同上）**：支持在任意子目录放 `AGENTS.md`；当操作的文件位于某目录（或其子目录）时，自动叠加该目录及所有父目录的 `AGENTS.md`，越靠近文件的规则越优先（例：根 `AGENTS.md` 全局风格 + `components/AGENTS.md` 组件约定），无需用户手动 @ 引用。
 
-### 6.4 Hooks 生命周期挂点（Claude Code 实证，出处：https://code.claude.com/docs/en/hooks ）
+### 6.5 Hooks 生命周期挂点（Claude Code 实证，出处：https://code.claude.com/docs/en/hooks ）
 
 在 agent loop 的固定挂点允许用户脚本介入，事件分三类节奏：
 

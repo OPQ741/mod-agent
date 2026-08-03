@@ -13,23 +13,23 @@
 
 ### Phase 1 · 纵向 MVP 闭环
 
-实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告。
-验收：覆盖「改一个组件」「修一个 bug」「补一个测试」三类端到端任务；失败与取消可观察；用户可审 diff；工具执行有审计。
+实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告；**静态/动态系统提示词组装（见 [system-prompt.md](./system-prompt.md)）、编辑安全（read-before-edit、mtime 外部修改检测、引号容错）、工具错误作为 tool_result 回喂的自修复**。
+验收：覆盖「改一个组件」「修一个 bug」「补一个测试」三类端到端任务；失败与取消可观察；用户可审 diff；工具执行有审计；未读先编辑、文件被外部改动等场景能被代码层拦下。
 
 ### Phase 2 · 可靠性补齐
 
-实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护。
-验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪。
+实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；**流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md)）**。
+验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪；压缩只在 turn boundary 触发、不破坏工具调用配对；缓存命中率可观测。
 
 ### Phase 3 · 代码理解增强
 
-实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索。
-验收：相比只用 `rg` 的基线，目标文件召回率、上下文相关性或成功率有可测提升；索引失效不导致错误结论。
+实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索；**长期记忆的四类型分类、语义召回（sideQuery）与异步预取（[context-engineering.md §5.4](./context-engineering.md#54-长期记忆记什么怎么召回)）**。
+验收：相比只用 `rg` 的基线，目标文件召回率、上下文相关性或成功率有可测提升；索引失效不导致错误结论；记忆召回零额外等待、命中条目相关且可判定时效。
 
 ### Phase 4 · Skills、MCP 与浏览器验证
 
-实现：Skill 加载/版本、MCP Client、外部文档/代码托管集成、Playwright 页面验证与截图产物。
-验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；浏览器结果可复现并归档。
+实现：Skill 加载/版本、**inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md)）**、MCP Client（**stdio 握手、三段式命名、懒加载与失败隔离**）、外部文档/代码托管集成、Playwright 页面验证与截图产物。
+验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；单个 MCP server 挂起不影响其余工具；浏览器结果可复现并归档。
 
 ### Phase 5 · 团队与企业能力
 
@@ -38,7 +38,12 @@
 
 ### Phase 6 · 选择性多 Agent
 
-基于评测决定是否引入只读分析、测试分析、diff Review 子 Agent；上线前验证相较单 Agent 基线的效果、成本与延迟收益。
+基于评测决定是否引入只读分析、测试分析、diff Review 子 Agent；上线前验证相较单 Agent 基线的效果、成本与延迟收益。子 Agent 用同一 Agent 类配置化实现，落实四层工具过滤（只读、禁递归、权限继承、白名单）、独立上下文与输出捕获（见 [verification-and-multiagent.md §5.4](./verification-and-multiagent.md#54-子-agent-的实现模式一个-agent-类配置不同)）。
+
+### Phase 7 · 自治与续跑
+
+在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（独立评估器三态、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（无新变化即停、headless 日志）、Auto Mode 动作自动批准（两段式裁决、脱敏投影、fail-closed、拒绝上限、权限传子代理）。
+验收：评估器与执行分离、目标不可达时能 `impossible` 刹车；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权。
 
 ```mermaid
 flowchart LR
@@ -48,6 +53,7 @@ flowchart LR
     P3 --> P4["Phase 4<br/>Skills / MCP / 浏览器"]
     P4 --> P5["Phase 5<br/>团队与企业"]
     P5 --> P6["Phase 6<br/>选择性多 Agent"]
+    P6 --> P7["Phase 7<br/>自治与续跑"]
 ```
 
 这张图在说什么：箭头只往右走、不允许跳级——每个阶段都有文末 §3 那套可勾选的验收清单，过不了就不进下一阶段。
@@ -63,6 +69,7 @@ flowchart LR
 | Phase 5 团队     | Devin 三件套工作台（Shell / IDE / Browser）+ 可接管 + IM 派活；Copilot custom agents + Automations（定时 / 事件触发）；云端每任务独立 worktree + 每轮自动 commit/push | https://docs.devin.ai/get-started/devin-intro ；https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ；https://kilo.ai/docs/code-with-ai/platforms/cloud-agent |
 | Phase 5 安全     | 团队放权但「发起者不可自批」+「Actions 默认不自动跑」；fail-closed 沙箱 + 域名级网络过滤                                                                              | https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ；https://docs.devin.ai/cli/reference/configuration/config-file                                           |
 | Phase 6 多 Agent | 子代理独立上下文 + 只回传结果；并行写文件用 detached-HEAD worktree；mission 并行要求自治等级先到 high                                                                 | https://zed.dev/docs/ai/tools ；https://zed.dev/docs/ai/parallel-agents ；https://docs.factory.ai/droid-cli/cli-reference.md                                                                                  |
+| 跨阶段实现细节 | 工具延迟加载/并行、read-before-edit 与 mtime、分层压缩、双后端流式、前缀缓存、记忆语义召回、Skills inline/fork、/goal·/loop·Auto Mode 自治 | https://diwang.info/claude-code-from-scratch/#/ （Claude Code 最小实现逆向教程，16 章） |
 
 ## 2. 建议优先开发顺序
 
@@ -74,7 +81,7 @@ flowchart LR
 4. **接 TUI 控制台**：任务创建、事件流、审批、diff 与验证报告（Ink）；
 5. **把能力模块化**：Model Gateway、Tool Registry、Context Builder、Skills、MCP Client；
 6. **搭评测与观测**：先取基线数据，再按失败分类优化上下文、工具与模型；
-7. **最后加高级能力**：语义索引、浏览器自动化、多 Agent、PR/Issue、团队权限。
+7. **最后加高级能力**：语义索引、浏览器自动化、多 Agent、自治续跑（/goal、/loop、Auto Mode）、PR/Issue、团队权限。
 
 ## 3. MVP 验收清单
 
@@ -91,6 +98,8 @@ flowchart LR
 - [ ] 计划与工具参数均过 Schema 校验；
 - [ ] Agent 修改只作用于任务授权工作区；
 - [ ] 基准 hash 冲突时不静默覆盖新内容；
+- [ ] 未读文件不得编辑（read-before-edit 代码层强制）；文件在读取后被外部修改时写入被 mtime 校验拦下；
+- [ ] 工具错误（幻觉工具名、替换串未命中、命令非零退出）作为 tool_result 回喂，模型可自修复而非中断；
 - [ ] 无关文件变更与异常大改动可触发策略拦截。
 
 ### 可靠性

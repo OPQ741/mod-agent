@@ -128,6 +128,42 @@ interface CommandRequest {
 
 **命令层的前缀双表（Kilo Code 实证，出处：https://kilo.ai/docs/features/auto-approving-actions ）**：自动执行终端命令用「前缀白名单 + 前缀黑名单」两张表，**黑名单永远优先**——即使白名单写了 `*`（放开全部）也照样拦下；危险前缀（sudo、rm -rf 类）应主动进黑名单；生产 / 敏感数据场景禁止 `*`。
 
+### 4.2 单次动作的判定管线（fail-closed）
+
+静态规则（§4.1 合并出的 allow / deny / ask 集合）回答「预先怎么配」，这里回答「模型真的发起一个动作时，按什么顺序判」。整个管线默认安全：任何一环拿不准，结果都落在「问人」而非「放行」。
+
+```mermaid
+flowchart TD
+    A["工具 + 参数"] --> D{"deny 命中？<br/>（含 bypass-immune 危险路径）"}
+    D -- 是 --> X["拒绝（最高优先，YOLO 也拦）"]
+    D -- 否 --> AL{"allow 命中？"}
+    AL -- 是 --> P["放行"]
+    AL -- 否 --> M{"当前权限模式"}
+    M -- plan --> R["只读允许，其余拒绝"]
+    M -- auto --> C["分类器裁决（两段式 + 脱敏）"]
+    M -- acceptEdits --> E["编辑放行 / 命令仍问"]
+    M -- default --> Q["交互式确认（有 TTY）"]
+    M -- bypass --> Y["放行（bypass-immune 仍拦）"]
+    C -- 拿不准/异常 --> Q
+    C -- deny --> X
+    Q -- 无 TTY --> X2["拒绝（不静默放行）"]
+    style X fill:#ff6b6b,color:#fff
+    style X2 fill:#ff6b6b,color:#fff
+    style P fill:#d4edda
+    style Y fill:#fff3cd
+```
+
+配套规则：
+
+- **规则结构 = 工具名 + 模式**：模式支持精确匹配、前缀匹配与 glob 通配（如 `Read(~/.ssh/**)`）；危险路径（密钥、系统目录、`.mod/` 配置自身）列入 **bypass-immune 名单**，即使 `--skip-permissions-unsafe` / YOLO 也不豁免；
+- **deny 永远最先、不可被任何模式覆盖**；这是「团队可以放权、不能越权替你解禁」的实现基础；
+- **会话白名单**：用户在确认框可选择「本会话对相同参数放行」，记录参数 hash，仅在本次会话有效、不写回配置；
+- **拒绝追踪**：自动模式下连续被拒（如 3 次）回落到交互式确认，累计拒绝达上限（如 20 次）中止任务，防止模型反复硬闯；
+- **确认竞速**：UI 对话框、Pre-Tool Hook、Auto 分类器三者并发时，以**首个确定结论**生效且**人类意图优先**——用户一旦操作，分类器结论作废，并设防误触宽限期；
+- **权限随子代理传播**：plan / auto 等模式强制被派生的子代理继承，不能借子代理提权（见 [autonomy.md §3.5](./autonomy.md#35-权限必须传播给子代理)、[verification-and-multiagent.md §5.4](./verification-and-multiagent.md#54-子-agent-的实现模式一个-agent-类配置不同)）。
+
+分类器如何脱敏、两段式快慢路径与 fail-closed 细节见 [autonomy.md §3](./autonomy.md#3-动作自动批准auto-mode)。
+
 ## 5. 网络、密钥与外部数据
 
 - 外网域名走 allowlist，拒绝云元数据地址、localhost / 私有网段；区分公司内网白名单与普通互联网；
