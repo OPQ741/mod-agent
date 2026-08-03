@@ -25,6 +25,33 @@
 - 应用补丁前校验文件 hash 是否与生成补丁时一致；变了就重读并重算补丁；
 - 取消任务不等于自动回滚所有改动：保留 diff，提供「丢弃本 Agent 变更」操作，且回滚只针对 Agent 自己产生的提交 / 补丁。
 
+### 3.1 影子仓库快照（Shadow Git，Cline 实证，出处：https://docs.cline.bot/core-workflows/checkpoints ）
+
+Cline 不在用户真实 git 仓库里 commit，而是维护一个独立的「影子 git 仓库」：
+
+1. **快照粒度 = 每次工具调用**，而非每个任务：连续改 3 个文件就产生 3 个可独立回退的点；每次工具使用（文件编辑、命令等）后自动把当前文件状态提交到影子仓库；
+2. 主仓库 `git log` 始终干净；**连 git 未跟踪的临时文件也一并快照**，避免临时文件丢失；
+3. 大仓库可关闭（快照占存储、拖慢每次提交）；
+4. 官方注记：**没有 checkpoint 时 auto-approve 显得很冒险；有了 checkpoint 才敢让 agent 连续自主干活，错了回退到上一个良好快照**——「高自治 + 可回退」是捆绑设计。
+
+**恢复必须拆成三个维度，不能只做「整体撤销」（出处同上）**：
+
+| 操作 | 文件 | 对话历史 | 典型场景 |
+| --- | --- | --- | --- |
+| Restore Files | 回退到快照 | 保留 | 代码改坏，换个实现思路 |
+| Restore Task Only | 保留 | 删掉该点之后的消息 | 代码没错，但聊跑题了 |
+| Restore Files & Task | 回退 | 删掉该点之后的消息 | 从已知良好状态完全重来 |
+
+配套交互：每个快照旁给 Compare（diff 视图看本次改动）与 Restore 按钮；**回退不可逆**——Windsurf 同样在文档中明确警示「Reverts are currently irreversible, so be careful!」（出处：https://docs.windsurf.com/windsurf/cascade/cascade ），并支持手动创建**命名 checkpoint** 随时跳回。
+
+### 3.2 自动 commit 与分支护栏（Aider / v0 / Copilot 实证）
+
+- **改动即 commit（Aider，出处：https://aider.chat/docs/git.html ）**：每次编辑完成后自动提交，commit message 由低成本的 weak-model 生成（主模型只做编码）；动手前先检查脏文件——用户未提交的改动**先单独提交**，隔离「用户改动」与「AI 改动」；
+- **自动分支 + 永不直接推 main（v0，出处：https://v0.dev/faq ）**：每个会话自动开分支（如 `v0/main-abc123`），每次改动自动 commit，PR 在产品内创建 / 合并，**绝不直接 push main**——Git 卫生做成默认行为，仓库历史干净；
+- **draft PR + 发起者不可自批（GitHub Copilot cloud agent，出处：https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ）**：agent 的产物一律以 draft PR 呈现、合入前必须人工批准；**发起任务者不能审批自己委派产生的 PR**，保留仓库「required reviews」规则，确保独立评审。
+
+对 mod-agent：MVP 先拿 Aider 档（改动即 commit，零成本审计与回滚）；worktree 阶段拿 v0 / Copilot 档（分支命名规则 + 禁推 main + draft PR + 不自批）。
+
 ## 4. 变更规模与范围保护
 
 - 配置每任务最大文件数、最大行数、可改目录与禁止目录；

@@ -15,13 +15,13 @@ mod-agent 是一个**人在环上（human-in-the-loop）**的 AI Coding Agent CL
 
 ### 1.1 目标任务与验收
 
-| 任务类型 | 示例输入 | 预期行为 | 主要验收 |
-| --- | --- | --- | --- |
-| 新功能 | 「在用户列表页加姓名搜索和分页」 | 找页面、复用已有组件与 API 模式，改 UI/状态/请求/测试 | 符合项目规范，测试通过 |
-| 缺陷修复 | 「切查询条件后仍显示上次搜索结果」 | 追踪竞态、复现、修复 stale response，补回归测试 | 回归通过，旧行为不退化 |
-| 重构 | 「把重复的格式化逻辑抽成公共工具」 | 搜调用方、评估影响面、最小变更 | 类型检查与测试通过，兼容明确 |
-| 代码理解 | 「解释这个页面的请求链路」 | 搜入口、组件、Hooks、API、状态来源 | 结论带文件路径与符号证据 |
-| 测试生成 | 「给这个 Hook 补边界测试」 | 分析测试框架、生成最小测试并运行 | 新测试真实运行且有判定价值 |
+| 任务类型 | 示例输入                           | 预期行为                                              | 主要验收                     |
+| -------- | ---------------------------------- | ----------------------------------------------------- | ---------------------------- |
+| 新功能   | 「在用户列表页加姓名搜索和分页」   | 找页面、复用已有组件与 API 模式，改 UI/状态/请求/测试 | 符合项目规范，测试通过       |
+| 缺陷修复 | 「切查询条件后仍显示上次搜索结果」 | 追踪竞态、复现、修复 stale response，补回归测试       | 回归通过，旧行为不退化       |
+| 重构     | 「把重复的格式化逻辑抽成公共工具」 | 搜调用方、评估影响面、最小变更                        | 类型检查与测试通过，兼容明确 |
+| 代码理解 | 「解释这个页面的请求链路」         | 搜入口、组件、Hooks、API、状态来源                    | 结论带文件路径与符号证据     |
+| 测试生成 | 「给这个 Hook 补边界测试」         | 分析测试框架、生成最小测试并运行                      | 新测试真实运行且有判定价值   |
 
 ### 1.2 任务模式
 
@@ -58,6 +58,19 @@ mod-agent 是一个**人在环上（human-in-the-loop）**的 AI Coding Agent CL
 8. **配置即代码**：models / 权限 / 工具 / MCP 全部走配置文件，不硬编码。
 9. **每步可回滚**：起步用 Git Worktree / shadow commit 快照，比自研 checkpoint 系统便宜。
 10. **先做纵向闭环，再横向铺能力**：先证明「一个任务能安全、可恢复地改代码并验证」，再上向量库、多 Agent、浏览器自动化。
+
+### 2.1 与业界事实标准的对齐（2026-08 核实）
+
+以下机制已在主流 coding agent 的官方文档中核实为事实标准，mod-agent 的设计原则与之对齐：
+
+| mod-agent 原则                             | 业界事实标准（出处）                                                                                                                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 规则文件用 AGENTS.md / CLAUDE.md，就近覆盖 | AGENTS.md 开放标准，6 万+ 项目、Linux 基金会托管（https://agents.md ）；Claude Code 拼接加载 + AGENTS.md 回退（https://code.claude.com/docs/en/memory ）                                   |
+| 自主程度分档（ask / edit / autopilot）     | Codex / Gemini CLI 审批档位（https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）；Factory 自治等级默认只读逐级放权（https://docs.factory.ai/droid-cli/cli-reference.md ） |
+| 每步可回滚（shadow commit / checkpoint）   | Cline Shadow Git 每工具调用快照（https://docs.cline.bot/core-workflows/checkpoints ）；Aider 改动即 commit（https://aider.chat/docs/git.html ）                                            |
+| 接口即能力（ACI）                          | SWE-agent 明确提出 ACI engineering（https://swe-agent.com/latest/background/aci/ ）                                                                                                        |
+| headless 可机读输出                        | Claude Code `json / stream-json` + 成本（https://code.claude.com/docs/en/headless ）；Gemini `stats` 用量（https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）            |
+| 沙箱默认关网络、fail-closed                | Devin 沙箱解析失败即拒绝启动 + 域名过滤（https://docs.devin.ai/cli/reference/configuration/config-file ）                                                                                  |
 
 ## 3. MVP 范围
 

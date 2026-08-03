@@ -5,31 +5,50 @@
 ## 1. 开发路线
 
 ### Phase 0 · 基线与技术验证
+
 产出：需求边界、威胁模型、模型 Provider PoC、Git Worktree PoC、命令沙箱 PoC、最小评测集。
 验收：能在测试仓库安全读文件、调用一次模型、返回结构化工具调用，并在隔离工作区成功跑一个项目测试命令。
 
 ### Phase 1 · 纵向 MVP 闭环
+
 实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告。
 验收：覆盖「改一个组件」「修一个 bug」「补一个测试」三类端到端任务；失败与取消可观察；用户可审 diff；工具执行有审计。
 
 ### Phase 2 · 可靠性补齐
+
 实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护。
 验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪。
 
 ### Phase 3 · 代码理解增强
+
 实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索。
 验收：相比只用 `rg` 的基线，目标文件召回率、上下文相关性或成功率有可测提升；索引失效不导致错误结论。
 
 ### Phase 4 · Skills、MCP 与浏览器验证
+
 实现：Skill 加载/版本、MCP Client、外部文档/代码托管集成、Playwright 页面验证与截图产物。
 验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；浏览器结果可复现并归档。
 
 ### Phase 5 · 团队与企业能力
+
 实现：多租户、RBAC、组织级策略、费用限额、仓库级配置、审计导出、团队评测看板、PR 工作流、可控模型路由（含 Web 控制台 + BFF + PostgreSQL + 队列）。
 验收：跨租户隔离与审计通过安全测试；团队可追踪成本、成功率、审批与模型版本。
 
 ### Phase 6 · 选择性多 Agent
+
 基于评测决定是否引入只读分析、测试分析、diff Review 子 Agent；上线前验证相较单 Agent 基线的效果、成本与延迟收益。
+
+### 1.1 各阶段的业界对照（2026-08 核实）
+
+| 阶段             | 关键机制                                                                                                                                                              | 业界实证来源（已 fetch）                                                                                                                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 规则加载 | 直接采用 `AGENTS.md`（就近覆盖、嵌套），不造私有文件                                                                                                                  | https://agents.md ；https://docs.devin.ai/cli/reference/configuration/config-file                                                                                                                             |
+| Phase 1 产物     | 改动即 commit + 自动分支命名（`<工具名>/<基线>-<随机串>`），永不直接推 main                                                                                           | https://aider.chat/docs/git.html ；https://v0.dev/faq                                                                                                                                                         |
+| Phase 2 检查点   | checkpoint 与 auto-approve 捆绑设计；三态恢复（文件 / 对话 / 两者）；命名快照 + 不可逆警示                                                                            | https://docs.cline.bot/core-workflows/checkpoints ；https://docs.windsurf.com/windsurf/cascade/cascade                                                                                                        |
+| Phase 4 集成     | Skills 按需加载（SKILL.md ≤500 行 + 分包）；规则 frontmatter 激活矩阵；MCP 工具 = 任意代码执行、调用前显式同意                                                        | https://code.claude.com/docs/en/skills ；https://cursor.com/docs/rules ；https://modelcontextprotocol.io/specification/                                                                                       |
+| Phase 5 团队     | Devin 三件套工作台（Shell / IDE / Browser）+ 可接管 + IM 派活；Copilot custom agents + Automations（定时 / 事件触发）；云端每任务独立 worktree + 每轮自动 commit/push | https://docs.devin.ai/get-started/devin-intro ；https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ；https://kilo.ai/docs/code-with-ai/platforms/cloud-agent |
+| Phase 5 安全     | 团队放权但「发起者不可自批」+「Actions 默认不自动跑」；fail-closed 沙箱 + 域名级网络过滤                                                                              | https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ；https://docs.devin.ai/cli/reference/configuration/config-file                                           |
+| Phase 6 多 Agent | 子代理独立上下文 + 只回传结果；并行写文件用 detached-HEAD worktree；mission 并行要求自治等级先到 high                                                                 | https://zed.dev/docs/ai/tools ；https://zed.dev/docs/ai/parallel-agents ；https://docs.factory.ai/droid-cli/cli-reference.md                                                                                  |
 
 ## 2. 建议优先开发顺序
 
@@ -46,12 +65,14 @@
 ## 3. MVP 验收清单
 
 ### 产品闭环
+
 - [ ] 用户可选工作区、输入自然语言需求并创建任务；
 - [ ] TUI 实时展示状态、工具执行、计划、审批、diff、验证结果；
 - [ ] 支持 plan-only 与 edit 模式；
 - [ ] 最终报告列出改动、真实运行的命令、结果、未执行项与风险。
 
 ### Agent 与代码修改
+
 - [ ] 支持搜索、读文件、精确补丁、diff、项目规则加载；
 - [ ] 计划与工具参数均过 Schema 校验；
 - [ ] Agent 修改只作用于任务授权工作区；
@@ -59,6 +80,7 @@
 - [ ] 无关文件变更与异常大改动可触发策略拦截。
 
 ### 可靠性
+
 - [ ] 库中保存任务状态、事件、工具调用与检查点；
 - [ ] 取消、暂停、恢复与最长运行时间生效；
 - [ ] 模型/工具超时有明确错误码与重试策略；
@@ -66,6 +88,7 @@
 - [ ] 外部非幂等动作结果未知时不无条件重试。
 
 ### 安全
+
 - [ ] 沙箱非 root、资源限额、工作区挂载限制与网络策略已验证；
 - [ ] 默认阻止访问密钥与工作区外路径；
 - [ ] 高风险工具审批与参数 hash 绑定；
@@ -73,6 +96,7 @@
 - [ ] 审计日志不含明文密钥。
 
 ### 测试与评测
+
 - [ ] 至少 30–50 个内部任务用例，覆盖功能、bug、测试、重构与安全边界；
 - [ ] 每个改动记录实际运行的验证命令与退出码；
 - [ ] Prompt、模型、工具或检索更改后自动跑关键回归集；

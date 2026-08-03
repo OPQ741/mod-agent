@@ -38,6 +38,14 @@ interface TaskEvent<T = unknown> {
 
 > 不把每个 token 都永久写库：流式发送文本增量，但只持久化重要生命周期事件、完成消息与必要审计内容。
 
+### 1.1 事件化会话对象（OpenHands SDK 实证）
+
+OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https://github.com/OpenHands/software-agent-sdk ）——对外只暴露 `send_message` / `run`，内部把每一步产出为**不可变事件**（agent 动作 / 工具结果 / 状态更新），连同 conversation / workspace 一起被 SDK 拥有。对 mod-agent 的启示：
+
+- 会话模型对齐：一个 `Conversation` 绑定一个 `workspace`，事件是 SDK 显式拥有的一等概念（"This repository owns agents, tools, conversations, workspaces, events, the REST/WebSocket API…"）；
+- 工作区抽象为「本机目录」与「临时容器」两档（对应 [architecture.md](./architecture.md) 沙箱 / 运行时抽象）；
+- 未核实项：OpenHands 具体事件枚举类型名（agent / observation / state 的确切命名清单）未在抓取到的页面逐条列示，本设计文档按自身事件类型表（见上）实现即可。
+
 ## 2. 持久化表（SQLite）
 
 PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模型。
@@ -76,3 +84,16 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 ## 4. 长期记忆
 
 会话结束后异步整理记忆：去重、压缩、带锁防并发。项目级记忆写入 `AGENTS.md`（分层：全局 / 项目 / 子目录随访问路径注入）；NOTES/TODO 由 Agent 在任务中持续维护，压缩后读回。详见 [context-engineering.md](./context-engineering.md)。
+
+### 4.1 为什么直接采用 AGENTS.md（开放标准实证）
+
+**决策：mod-agent 以 `AGENTS.md` 为项目指令文件第一公民，不自创私有文件**（如 `.modagent.md`）。依据（出处：https://agents.md ）：
+
+- AGENTS.md 是**开放格式**（无必填字段、普通 Markdown），已被 6 万+ 开源项目采用，现由 Linux 基金会旗下 Agentic AI Foundation（AAIF）托管；
+- 主流工具已原生兼容：GitHub Copilot coding agent、Devin、Factory、Cursor、Codex、Gemini CLI、Windsurf、Zed、Warp、VS Code 等；
+- 官方明确「Rather than introducing another proprietary file, we chose a name and format that could work for anyone」——跟着标准走，用户跨工具复用同一份项目规则；
+- 加载语义：**离被编辑文件最近的 AGENTS.md 优先**；用户当场聊天指令优先级最高；支持 monorepo 嵌套（详见 [context-engineering.md](./context-engineering.md) §2.1）。
+
+**兼容读取策略（Devin 实证，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：Devin 提供 `read_config_from` 开关，可选择性导入 `AGENTS.md`（含 `AGENTS.local.md`、历史名 `AGENT.md`、`.windsurfrules`）以及 Cursor / Windsurf / Claude / OpenCode / Zed 等竞品的规则文件。mod-agent 启动时同样以开关方式兼容读取 `AGENTS.md` + 已知竞品规则文件，逐项可关。
+
+**记忆目录结构（Claude Code 实证，出处：https://code.claude.com/docs/en/memory ）**：记忆分两层——一份索引常驻、每个记忆一个独立文件按需读；索引有硬上限（前 200 行 / 25KB 先到为准），主题文件写回时自动加 `modified: ISO8601` 时间戳（详见 [context-engineering.md](./context-engineering.md) §5）。

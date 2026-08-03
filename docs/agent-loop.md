@@ -111,6 +111,16 @@ async function runTask(taskId: string): Promise<void> {
 - **子循环（步骤级）**：如「改文件 → 跑测试 → 修复」的 Repair Loop，见 [verification-and-multiagent.md](./verification-and-multiagent.md)；
 - **工具循环**：单个工具调用内部的重试 / 幂等处理。
 
+### 3.1 规划与执行的双循环（业界实证）
+
+长任务里「想长远」和「干眼前」是两件事，成熟产品普遍拆成两个循环：
+
+- **Cline 的 Plan / Act 双模式**（出处：https://docs.cline.bot/core-workflows/plan-and-act ）：Plan 模式物理上拿不到写工具（只能读 / 搜索 / 讨论），**切换 Act 模式时对话上下文完整继承**，不用重述；规划与执行可绑不同模型（规划用强推理模型、执行用低成本快模型）；
+- **Windsurf 的后台规划 agent**（出处：https://docs.windsurf.com/windsurf/cascade/cascade ）：一个专职规划 agent 在后台持续修订长期计划，当前模型只按计划做短动作，执行中发现新信息自动回写计划，并维护可人工查看 / 修改的 Todo 列表——计划不是开跑前写死的；
+- **Factory `--use-spec` / Replit Plan mode**（出处：https://docs.factory.ai/droid-cli/cli-reference.md 、https://docs.replit.com/replitai/agent ）：复杂任务先进 spec / 任务清单模式产出计划供人确认，再进入执行。
+
+对 mod-agent：任务分级建议——小任务直接执行；中任务 plan → edit；大任务走「后台规划 agent + 可人工编辑的计划产物 + 动态 replan」结构，规划产物随上下文推进动态调整。
+
 ## 4. 端到端时序
 
 ```mermaid
@@ -151,6 +161,16 @@ sequenceDiagram
 - **崩溃恢复**：重启后先查上一次工具调用是否已有确定结果，再决定重试，防止重复写入或重复发送外部请求。
 - **超时**：分别设置模型请求、单次工具、单条命令、阶段与整个任务的时间上限。
 
+### 5.1 会话（Session）语义：挂起 / 恢复的持久化基准（OpenAI Agents SDK 实证）
+
+对话历史应由**会话层统一接管**，而非在主循环里手动拼 list（出处：https://openai.github.io/openai-agents-python/sessions/ ）：
+
+- **run 前**：自动检索该 session 的历史并前置拼入输入；**run 后**：本轮新产生的条目（用户输入、模型回复、工具调用等）自动落回 session；
+- **人审暂停后必须能用同一 session 原地恢复**——审批通过时从 `interruptions` + 状态对象继续，恢复的是同一份存储的对话历史；
+- 历史太长可自动压缩（官方提供 compaction session）；存储后端可插拔（本地 SQLite / 远程 Redis / MongoDB / 加密包装）。
+
+对 mod-agent：`awaiting_approval` / `paused` 状态恢复时，除 `task_id + checkpoint_version` 外，还应校验「同一会话历史被完整恢复、审批与参数 hash 绑定」，避免恢复后上下文漂移。
+
 ## 6. 预算与循环防护
 
 每个任务配置化上限：最大模型轮次、最大工具调用数、最大修改文件数、最大改动行数、单命令超时、验证 / 修复轮次、最长运行时间、总费用。初始值由内部任务集校准，不写死示例值。
@@ -162,3 +182,37 @@ sequenceDiagram
 - 反复重写同一文件；
 - 同一错误在设定修复次数后不变；
 - 上下文持续膨胀但目标不收敛。
+
+### 6.1 三层 Guardrail（输入 / 输出 / 工具）（OpenAI Agents SDK 实证）
+
+把「安全检查」做成与业务 agent 并列的第二套轻量模型，卡三个位置（出处：https://openai.github.io/openai-agents-python/guardrails/ ）：
+
+| 护栏层 | 卡在哪 | 触发动作 |
+| --- | --- | --- |
+| Input guardrail | 链上第一个 agent 收到用户输入时 | tripwire 触发即抛异常中止，agent 不执行 |
+| Output guardrail | 产生最终输出的 agent 收尾后 | 拒绝候选输出，已完成的工具调用存入 session 待回放 |
+| Tool guardrail | 每个工具调用前 / 后 | 可跳过调用、替换输出、或抛 tripwire |
+
+- 执行模式分**并行**（快但可能已烧 token）与**阻塞**（先检查再跑，最省钱）；
+- 对 mod-agent：写操作 / 危险命令默认**阻塞式先确认**；只读 / 可回滚操作可用并行快检。
+
+### 6.2 写操作的确定性护栏（SWE-agent / Kilo 实证）
+
+- **写前校验**：编辑命令触发时先跑 linter，语法不通过则不放行、把错误退给模型（SWE-agent，出处：https://swe-agent.com/latest/background/aci/ ）——把「修正语法」从靠模型自觉变成系统强制的前置关卡，更省 token、更少产生脏状态；
+- **写后诊断延迟**：一次写操作后、继续下一步前，按可配置延迟（默认 1000ms）等类型检查 / lint 诊断落定再继续（Kilo Code，出处：https://kilo.ai/docs/features/auto-approving-actions ）；复杂项目建议 2000ms+，关键代码不建议设为 0——让「边改边自修」有可靠依据而非凭猜测。
+
+### 6.3 Headless 事件流输出（Claude Code / Gemini CLI 实证）
+
+非交互模式输出三档（出处：https://code.claude.com/docs/en/headless 、https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）：
+
+| 模式 | 用途 |
+| --- | --- |
+| text | 默认，人读 |
+| json | 一次返回 result + session_id + usage + total_cost_usd，可 `--json-schema` 约束结构 |
+| stream-json | NDJSON，逐事件实时吐，末行是 result 汇总 |
+
+- 退出码即成败：0 成功、非 0 失败，脚本可直接分支；
+- Gemini 的 headless JSON 还带一份「账」：`stats.models[].tokens`（prompt / candidates / total / cached / tool）、`stats.tools`（totalCalls / totalSuccess / totalFail / totalDurationMs / totalDecisions: accept | reject | modify | auto_accept）、`stats.files`（totalLinesAdded / totalLinesRemoved）——用量记账与工具成功率分析直接可做；
+- **`--bare` 模式**（CI / 脚本默认推荐，出处同 Claude headless）：跳过一切自动发现（hooks / skills / MCP / 记忆 / 规则文件），不读本机 OAuth 与钥匙串，保证每台机器结果可复现。
+
+与 [data-and-events.md](./data-and-events.md) 的事件序列天然对应：事件流直接序列化成 stream-json，供 GitHub Action / git hook / 定时任务消费。

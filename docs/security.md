@@ -24,6 +24,45 @@
 - 命令与子进程做生命周期管理，取消时终止整个进程组；
 - 对输出中的 ANSI 控制符、二进制、超长日志做处理，防终端 / UI 注入与资源耗尽。
 
+### 3.1 沙箱安全与网络过滤的业界实证
+
+**fail-closed（失败即关闭）原则（Devin 官方文档原文，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：当隔离执行环境无法建立时（例如沙箱工具在平台不可用），CLI 应**拒绝启动任务**，而不是降级为裸跑——原文："If `--sandbox` is passed but sandbox resolution fails… the CLI will refuse to start rather than running unsandboxed." 这是「隔离意图永不被静默绕过」的安全底线。
+
+**网络分级过滤（出处同上）**：
+
+- `allowed_domains` 白名单（空 = 不过滤）、`denied_domains` 黑名单（**优先级更高**）、`network_mode`：`full`（全方法）/ `limited`（仅 GET / HEAD / OPTIONS）；
+- 域名通配：`example.com` 精确、`*.example.com` 任意子域（不含 apex）、`.example.com` 含 apex 与任意子域；
+- 与 §5 的 allowlist 互补：Devin 在本机 loopback 起受控代理，把所有联网请求按名单过滤，连「只能发 GET 不能 POST」都能限制。
+
+**执行权限分三集合（Devin，出处同上）**：
+
+```json
+{ "permissions": {
+    "allow": ["Read(**)", "Exec(git)"],
+    "deny":  ["Exec(sudo)"],
+    "ask":   ["Write(**/.env*)"] } }
+```
+
+- `allow` 自动放行 / `deny` 硬拒绝 / `ask` 每次弹确认；规则形如 `Read(...)` / `Write(...)` / `Exec(...)`；
+- 配套开关 `respect_gitignore`：开启后禁止工具读写 gitignored 路径；
+- 项目级可提交（团队共用）+ `*.local.json` gitignore（个人覆盖）分层。
+
+**自治等级逐级放权（Factory Droid CLI 参考，出处：https://docs.factory.ai/droid-cli/cli-reference.md ）**：
+
+| 等级 | 用途 | 放权内容 |
+| --- | --- | --- |
+| （默认） | 只读侦察 | 文件读取、git diff、环境检查 |
+| `--auto low` | 安全编辑 | 建 / 改文件、格式化、非破坏命令 |
+| `--auto medium` | 本地开发 | 装依赖、build / test、本地 git commit |
+| `--auto high` | CI/CD 编排 | git push、部署脚本、长时操作 |
+| `--skip-permissions-unsafe` | 仅一次性隔离容器 | 移除全部护栏 |
+
+官方注记："Only raise access when the environment is safe."——权限跟着环境危险度逐级解锁，默认只读。
+
+**CI / 无人值守的最小面（Claude Code `--bare`，出处：https://code.claude.com/docs/en/headless ）**：CI 与脚本默认推荐 bare 模式——不自动加载 hooks / skills / 自定义命令 / subagent / 插件 / MCP / auto memory / CLAUDE.md，不读本机 OAuth 与钥匙串，必须显式给 API key；需要的设置用 `--settings <file|json>`、MCP 用 `--mcp-config` 显式注入。安全含义：避免「仓库里一份 `.mcp.json` 在你从未信任的文件夹里被静默执行」。
+
+**agent 产出的工作流默认不自动跑（GitHub Copilot，出处：https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ）**：Copilot 云端代理 push 后，GitHub Actions **默认不自动执行**——因为 workflow 可能有权限访问敏感密钥，而 agent 可能改过 `.github/workflows/`；需人亲眼看过改动后手动点「Approve and run workflows」。凡 agent 改动涉及工作流定义 / 密钥读取路径时，评审界面显式提示。
+
 ## 4. 命令执行层
 
 不把模型生成的一整段文本交给有宿主机权限的 shell。接口采用可审查结构：
@@ -41,6 +80,18 @@ interface CommandRequest {
 ```
 
 确需 shell 的 package scripts 在沙箱内执行，靠命令风险分类、网络策略与容器权限约束。shell 字符串安全不只是引号转义问题。破坏性命令硬策略拒绝或人工审批，不依赖模型自我约束。
+
+### 4.1 配置优先级与权限规则合并（Claude Code settings 实证，出处：https://code.claude.com/docs/en/settings ）
+
+配置分层（高 → 低）：**托管策略 > 命令行 `--settings` > 团队 `.mod/settings.json` > 用户 `~/.mod/settings.json` > 项目 `settings.local.json`**。
+
+权限规则合并语义：
+
+- `allow` 列表跨层取**并集**；`deny` / `ask` 优先且**立即生效**（不需要信任文件夹）；
+- 团队提交的 `allow` 规则需用户「信任文件夹」后才生效；`deny` 不受此限——即「团队可以放权，但绝不能越权替你解禁」；
+- 个人例外写 `settings.local.json`，自动加进 git exclude，不污染团队。
+
+**命令层的前缀双表（Kilo Code 实证，出处：https://kilo.ai/docs/features/auto-approving-actions ）**：自动执行终端命令用「前缀白名单 + 前缀黑名单」两张表，**黑名单永远优先**——即使白名单写了 `*`（放开全部）也照样拦下；危险前缀（sudo、rm -rf 类）应主动进黑名单；生产 / 敏感数据场景禁止 `*`。
 
 ## 5. 网络、密钥与外部数据
 

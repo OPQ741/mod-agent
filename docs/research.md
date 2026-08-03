@@ -39,6 +39,26 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 | Cline | IDE 内、每步人批 | Plan/Act 双模式、Shadow Git 每工具调用后快照任意回滚 |
 | Agentless (UIUC) | 反 agent 固定三阶段流水线 | 分层定位→生成 patch→多候选跑测试；SWE-bench Lite 32%、单 issue \$0.70 |
 
+> 2026 年的产品版图已经远不止这 9 个。我们对 **45 个** coding agent / 框架 / 协议做了逐一对标（每个都实际打开了官方仓库与文档核实），完整画像见新页 **[Coding Agent 全景图鉴](./coding-agents.md)**；下面只给分类结论与精简对比。
+
+### 2.1 四大形态速览
+
+| 形态 | 代表产品 | 运行位置 | 典型产物 | mod-agent 关注的点 |
+| --- | --- | --- | --- | --- |
+| **终端 / CLI agent** | Claude Code、Codex CLI、Gemini CLI、Aider、OpenCode、Goose、Crush、Qwen Code | 本地终端 | 工作区改动 + commit | 直接对标形态：AGENTS.md、审批三档、沙箱、headless |
+| **IDE 内 agent** | Cursor、Windsurf、Cline、Kilo Code、Zed、Trae、Copilot Chat agent mode | 编辑器内 | inline diff / 检查点 | Shadow Git、checkpoint、细粒度权限、MCP |
+| **云端 / 自治 agent** | Devin、Copilot cloud agent、Replit Agent、v0、Lovable、Factory Droid、bolt.diy | 厂商云 VM / 容器 | draft PR、可访问 URL | 云端沙箱、draft PR 护栏、自动分支、永不碰 main |
+| **开源框架 / 学术 / 协议** | SWE-agent、OpenHands、Agentless、AutoCodeRover、MetaGPT、AutoGen、CrewAI、LangGraph、Agents SDK、MCP、A2A、AGENTS.md | 自托管 | 论文结果 / 可编排平台 | EventStream、ACI、分层定位、多 agent 教训、协议 |
+
+### 2.2 从 45 个项目里得到的分类结论
+
+1. **CLI agent 已收敛出一套「事实标准」组合**：项目记忆文件（`AGENTS.md` / `CLAUDE.md` / `GEMINI.md`）+ 显式自主程度旋钮（只读 / 可改文件 / 全自动）+ 每步落 Git + 网络默认关闭的沙箱 + headless JSON 输出 + MCP 接工具。
+2. **开源路线几乎全部 BYOK（自带 Key）、模型无关**：Aider、Cline、Kilo、OpenCode、Goose、Crush、Pydantic AI、Mastra 等都不绑定单一模型；Goose/Zed 还能经 ACP 复用用户已有的 Claude/ChatGPT 订阅。
+3. **变更安全是分层的三件套**：Aider 式「改动即 commit」→ Cline/Kilo 式「每步 checkpoint / Shadow Git」→ 云端式「自动分支 + draft PR + 永不推 main + 发起者不可自批 + Actions 默认不跑」。
+4. **学术侧给出两个相反但都成立的答案**：重型 agent 派（OpenHands、SWE-agent）靠 ACI 与事件流堆能力；流水线派（Agentless、AutoCodeRover）证明边界清晰、有测试信号的任务，确定性流水线更便宜更可控。
+5. **协议层基本定型**：MCP 管「agent 接工具」、A2A 管「agent 连 agent」、ACP 管「编辑器挂 CLI agent」、AGENTS.md 管「agent 读项目规则」，四者互补。
+6. **活跃度与许可证是硬约束**：2026 年 Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 转维护模式、Amazon Q CLI 停更；Crush（FSL）、Claude Code（自定义源码许可）、AutoCodeRover（Sonar 源码可用）、Zed（GPL-3.0）都不是标准宽松许可——选型时必须逐项目核对 LICENSE 与最近提交（见 [references.md](./references.md)）。
+
 ## 3. 真实能力水平（2025–2026）
 
 SWE-bench Verified 分数演进（注意：不同 harness 不可横向等号归因于模型）：

@@ -6,6 +6,16 @@
 
 同一 `trace_id` 串联：API/CLI 请求、任务入队、执行租约、模型调用、工具调用、命令运行、测试结果、人工审批、最终报告。记录生成式 AI 属性时留意输入输出可能含敏感信息。
 
+### 1.1 Trace 的三重用途（OpenAI Agents SDK 实证）
+
+官方把内置 tracing 定位为「visualize and debug your agentic flows, as well as evaluate them and even fine-tune models」（出处：https://openai.github.io/openai-agents-python/ ）。mod-agent 应把 tracing 当成**与主循环同时产生的一等产物**，而非可选插件，一次 run 的 trace 同时服务三件事：
+
+1. **人读调试**：可视化 / 回放每一步（调了哪个模型、哪个工具、护栏有没有触发、token 花了多少）；
+2. **评测**：作为 harness 的输入样本（对应 §4 分层评测的端到端任务评测）；
+3. **后续优化**：token 成本、失败回合定位。
+
+trace 至少记录：模型调用、工具调用、护栏触发、中断 / 恢复点。
+
 ## 2. 核心指标
 
 - **产品效果**：任务成功率、首次通过率、用户接受率、平均修改轮次、平均人工介入次数、返工率、任务耗时；
@@ -13,6 +23,15 @@
 - **系统可靠性**：崩溃恢复成功率、重复执行率、取消生效延迟、任务超时率、队列等待、断线重连成功率；
 - **安全性**：策略拒绝次数、审批覆盖率、越权测试失败率、出网阻断命中数、敏感信息泄漏事件（目标 0）；
 - **经济性**：每任务输入/输出 token、模型费用、沙箱 CPU/内存时间、每成功任务成本、不同模型单位成功成本。
+
+**用量统计字段对齐业界 headless 输出**（Claude Code / Gemini CLI 实证，出处：https://code.claude.com/docs/en/headless 、https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）：
+
+- 单次运行返回：`total_cost_usd` + per-model 成本拆分（Claude）；
+- per-model token 分项：prompt / candidates / total / cached / tool（Gemini）；
+- 工具调用统计：totalCalls / totalSuccess / totalFail / totalDurationMs / totalDecisions（accept | reject | modify | auto_accept）；
+- 文件变更统计：totalLinesAdded / totalLinesRemoved。
+
+这些字段应进入 §2 经济性与系统可靠性指标的采集口径，供脚本 `jq` 直接取数。
 
 ## 3. 日志原则
 

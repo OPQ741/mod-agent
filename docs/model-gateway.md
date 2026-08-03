@@ -19,6 +19,18 @@ interface ModelProvider {
 
 业务层只依赖统一的 `ModelRequest / ModelResponse`，每个 Provider 负责协议映射。统一处理：工具调用解析、内容块、流式结束原因、token 用量、请求 ID、限流、超时、错误分类、结构化输出与模型特定差异。MVP 先只接一个 Provider 建立可靠基线。
 
+### 1.1 配置分层与用量计量（业界实证）
+
+**Provider / 权限配置分层（Claude Code settings，出处：https://code.claude.com/docs/en/settings ）**：托管策略 > 命令行 `--settings` > 团队项目文件 > 用户文件 > 项目本地 `settings.local.json`；`allow` 列表跨层取并集，`deny` / `ask` 优先且立即生效（详见 [security.md](./security.md) §4.1）。
+
+**用量计量是网关的一等输出**：
+
+- Claude Code headless 的 JSON 载荷自带 `total_cost_usd` 与 per-model 成本拆分（出处：https://code.claude.com/docs/en/headless ）；
+- Gemini CLI headless 的 `stats` 返回 per-model token 分项（prompt / candidates / total / cached / tool）、工具调用统计（totalCalls / totalSuccess / totalFail / totalDecisions: accept | reject | modify | auto_accept）与文件增删行（出处：https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）；
+- 这些字段喂给 [observability-evaluation.md](./observability-evaluation.md) 的成本指标与 [agent-loop.md](./agent-loop.md) §6.3 的事件流输出，脚本可直接 `jq` 取数。
+
+**强弱模型分工（Aider 实证，出处：https://aider.chat/docs/git.html ）**：commit message 这类低风险文本生成交给低成本的 weak-model，主模型只做编码——路由策略里「低风险摘要用便宜模型」的落地案例。
+
 ## 2. 模型路由策略
 
 初期固定默认模型，之后按自己的评测数据考虑：
@@ -28,6 +40,8 @@ interface ModelProvider {
 - 大上下文 / 视觉需求选对应能力模型；
 - 高成本模型触发前依据预算与任务风险决定；
 - 故障切换必须重新校验工具调用与上下文兼容性，不能假设不同模型工具行为一致。
+
+**多 Provider 中立（OpenAI Agents SDK 实证，出处：https://openai.github.io/openai-agents-python/ ）**：SDK 官方定位 provider-agnostic——同一套 agent 定义可经 LiteLLM / any-llm 接 100+ 模型，不绑死 OpenAI；mod-agent 的 `ModelProvider` 接口方向一致，MVP 先建一条可靠基线、再横向铺 Provider。
 
 > 不要只看厂商公开榜单选默认模型。用自己的真实仓库任务集测成功率、延迟、成本、修复轮数与副作用风险。成本锚点参考：公开榜单上 agentic 修复平均约 \$0.86/题。
 

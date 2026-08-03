@@ -36,6 +36,13 @@ interface ValidationReport {
 }
 ```
 
+### 1.1 约定即执行：规则文件里的测试命令（AGENTS.md 标准实证）
+
+AGENTS.md 规范 FAQ 明确（出处：https://agents.md ）：**在 AGENTS.md 里列出的测试命令，agent 会自动尝试执行，并在任务结束前修复失败**（"The agent will attempt to execute relevant programmatic checks and fix failures before finishing the task"）。对 mod-agent：
+
+- §2 项目命令发现以 `package.json` 等为准之外，**AGENTS.md / CLAUDE.md 中显式列出的 build / test 命令同样进入候选**，且执行前过 Policy；
+- 「修到绿」是任务收尾的默认义务，不是可选项——与 §1 验证流水线、Repair Loop 衔接。
+
 ## 2. 项目命令发现
 
 从 `package.json`、workspace 配置、README、CI 配置与现有脚本推断检查命令，形成候选列表并记录来源与置信度。命令必须过 Policy；检测到 monorepo 时优先定位受影响 package，不默认跑全仓库命令。
@@ -119,3 +126,19 @@ flowchart TD
 - 并行写不同文件用独立 Git Worktree 隔离防冲突；
 - 交接必须传递：任务目标、相关证据、候选文件、未确认假设、约束、当前提交、期望输出 Schema、禁止动作——不传无边界长对话作为唯一状态；
 - 综合时显式检查跨文件一致性（多 Agent 失败约 44% 源于此），不一致则派修补 worker 或 replan。
+
+### 5.4 业界实证：子代理与并行的强制机制
+
+**Plan 只读靠「不注册写工具」，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal——"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：§5.2 的分析型子代理（Repository Analyst / Patch Reviewer）应在**代码层**就不注册写工具，而不是靠 prompt 叮嘱。
+
+**子代理 = 独立上下文窗口 + 同工具集 + 只回传结果（Zed `spawn_agent` 实证，出处：https://zed.dev/docs/ai/tools ）**：派一个带独立上下文窗口的子代理执行委托任务（并行调研 / 自包含小任务），探索过程留在自己窗口，仅把结果交回父代理；父代理继续原工作，子代理完成后再评审其结论——两边上下文都聚焦单一任务。
+
+**并行 agent + worktree 隔离并发写（Zed Parallel Agents 实证，出处：https://zed.dev/docs/ai/parallel-agents ）**：
+
+1. 每个 agent 线程独立上下文窗口与对话历史，可并行推进不同任务；
+2. 预判两线程会改到相同文件时，给其中一个开独立 git worktree 检出，物理隔离写冲突；
+3. 新建 worktree 默认 **detached HEAD**，防止不同线程误用同一分支；
+4. 新建 worktree 时触发 hook，注入新旧 worktree 根路径环境变量，便于自动跑初始化；
+5. 任务结束：人工评审 diff，经正常 git 流程合并；线程归档时保存并清理 worktree，恢复线程时自动重建。
+
+**多 agent 编排的门槛（Factory Droid `--mission` 实证，出处：https://docs.factory.ai/droid-cli/cli-reference.md ）**：并行 / mission 模式要求自治等级先达到 `--auto high`（只读 → 安全改 → 本地开发 → 可 push 逐级解锁后才允许并行自治），因为并行 agent 要能自己提交 / push。对 mod-agent：多 worker 并行是**权限上界**，不是默认能力。
