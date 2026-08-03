@@ -1,6 +1,6 @@
 # Research · 领域调研综述
 
-> 本文回答「为什么这样设计」：什么是 AI Coding Agent、主流产品、真实能力边界、核心范式与失败模式。
+> 这篇说明「为什么这样设计」：什么是 AI Coding Agent、主流产品、真实能力边界、核心范式与失败模式。
 
 ## 1. 什么是 AI Coding Agent
 
@@ -16,7 +16,7 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 | 交付物 | 文本 / 代码片段 | 分支上的 diff、draft PR、可运行补丁 |
 | 自主程度 | 人逐字确认 | Plan/审批点后人放手，连续跑数小时 |
 
-**关键判断**：底层范式已收敛为「自主工具循环 + 确定性测试闭环」；决定成败的不是循环里用了哪种心智（ReAct/Reflexion），而是 **ACI、scaffolding、context engineering** 三层工程。
+**判断**：底层范式已经收敛为「自主工具循环 + 确定性测试闭环」；循环里用哪种心智（ReAct/Reflexion）不是决定成败的主要因素，ACI、scaffolding、context engineering 这三层工程才是。
 
 ## 2. 主流产品与项目
 
@@ -54,8 +54,8 @@ SWE-bench Verified 分数演进（注意：不同 harness 不可横向等号归�
 
 其他事实：
 
-- Terminal-Bench（运维/终端任务）顶尖模型约 43%（Claude 4 时代）→ 64.8%（Opus 5.5，4.0），仍明显低于 SWE-bench 的 70%+——**运维级任务至今比修 issue 更难**；
-- 33k 条 agent PR 实证（MSR 2026）：文档/CI/构建类合并率最高，性能优化与 bug 修复最差；未合并主因是缺评审、重复 PR、未过 CI、越界功能——**agent 最大失败不是代码写错，而是社会-技术层失配**；
+- Terminal-Bench（运维/终端任务）顶尖模型约 43%（Claude 4 时代）→ 64.8%（Opus 5.5，4.0），仍明显低于 SWE-bench 的 70%+——运维级任务至今比修 issue 更难；
+- 33k 条 agent PR 实证（MSR 2026）：文档/CI/构建类合并率最高，性能优化与 bug 修复最差；未合并主因是缺评审、重复 PR、未过 CI、越界功能——agent 最大的失败不是代码写错，而是社会-技术层失配；
 - HumanEval 已饱和且易过拟合，只作烟雾测试；LiveCodeBench 防污染竞赛题 frontier pass@1 约 35–58%。
 
 ## 4. 核心架构范式

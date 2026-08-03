@@ -1,6 +1,6 @@
 # Architecture · 总体架构
 
-> 本文给出分层架构、关键架构决策（ADR）、技术选型与代码仓库结构。单模块行为见后续各专题文档。
+> 这篇讲分层架构、关键架构决策（ADR）、技术选型与代码仓库结构。单模块行为见后续各专题文档。
 
 ## 1. 分层架构
 
@@ -81,7 +81,7 @@ flowchart TD
 | Sandbox / Worktree | 隔离工作区、命令生命周期、资源限制 | 不假设 Docker 能抵御所有宿主机风险 |
 | Validation Runner | 类型检查 / lint / 测试 / 构建，结果归一化 | 不根据模型口头声明伪造通过结果 |
 | Persistence | 任务、事件、检查点、审批、工具调用持久化 | 不把内存队列当唯一事实来源 |
-| Model Gateway | Provider 适配、路由、用量统计、结构化输出校验 | 不与任务持久ization耦合成一个大类 |
+| Model Gateway | Provider 适配、路由、用量统计、结构化输出校验 | 不与任务持久化耦合成一个大类 |
 
 ## 4. 技术选型
 
@@ -101,7 +101,7 @@ flowchart TD
 | 观测 | 结构化日志（pino）+ trace | OpenTelemetry | 串联任务 / 模型 / 工具 / 审批 |
 | 浏览器验证 | Playwright（后期） | — | UI 复现、截图、E2E |
 
-> 框架取舍：先实现清晰的领域状态机与轻量 Agent Loop，再按需评估 Agents SDK / LangGraph.js。无论是否引入图框架，**任务状态、权限与业务审计始终由本系统掌握**。
+> 框架取舍：先实现清晰的领域状态机与轻量 Agent Loop，再按需评估 Agents SDK / LangGraph.js。无论是否引入图框架，任务状态、权限与业务审计都要留在本系统手里。
 
 ## 5. 建议代码仓库结构
 

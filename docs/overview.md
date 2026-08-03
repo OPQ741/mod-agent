@@ -1,6 +1,6 @@
 # Overview · 目标、边界与范围
 
-> 本文回答「做什么、不做什么、按什么原则做」。架构实现见 [architecture.md](./architecture.md)。
+> 这篇说清楚：做什么、不做什么、按什么原则做。架构实现见 [architecture.md](./architecture.md)。
 
 ## 1. 产品定位
 
@@ -46,7 +46,7 @@ mod-agent 是一个**人在环上（human-in-the-loop）**的 AI Coding Agent CL
 
 ## 2. 设计原则
 
-调研表明，拉开 Coding Agent 差距的不是模型本身，而是 **Agent Runtime（运行时）** 的工程设计。本项目遵循：
+调研表明，拉开 Coding Agent 差距的不是模型本身，而是 **Agent Runtime**（运行时）的工程设计。本项目遵循：
 
 1. **Agent 不等于模型**：模型只负责推断与选择动作；业务层负责状态机、权限、审批、幂等、超时与持久化。
 2. **单 Agent 闭环优先**：一个主 Agent + 确定性验证流程；只有在评测证明有独立收益时才引入子 Agent。

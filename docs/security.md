@@ -1,6 +1,6 @@
 # Security · 沙箱、权限与安全架构
 
-> Agent 天然要读不可信内容，prompt injection 是头号高危入口。本文定义威胁模型、沙箱基线与安全验收。
+> Agent 天然要读不可信内容，prompt injection 是最高危的入口。这篇讲威胁模型、沙箱基线与安全验收。
 
 ## 1. 威胁模型
 
@@ -8,9 +8,9 @@
 
 ## 2. 关键实证（为什么防护必须落框架层）
 
-- **IssueTrojanBench**：66.5% 的恶意 issue 穿透 Cursor / Claude Code / Codex 全部 agent 与模型层防护；且拒绝几乎都来自 LLM 自身而非框架。**靠 prompt 提示模型警惕基本无效。**
-- **真实事件**：Clinejection（恶意 issue 标题做 CI/CD 缓存投毒、外泄凭证）；RoguePilot（issue 隐藏 HTML 注释诱导仓库接管）；诱导 agent 写 `.vscode/settings.json` 开 `autoApprove` 持久化；诱导读私有仓库再经公开 PR 外送。
-- **Claude Code 漏洞教训**：Bash 子进程做了 Bubblewrap 沙箱，但 **Read 工具未受同等约束**，可读 `/proc/self/environ` 窃取 `ANTHROPIC_API_KEY`。环境 scrub 必须覆盖**所有工具读取路径**，不只是 Bash。
+- **IssueTrojanBench**：66.5% 的恶意 issue 穿透 Cursor / Claude Code / Codex 全部 agent 与模型层防护；且拒绝几乎都来自 LLM 自身而非框架。靠 prompt 提示模型警惕基本无效。
+- **真实事件**：Clinejection（恶意 issue 标题做 CI/CD 缓存投毒、外泄凭证）；RoguePilot（issue 隐藏 HTML 注释诱导仓库接管）；还有诱导 agent 写 `.vscode/settings.json` 开 `autoApprove` 持久化、诱导读私有仓库再经公开 PR 外送等。
+- **Claude Code 漏洞教训**：Bash 子进程做了 Bubblewrap 沙箱，但 Read 工具未受同等约束，可读 `/proc/self/environ` 窃取 `ANTHROPIC_API_KEY`。环境 scrub 必须覆盖所有工具读取路径，不只是 Bash。
 - **Agents Rule of Two**（Microsoft）：同时满足「读不可信输入 + 访问敏感密钥 + 对外变更/通信」三者是高危组合，不可同时成立。
 
 ## 3. 沙箱基线
@@ -18,7 +18,7 @@
 - 每任务独立容器 / 更强隔离环境；工作目录只挂载该任务授权的工作区；
 - 非 root 用户；rootless Docker、只读根文件系统、默认 seccomp、去除多余 capabilities；
 - 限制 CPU、内存、进程数、磁盘、文件数、日志量、运行时长与并发；
-- **默认关闭网络**；确有装包需求时按域名 / IP / 端口及阶段临时开放出口；
+- 默认关闭网络；确有装包需求时按域名 / IP / 端口及阶段临时开放出口；
 - 不挂载 Docker Socket、宿主机 home、SSH agent、云凭证目录等高权限资源；
 - 不向任务容器注入通用 API key；远程操作由服务端凭证代理执行；
 - 命令与子进程做生命周期管理，取消时终止整个进程组；
@@ -40,7 +40,7 @@ interface CommandRequest {
 }
 ```
 
-确需 shell 的 package scripts 在沙箱内执行，靠命令风险分类、网络策略与容器权限约束。**不要把 shell 字符串安全误认为只是引号转义。** 破坏性命令硬策略拒绝或人工审批，不依赖模型自我约束。
+确需 shell 的 package scripts 在沙箱内执行，靠命令风险分类、网络策略与容器权限约束。shell 字符串安全不只是引号转义问题。破坏性命令硬策略拒绝或人工审批，不依赖模型自我约束。
 
 ## 5. 网络、密钥与外部数据
 
