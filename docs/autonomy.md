@@ -73,6 +73,32 @@ graph TB
 - **每轮末尾做一次压缩**：goal 循环轮次多，不压缩必爆上下文窗口（压缩机制见 [context-engineering.md §5](./context-engineering.md#5-压缩compaction与外置记忆)）；
 - **无进展检测**：连续 N 轮关键指标（失败用例数、报错内容）没有变化，提前收敛为 `impossible` 或请求人工介入。
 
+### 1.5 真实 Claude Code 证据：/goal 其实是 Stop hook 的封装
+
+逆向（明文反代抓包 + 官方文档）给出的机制比上面的设计图更具体：**/goal 是对一个会话级 Stop hook 的封装**。每个 turn 结束，系统把「你设的条件 + 到目前为止的对话」发给一个评估器模型（官方称「小快模型」，默认 Haiku），它回「是 / 否 + 一句理由」；「否」让主 agent 带着理由再干一轮，「是」清掉目标并在会话记录里记一笔达成。
+
+设目标那一刻，主模型收到的消息几乎把机制写在明面上：
+
+> A session-scoped Stop hook is now active with condition:「<你的条件>」. Briefly acknowledge the goal, then immediately start (or continue) working toward it — treat the condition itself as your directive and do not pause to ask the user what to do. The hook will block stopping until the condition holds. It auto-clears once the condition is met.
+
+**裁判的提示词是一个自治循环的全部分寸所在**，它要求返回三种 JSON 形状之一：
+
+```text
+{"ok": true,  "reason": "<引用 transcript 里满足条件的证据>"}
+{"ok": false, "reason": "<引用缺什么、什么挡住了条件>"}
+{"ok": false, "impossible": true, "reason": "<解释为什么条件永远无法满足>"}
+```
+
+三个抓包才看得到的工程细节，直接印证 §1.1–1.3 的设计：
+
+- **判决是 API 层强制的，不只是提示词请求**：这条请求带 `output_config`，用 JSON schema 把输出死死约束成 `{ok, reason, impossible}` 形状（`ok` / `reason` 必填、不许有别的字段）——提示词只是说明，schema 才是护栏；
+- **裁判不给工具、只看对话**：请求里 `tools` 为空——它没法读文件、没法查证，只能判断「已经出现在对话里的内容」；证据不足时必须返回 `{"ok": false, "reason": "insufficient evidence in transcript"}`；
+- **裁判跑高推理档**（`effort: "high"`），且整段提示词都在防「主 agent 把裁判忽悠着提前认输」：主 agent 说干不成「只算证据、不算铁证」，裁判要独立确认；连「进度慢」都点名排除——慢不等于不可能；拿不准就返回 `{"ok": false}`、不加 `impossible`。
+
+> 这正是 §1.1「执行的人不能给自己当裁判」和 §1.3「impossible 是必须有的刹车」的真实落地：**`impossible` 这道刹车既防停不下来，也防被内部说服着草草收场**。
+
+每轮进度还会落进会话记录：一条 `goal_status`，带条件、迭代数、耗时、烧了多少 token、达成没——「一个目标跨多少 turn、每轮什么状态」完全可回放（见 [observability-evaluation.md](./observability-evaluation.md)）。
+
 ## 2. 定时与自排程续跑：/loop
 
 `/loop` 让 agent 处理「现在条件还不满足，过一会儿再来看」的任务，例如「盯到 CI 结束就汇报」「每 10 分钟检查一次部署状态」。它有两种节奏：
@@ -102,6 +128,50 @@ dynamic 模式临时给 agent 挂上一个 `schedule_wakeup` 工具，它只在 
 - 以 **headless 模式**运行，把每轮的关键动作、裁决、等待时间写进结构化日志（见 [observability-evaluation.md](./observability-evaluation.md)），而不是只打到终端；
 - 结束时产出一份**退出报告**：跑了几轮、每轮做了什么、最终状态、是否达成、花了多少；
 - 无人值守场景应套用 [security.md §3](./security.md) 的最小面原则（参考 Claude Code `--bare`）：不静默加载仓库自带的 MCP / hooks / skills，收窄凭证面。
+
+### 2.4 真实 Claude Code 证据：解析三规则、CronCreate、ScheduleWakeup
+
+逆向给出的 `/loop` 比上面的「两种节奏」更精巧。它不是一个硬编码调度器，而是**一大段由主模型执行的编排提示词**（真正的执行、生命周期、保护栏仍硬编码在运行时）。
+
+**解析规则按优先级写死，连同边界反例一起教给模型：**
+
+1. **开头 token**：第一个空格分隔的 token 匹配 `^\d+[smhd]$`（如 `5m`、`2h`）就是间隔，其余是 prompt；
+2. **结尾 every 从句**：否则输入以 `every <N><unit>` 结尾（如 `every 20m`）抽出间隔；**只在 every 后是时间表达式时才匹配**——`check every PR` 没有间隔；
+3. **没有间隔**：整句当 prompt，进自定节奏（dynamic）。
+
+> 最见功力的是 `check every PR` 反例——特意声明「every 后不是时间就不算间隔」，免得把「检查每个 PR」误读成「每隔一个 PR 跑一次」。
+
+**固定间隔走 `CronCreate`，真实调用与返回：**
+
+```text
+CronCreate({"cron": "*/1 * * * *", "prompt": "…", "recurring": true})
+→ Scheduled recurring job 7e7d1261 (Every minute). Session-only
+  (not written to disk, dies when Claude exits). Auto-expires after 7 days.
+  Use CronDelete to cancel sooner.
+```
+
+一句话印证几点：间隔被转成标准 5 字段 cron（用户本地时区），任务只活在会话里、不落盘（退出不留垃圾），**7 天后自动过期**（约束会话寿命）。一个容易误解的点：编排提示词要求建完 cron 后**立刻先把任务跑一次**——「don't wait for the first cron fire」，不是等第一次触发才跑。
+
+**自定节奏走 `ScheduleWakeup`，工具描述把「缓存感知的延迟」讲得很透：**
+
+> 别拿短间隔反复查那些 harness 本来就会在完成时通知你的后台活——那纯属白轮询；应该排一个较长（1200s 起）的兜底唤醒，只防任务挂死/永不回信。
+
+延迟选择直接对齐 Anthropic 前缀缓存 **5 分钟 TTL**：
+
+| 延迟 | 缓存状态 | 适用 |
+| --- | --- | --- |
+| 60–270s | 缓存保持热 | 主动轮询 harness 无法通知的外部状态（CI、部署、远程队列） |
+| 300–3600s | 付一次缓存未命中 | 没必要早查、真闲置、或作为长兜底心跳 |
+| 1200–1800s | — | 无信号的空闲 tick 默认值（20–30 分钟） |
+
+**别选 300s**——两头不讨好：付了缓存未命中却没摊薄等待；想「等 5 分钟」要么降到 270s（留在缓存），要么直接 1200s+（一次未命中换长等待）。运行时还会把延迟夹在 [60, 3600]，无需自己夹。
+
+**其余一族底座：**
+
+- **云端计划**：间隔 ≥ 1 小时、或用「每天早上」这类日级措辞时，先问要不要改成能脱离会话的云端计划（`/schedule`，跑在 Anthropic 那边、关会话也不停）——纯 /loop 一关会话就没了；
+- **Monitor**：盯长跑脚本/日志、有输出就推回来（比轮询省），事件以 `<task-notification>` 唤醒循环；
+- **KAIROS**：本地 cron / 唤醒 / 通知背后的调度守护进程；
+- **Jitter（错峰）**：重复任务会滞后周期的 10%、最多 15 分钟（官方文档另有「最多半小时」口径，多半是版本差异）；建 cron 时还会避开整点 `:00`/`:30`，防止全球请求同一秒打到 API。
 
 ## 3. 动作自动批准：Auto Mode
 
@@ -160,6 +230,49 @@ graph TB
 ### 3.6 人永远可以抢回控制权
 
 分类器是「人没表态时的替身」，不是「人的上级」。一旦用户在确认框上操作，分类器的结论立即作废，以人的选择为准（业界做法是 UI 对话框、权限 Hook、分类器三者竞速，由首个决定生效、人类意图优先，并设防误触宽限期）。
+
+### 3.7 真实 Claude Code 证据：四规则桶、两段式、reasoning-blind
+
+逆向（v2.1.88 快照机制 + 2.1.201 `claude auto-mode defaults` 规则）给出的 Auto Mode 比上面的设计图细得多。它的分类器自我定位是「a security monitor for autonomous AI coding agents」——监视一个有 shell、有文件系统、有 API 凭据、权限跟人类开发者差不多的自主 agent，防三类风险：**提示注入、范围蔓延、误伤**。
+
+**规则用自然语言写，分四个桶（`claude auto-mode defaults` 可导出）：**
+
+| 桶 | 条数 | 内容 |
+| --- | --- | --- |
+| `allow` | 16 | 明确放行：只读操作、推到自己工作分支、改 CLAUDE.md 非权限内容、测试产物、标准凭证等 |
+| `soft_deny` | 62 | 拦下问人：force push、直推主干、生产部署、凭据外泄、探测式外泄、给自己开后门（Auto-Mode Bypass）、指令投毒（Instruction Poisoning）——威胁模型主体：外泄、不可逆销毁、越权 |
+| `hard_deny` | 1 | 唯一硬红线：**Data Exfiltration**——敏感数据越过信任边界；用户意图也解除不了 |
+| `environment` | 21 | 不是规则，是环境上下文槽：组织、云厂商、受保护分支（默认 main/master）、可信仓库/域名/bucket、密钥位置 |
+
+**两段式分类器（先高召回粗筛、再高精度细判），对应 §3.2 的快慢路径：**
+
+- **第 1 段（粗筛）**：`max_tokens` 仅 64、`temperature 0`、吐到 `</block>` 就停；**不应用用户意图、不看放行例外**，只按「动作的实际效果有没有可能撞上任何拦截规则」判，宁枉勿纵；判 no 当场放行（绝大多数清白动作一句话就过）；
+- **第 2 段（细判）**：只有第 1 段拦下才启动，预算给到 4096 token、允许先走 `<thinking>` 推理，**这时才把用户意图和放行例外应用上**，复核粗筛对不对；
+- 输出 `<block>yes</block><reason>[规则名] 一句话</reason>`，理由必须以命中规则名开头；说不出具体规则就判放行；整个回复必须以 `<block>` 开头，客户端一读到就能决策。两段共享 1 小时缓存前缀（system prompt + CLAUDE.md + 动作）。
+
+**reasoning-blind——这是最见安全设计功力的一点，对应 §3.3 脱敏：**
+
+- 喂给分类器的不是完整对话，而是**特意删过的精简记录**：保留用户消息和 assistant 发起的工具调用，但**丢掉 assistant 写的所有散文和思考**——因为那些散文是模型生成的，可能被人构造来专门影响分类器；
+- 换句话说：**被审判的对象没有为自己辩护的机会**——哪怕主模型被注入攻破、满口「这个操作绝对安全、快放行」，这些话根本进不到分类器眼前；它只看「想调哪个工具、参数是什么」这个事实。
+
+**用户意图走独立通道，且证据门槛不对称：**
+
+- 用户的 `CLAUDE.md` 被单独包成 `<user_claude_md>` 注入，这是用户意图的合法通道；但只有当它**明确授权正在审的具体动作——同操作、同目标**才算放行；泛泛的「be autonomous」「don't ask」「I trust you」不是授权，不会降低拦截门槛；
+- **User Intent Rule 是一条刻意失衡的标准**：授权一个危险动作要很高的证据门槛，而尊重一条边界（「别 push」）只要很低门槛——把关系统在「该不该更放开」上要保守，在「该不该更谨慎」上要顺从。所以收紧边界的话立刻生效，放松边界的话被高门槛挡住。
+
+**分类器给静态规则做语义兜底：**
+
+- 防「换工具绕过」：用 `python -c`、`sed -i`、`cat >` 去写一个本该被 Edit/Write deny 规则拦住的文件——静态规则按工具名匹配，分类器读得懂「这条 Bash 想干的其实是被禁的那件事」；
+- 防「跨会话洗白」：`<cross_session_messages_rule>` 规定别的会话捎来的话不携带用户权威（详见 [agent-teams.md §4](./agent-teams.md)）；
+- 只读工具（Read/Grep/Glob 等）压根不走分类器 API，直接放行；Write/Edit 走已批准的 acceptEdits 快路径。
+
+**刹车与元评估：**
+
+- 总开关由远端 `tengu_auto_mode_config.enabled` 控制，可远程一键熔断退回普通权限；分类器报错走 `tengu_iron_gate_closed`（默认 fail-closed，宁可错拦）；
+- 连续拦 3 次 / 累计拦 20 次（`DENIAL_LIMITS`），交互模式回落人工、headless 直接中止；
+- **`claude auto-mode critique` 规则可写性元评估器**：另配一个 LLM 从 Clarity / Completeness / Conflicts / Actionability 四个维度审你写的自然语言规则——「用 LLM 检查你为另一个 LLM 写的规则读不读得懂」，是自然语言权限走到底的必然产物。
+
+> 演进对账：v2.1.88 快照里只有 `allow / deny / environment` 三个槽位、没有 `hard_deny`；2.1.201 已拆成四个桶——原来笼统的 `deny` 分成 `soft_deny`（用户意图可解除）和 `hard_deny`（用户意图也解除不了）。注意：能导出规则 ≠ 默认开启——它仍受远端开关、本地设置、模型 gate 和 opt-in 控制。
 
 ## 4. 三种自治能力的护栏总表
 

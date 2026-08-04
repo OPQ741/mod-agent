@@ -116,7 +116,23 @@ flowchart TD
 
 对常见新功能与修复，一个能力充足的主 Agent + 确定性验证流程，通常比多个 Agent 互相转交更好调试。多 Agent 会增加上下文传递、协调、工具权限、执行成本与失败归因复杂度。能不用就不用。
 
-### 5.2 何时引入子 Agent
+### 5.2 三种编排模式：先看清再选
+
+真实 Claude Code 的多 Agent 不是一种形态，而是三种编排模式，区别在「谁来调度、成员能否互发」：
+
+| 模式 | 结构 | 谁来调度 | 成员通信 | mod-agent 对应 |
+| --- | --- | --- | --- | --- |
+| **Subagent（子代理）** | 主 Agent 派独立上下文的子 Agent，干完回传结果 | 主 Agent 在推理里临场派 | 子 Agent 是叶子，彼此不通气 | §5.4–5.6（首期做这个） |
+| **Coordinator（协调器）** | 主 Agent 变成**纯协调器**，自己不执行、只分派 worker 并汇总 | 主 Agent 只编排不干活 | worker 只对协调器回传 | 大规模拆分时（见 [dynamic-workflows.md](./dynamic-workflows.md)） |
+| **Swarm（蜂群）** | 一组对等 Agent，通过共享终端（tmux/iTerm2）**点对点**协作 | 无单一中心，Agent 互相直连 | 成员之间可直接互发 | 演化为 [agent-teams.md](./agent-teams.md) |
+
+三个判断：
+
+- **Subagent 是基础模式**：Coordinator 只是把「主 Agent 不再亲自执行」这条规则化，底下仍是子 Agent；Swarm 把「叶子能互发」放开——这一放开就从「正确性问题」变成「安全问题」，需要一整套跨会话授权规则（见 [agent-teams.md](./agent-teams.md)）；
+- **确定性脚本是第四种、但不在模型驱动范畴**：当编排能预先写死、且规模大到模型临场调度不可靠时，用 [dynamic-workflows.md](./dynamic-workflows.md) 的脚本替代「当协调器的模型」；
+- **选型顺序**：单 Agent（§5.1）→ Subagent（本节）→ Coordinator/Workflow（大规模）→ Swarm/Teams（对等协作）。能停在左边就别往右边走。
+
+### 5.3 何时引入子 Agent
 
 当评测证明某环节有可独立并行的工作、明确输入输出，并能提升成功率或降低成本时，可引入：
 
@@ -127,7 +143,7 @@ flowchart TD
 
 子 Agent 默认只给需要的工具——分析型 Agent 不应得到写文件与终端权限。
 
-### 5.3 交接与隔离
+### 5.4 交接与隔离
 
 ```mermaid
 flowchart TD
@@ -148,7 +164,7 @@ flowchart TD
 - 交接必须传递：任务目标、相关证据、候选文件、未确认假设、约束、当前提交、期望输出 Schema、禁止动作——不传无边界长对话作为唯一状态；
 - 综合时显式检查跨文件一致性（多 Agent 失败约 44% 源于此），不一致则派修补 worker 或 replan。
 
-### 5.4 子 Agent 的实现模式：一个 Agent 类，配置不同
+### 5.5 子 Agent 的实现模式：一个 Agent 类，配置不同
 
 一个常见误区是以为「主 Agent 一个类、子 Agent 另写一套类」。更简单也更一致的做法是：**子 Agent 就是同一个 Agent 类，用不同的配置实例化**，通过构造参数控制它的能力与行为：
 
@@ -161,7 +177,7 @@ new Agent({
 ```
 
 - **内置三类角色 + 自定义**：`explore`（只读探索，工具最少、最省 token，仅输出观察不做结论）、`plan`（规划，只读 + 计划工具）、`general`（通用，工具最全）；用户也可在 `.agents/<name>.md`（或 `.mod-agent/agents/`）写自定义角色文件，结构与 `SKILL.md` 类似——YAML frontmatter（名称 / 描述 / 允许工具）+ 正文（角色与职责）；
-- **输出捕获，不回流父会话**：子 Agent 内部的模型对话、工具调用、流式输出原本会写入会话存储 / 打到 TUI；在 `isSubAgent` 下这些都被**重定向到一个 `outputBuffer`**——不保存进父会话历史、不打印到主界面。子 Agent 跑完只把 buffer 里的最终结果作为 `Task` 工具结果返回给父代理，父代理的上下文因此只增加一条摘要（对齐 §5.3 的「只回 1–2k token」）；
+- **输出捕获，不回流父会话**：子 Agent 内部的模型对话、工具调用、流式输出原本会写入会话存储 / 打到 TUI；在 `isSubAgent` 下这些都被**重定向到一个 `outputBuffer`**——不保存进父会话历史、不打印到主界面。子 Agent 跑完只把 buffer 里的最终结果作为 `Task` 工具结果返回给父代理，父代理的上下文因此只增加一条摘要（对齐 §5.4 的「只回 1–2k token」）；
 - **token 汇总**：子 Agent 的 token 用量与成本计入父代理的账单，不另开账户；
 - 这样主 Agent 和子 Agent 共享同一套循环、工具执行、权限、压缩逻辑，维护成本最低。
 
@@ -174,9 +190,16 @@ new Agent({
 
 这四层是**确定性的**——工具不在集合里，模型无论如何都拿不到手；系统提示词里的角色约束只是补充。它解决了一个真实的安全漏洞：若不强制继承权限，模型可以在主对话每步都要确认的情况下，把敏感操作派给一个「全自动」的子代理去绕过审批。
 
-### 5.5 业界实证：子代理与并行的强制机制
+**子 agent 默认后台、叶子工具摘除（真实 Claude Code 实证，机制见 [background-fleet.md](./background-fleet.md)）：**
 
-**Plan 只读靠「不注册写工具」，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal——"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：§5.2 的分析型子代理（Repository Analyst / Patch Reviewer）应在**代码层**就不注册写工具，而不是靠 prompt 叮嘱。
+- **默认后台**：Agent 工具的 `run_in_background` 默认 `true`，子 agent 跑完用 `<task-notification>` 事件把结果送回主循环，而不是同步阻塞主会话；只有「往下走前非拿到结果不可」才设 `run_in_background: false`；
+- **叶子摘除**：子 agent 工具集里把 `Agent`、`Workflow`、`ScheduleWakeup`、`TaskOutput` 等能再 fan-out / 排程的工具摘掉（即上面四层过滤第 2 条的具体清单）——它只能干活，不能再派生；
+- **禁 sleep-poll**：配套要求「完工时会自动通知，不要 sleep、轮询、主动查进度」——派出去就松手，等通知；
+- 对 mod-agent：这三点与上面的「一个 Agent 类 + 配置」实现完全兼容——`isSubAgent` 除了重定向输出，还应负责「默认后台 + 摘派生工具」。
+
+### 5.6 业界实证：子代理与并行的强制机制
+
+**Plan 只读靠「不注册写工具」，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal——"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：§5.3 的分析型子代理（Repository Analyst / Patch Reviewer）应在**代码层**就不注册写工具，而不是靠 prompt 叮嘱。
 
 **子代理 = 独立上下文窗口 + 同工具集 + 只回传结果（Zed `spawn_agent` 实证，出处：https://zed.dev/docs/ai/tools ）**：派一个带独立上下文窗口的子代理执行委托任务（并行调研 / 自包含小任务），探索过程留在自己窗口，仅把结果交回父代理；父代理继续原工作，子代理完成后再评审其结论——两边上下文都聚焦单一任务。
 

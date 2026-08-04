@@ -31,6 +31,42 @@ flowchart LR
 
 trace 至少记录：模型调用、工具调用、护栏触发、中断 / 恢复点。
 
+### 1.2 真实 Claude Code 对照：四层观测与 span 树
+
+真实 Claude Code 的可观测性不是「打一堆日志」，而是按四类不同问题拆成四层（前三层是 OpenTelemetry 三件套）：
+
+| 层 | 回答什么问题 | 数据结构 | 关键纪律 |
+| --- | --- | --- | --- |
+| **指标 Metrics** | 「这个月总账」（会话/token/花费） | 只增计数器 | **拒绝带 `prompt.id` 等高基数维度**，否则打爆时序库 |
+| **事件 Events** | 「某件事」（一次 API、一次权限决策） | 带时间戳的离散记录 | 每条带 `prompt.id` 和会话内单调递增 `event.sequence` |
+| **追踪 Trace** | 「整条链」（哪步慢、卡在哪） | 带父子关系的 span 树 | 默认关、beta，又贵又敏感 |
+| **会话记录 Transcript** | 「默认就在、人人都有」的追踪 | 本地 JSONL（`~/.claude/...`） | 不依赖遥测，resume 与社区分析都靠它 |
+
+**span 树就是对一次任务做的「EXPLAIN」，定义了 6 种 span：**
+
+```text
+claude_code.interaction            根：一次 prompt 到回复的完整周期
+  ├─ claude_code.llm_request       每个 turn 的一次模型调用
+  ├─ claude_code.tool              一次工具调用
+  │    ├─ …tool.blocked_on_user    卡在「等你批权限」的墙钟时间（单独计时）
+  │    └─ …tool.execution          工具真正执行的时间
+  └─ claude_code.hook              一次 hook 执行（仅 beta 详细追踪）
+```
+
+三个关键设计，值得 mod-agent 照抄：
+
+- **把「等你批权限」单独计时**：慢可能是模型慢、磁盘慢，也可能是你去倒咖啡；把「等人」从「执行」剥出来，才知道该优化什么；
+- **并发请求显式传 span 句柄**：预热、分类器、主线程并发请求时，若回填不显式带 span，会挂到「恰好最后开的那个」上造成错配；
+- **弱引用 + 定时兜底清 span**：中断/异常时 span 可能不 end，用弱引用和超时回收——观测设施自己不能变成内存泄漏。
+
+**关联锚点**：用户输入进来时生成一个 `prompt.id`，同一处代码同时开追踪根和发 `user_prompt` 事件——事件层靠它归拢，会话层只在用户消息行盖它做定位，追踪层靠父子归属（不带 id），指标层**故意不带**。离散层用 id 关联、因果层用树形归属、聚合层拒绝 id——这是整套观测的第一性原则。
+
+**隐私边界（默认只导「形状」，内容逐项开）：**
+
+- 默认只导元数据（长度、token 数、时长、工具/模型名、决策类型），不导原文；
+- 用户 prompt、助手回复、工具参数/输入输出、原始 API 体分别由 `OTEL_LOG_USER_PROMPTS` / `OTEL_LOG_ASSISTANT_RESPONSES` / `OTEL_LOG_TOOL_DETAILS` / `OTEL_LOG_TOOL_CONTENT` / `OTEL_LOG_RAW_API_BODIES` 逐个开关，默认打码或不导出；
+- 代码和文件内容**永不进指标或事件**；模型思考原文外部永不导出。
+
 ## 2. 核心指标
 
 分五类看：

@@ -343,3 +343,19 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 2. PreToolUse 输入含 tool_name / tool_input（文件路径展开为绝对路径，防 `~/` 相对路径绕过）；
 3. PostToolUse 两种介入：`additionalContext`（向上下文追加事实，如当前分支 / 测试命令；超长则落盘只传路径）、`updatedToolOutput`（替换模型看到的工具输出，如把 stdout 里的密钥打码为 `[redacted]`，不影响已发生的副作用）；
 4. 写作要求：追加内容用**陈述句事实**，避免祈使句式「系统指令」，否则会触发模型的 prompt-injection 防御而被丢弃。
+
+**真实 Claude Code 的完整 Hooks 体系（v2.1.88 快照）：** 上面 6 个是最常用、官方文档化的事件；实际运行时按生命周期分约 **13 组、23+ 个事件**，四个执行点（会话边界 / 轮次边界 / 工具执行前 / 工具执行后），且在执行点可产出四种决策：
+
+| 决策类型 | 效果 |
+| --- | --- |
+| 继续（放行） | 正常往下走 |
+| 阻断（exit 2） | 阻止本次动作，stderr 回喂模型 |
+| 追加上下文 | 向上下文加事实（PostToolUse 的 additionalContext） |
+| 替换输出 | 改模型看到的工具输出（updatedToolOutput） |
+
+除上表的核心事件外，还有 Notification、SubagentStop、PreCompact、SessionStart 的 `source` 等更细挂点（如压缩前、子 agent 停止、通知时）。对 mod-agent：
+
+- **MVP 先做上表 6 个事件 + 阻断/追加/替换三类决策**，覆盖 90% 场景；其余事件按真实需求再补；
+- **Hook 是「确定性扩展」，比让模型临场改行为可靠**——它是用户/组织在不写代码的前提下插进主循环的确定性逻辑；
+- Hook 与 Auto Mode 的 Stop hook 是同一套引擎：`/goal` 本质就是封装了一个会话级 Stop hook（见 [autonomy.md §1.5](./autonomy.md)）；
+- CI/无人值守默认不自动加载仓库自带 hooks（`--bare`，见 [security.md §3](./security.md)），防止恶意仓库借 hook 执行任意代码。

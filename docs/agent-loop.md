@@ -56,6 +56,29 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
+### 1.1 进入主循环之前：启动管线（真实 Claude Code 证据）
+
+任务状态机从 `queued` 进入 `initializing` 之后、到主循环第一次转起来，真实 Claude Code 拆成约 **9 个阶段、冷启动约 235ms** 完成（CLI 对启动延迟极敏感）。顺序大致是：
+
+```mermaid
+flowchart LR
+    A["1 解析参数<br/>入口/工作模式"] --> B["2 加载配置<br/>settings 合并"]
+    B --> C["3 工作区信任<br/>确认目录可跑"]
+    C --> D["4 模型/凭证就绪<br/>Provider 初始化"]
+    D --> E["5 加载规则<br/>CLAUDE.md/AGENTS"]
+    E --> F["6 工具注册<br/>含 MCP/延迟加载"]
+    F --> G["7 Hooks 就绪<br/>事件管线"]
+    G --> H["8 上下文装配<br/>系统提示词"]
+    H --> I["9 进入主循环<br/>首次 query"]
+```
+
+几条值得 mod-agent 照抄的启动纪律：
+
+- **重依赖按需 `await import()`**：MCP/遥测/协议 exporter 这类只有用到才需要的模块不进启动路径，把冷启动压短；
+- **信任检查在一切自动发现之前**：先确认目录可信，再加载规则、MCP、hooks（防止「仓库里一份 `.mcp.json` 在未信任目录被静默执行」）；
+- **配置合并分层**：默认 → 组织级 → 项目级 → 命令行，后者覆盖前者；
+- 启动阶段的异常（凭证缺失、配置非法、工作区冲突）应快速失败并给出可操作提示，而不是拖到主循环才报错。
+
 ## 2. 核心 Agent Loop
 
 闭环：**模型提议动作 → 运行时校验并执行 → 结果重新进入上下文 → 判断是否完成**。
@@ -305,7 +328,7 @@ sequenceDiagram
 | json | 一次返回 result + session_id + usage + total_cost_usd，可 `--json-schema` 约束结构 |
 | stream-json | NDJSON，逐事件实时吐，末行是 result 汇总 |
 
-- 退出码即成败：0 成功、非 0 失败，脚本可直接分支；
+- 退出码即成败：0 成功、非 0 失败，脚本可直接分支。真实 Claude Code 的退出码更细——`0` 正常结束、`1` 出错、`2` 被中止（SIGINT/EOF），另有内部用 `51`（bypass 模式被拒）、`52`（远程/无 TTY 环境问题）等；脚本只需区分 0/非 0，但**交互模式用退出码 2 区分「人主动打断」与「真出错」**，是值得照抄的约定；
 - Gemini 的 headless JSON 还带一份「账」：`stats.models[].tokens`（prompt / candidates / total / cached / tool）、`stats.tools`（totalCalls / totalSuccess / totalFail / totalDurationMs / totalDecisions: accept | reject | modify | auto_accept）、`stats.files`（totalLinesAdded / totalLinesRemoved）——用量记账与工具成功率分析直接可做；
 - **`--bare` 模式**（CI / 脚本默认推荐，出处同 Claude headless）：跳过一切自动发现（hooks / skills / MCP / 记忆 / 规则文件），不读本机 OAuth 与钥匙串，保证每台机器结果可复现。
 

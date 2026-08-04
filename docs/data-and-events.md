@@ -71,6 +71,20 @@ OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https:
 - 工作区抽象为「本机目录」与「临时容器」两档（对应 [architecture.md](./architecture.md) 沙箱 / 运行时抽象）；
 - 未核实项：OpenHands 具体事件枚举类型名（agent / observation / state 的确切命名清单）未在抓取到的页面逐条列示，本设计文档按自身事件类型表（见上）实现即可。
 
+### 1.2 会话记录：用 parentUuid 串成一条链表（真实 Claude Code 证据）
+
+除了进 SQLite 的结构化表，真实 Claude Code 每次运行还往本地写一份会话 transcript（JSONL）：`~/.claude/projects/<把工作目录转义的目录名>/<会话 id>.jsonl`。它本质是一条用 `parentUuid` 串起来的链表，每写一条消息盖上 `uuid` / `parentUuid` / 时间戳 / 类型等字段。三个精妙处：
+
+- **工具结果的父指针指向发起它的那条 assistant 消息**，而不是「物理上一条」——某个工具结果能精确回溯到「哪个 assistant turn 的哪次调用请求了它」，因果是显式连边、不靠时间顺序猜；
+- **压缩边界断物理链、留逻辑链**：压缩把一段历史换成摘要时，`parentUuid` 置空（物理断开，好让 prompt 缓存稳定），但另存 `logicalParentUuid` 保住原父指针，读时再桥接——压缩不破坏追踪的逻辑连续性；
+- **`promptId` 只盖在用户消息行**（用户输入与工具结果回注行，这两种内部算 `user` 类型），作为定位锚点。
+
+**怎么从记录重建「一次 prompt 的多个 turn」**：沿 `parentUuid` 走连边——从任意消息回溯到根，或从起点往下顺子边展开，就能把 assistant turn、它发起的工具调用、回来的结果层层连起来。`promptId` 是定位锚点、不是分组键（只在 user 行，按它分组会漏掉不带它的 assistant 行）。对 mod-agent：
+
+- 本地 transcript 可作为 SQLite 之外的**第二份、人类可读的审计/恢复格式**（JSONL 追加写入，崩溃也不丢历史）；
+- 子 agent / workflow 各写自己的文件，每条委派链的追踪分开（见 [verification-and-multiagent.md](./verification-and-multiagent.md)、[dynamic-workflows.md](./dynamic-workflows.md)）；
+- 这是「默认就在、不依赖遥测开关」的那份 trace，对没有接 OTel 后端的单机用户尤其重要。
+
 ## 2. 持久化表（SQLite）
 
 PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模型（先跑起来，逻辑不变，以后换库只换驱动）。

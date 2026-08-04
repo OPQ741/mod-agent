@@ -42,8 +42,18 @@
 
 ### Phase 7 · 自治与续跑
 
-在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（独立评估器三态、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（无新变化即停、headless 日志）、Auto Mode 动作自动批准（两段式裁决、脱敏投影、fail-closed、拒绝上限、权限传子代理）。
-验收：评估器与执行分离、目标不可达时能 `impossible` 刹车；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权。
+在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（Stop hook 封装、独立评估器 JSON 三形状、判决走 API 层 schema、`impossible` 防死循环、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（解析三规则、`CronCreate` 固定间隔 7 天过期、`ScheduleWakeup` 缓存感知、无新变化即停、headless 日志）、Auto Mode 动作自动批准（四规则桶、两段式 64/4096 裁决、reasoning-blind、不对称意图门槛、fail-closed、拒绝上限、权限传子代理）。
+验收：评估器与执行分离、目标不可达时能 `impossible` 刹车、裁判不被主 agent 话术忽悠；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权、只读工具不触发分类器。
+
+### Phase 8 · 工作流、团队与后台舰队
+
+在 Phase 6 多 Agent 与 Phase 7 自治之上，再做三类高协作能力（均为可选项，按真实需求与评测驱动）：
+
+- **Dynamic Workflows（[dynamic-workflows.md](./dynamic-workflows.md)）**：确定性 JS 脚本编排，`agent/pipeline/parallel`、StructuredOutput、三道上限（并发 `min(16,CPU-2)` / 4096 item / 1000 agent）、预算、worktree 隔离、journal 断点续跑；先做最小版（3 个 hook + 1 道并发）；
+- **Agent Teams（[agent-teams.md](./agent-teams.md)）**：对等组队、共享任务/记忆/产出、`SendMessage` 四种寻址；**安全规则随通信一起上**——跨会话消息不携带用户权威、转发被拒动作即权限洗白、跨机 bridge 为 bypass-immune 必问人、团队记忆跳过 secret；先做同进程对等，再跨会话；
+- **Background Fleet（[background-fleet.md](./background-fleet.md)）**：会话内子 agent 后台化（Phase 6 已含）、`/bg` 脱终端、`claude agents` 表、commit/push/draft PR 收尾；daemon 健康检查/重生/孤儿收养最后做，且 on-demand 不常驻。
+
+验收：工作流失败被隔离成单点、不重做已完成前缀；团队成员间通信不产生越权、跨机消息必经真人确认、共享记忆无密钥；后台任务关掉终端仍能跑完并交付 draft PR，且不直推主干/force-push/merge。
 
 ```mermaid
 flowchart LR
@@ -54,6 +64,7 @@ flowchart LR
     P4 --> P5["Phase 5<br/>团队与企业"]
     P5 --> P6["Phase 6<br/>选择性多 Agent"]
     P6 --> P7["Phase 7<br/>自治与续跑"]
+    P7 --> P8["Phase 8<br/>工作流 / 团队 / 后台舰队"]
 ```
 
 这张图在说什么：箭头只往右走、不允许跳级——每个阶段都有文末 §3 那套可勾选的验收清单，过不了就不进下一阶段。
@@ -68,7 +79,8 @@ flowchart LR
 | Phase 4 集成     | Skills 按需加载（SKILL.md ≤500 行 + 分包）；规则 frontmatter 激活矩阵；MCP 工具 = 任意代码执行、调用前显式同意                                                        | https://code.claude.com/docs/en/skills ；https://cursor.com/docs/rules ；https://modelcontextprotocol.io/specification/                                                                                       |
 | Phase 5 团队     | Devin 三件套工作台（Shell / IDE / Browser）+ 可接管 + IM 派活；Copilot custom agents + Automations（定时 / 事件触发）；云端每任务独立 worktree + 每轮自动 commit/push | https://docs.devin.ai/get-started/devin-intro ；https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ；https://kilo.ai/docs/code-with-ai/platforms/cloud-agent |
 | Phase 5 安全     | 团队放权但「发起者不可自批」+「Actions 默认不自动跑」；fail-closed 沙箱 + 域名级网络过滤                                                                              | https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ；https://docs.devin.ai/cli/reference/configuration/config-file                                           |
-| Phase 6 多 Agent | 子代理独立上下文 + 只回传结果；并行写文件用 detached-HEAD worktree；mission 并行要求自治等级先到 high                                                                 | https://zed.dev/docs/ai/tools ；https://zed.dev/docs/ai/parallel-agents ；https://docs.factory.ai/droid-cli/cli-reference.md                                                                                  |
+| Phase 6 多 Agent | 子代理独立上下文 + 只回传结果；并行写文件用 detached-HEAD worktree；mission 并行要求自治等级先到 high；子 agent 默认后台、摘派生工具 | https://zed.dev/docs/ai/tools ；https://zed.dev/docs/ai/parallel-agents ；https://docs.factory.ai/droid-cli/cli-reference.md                                                                                  |
+| Phase 8 前沿 | 确定性脚本编排（pipeline 默认无 barrier、StructuredOutput、journal 续跑）；对等团队（跨会话不携带用户权威、bridge bypass-immune、记忆跳过 secret）；后台舰队（on-demand daemon、commit/push/draft PR） | https://diwang.info/how-claude-code-works/#/ （Claude Code 架构深度分析，21 章；前沿见第 17–21 章） |
 | 跨阶段实现细节 | 工具延迟加载/并行、read-before-edit 与 mtime、分层压缩、双后端流式、前缀缓存、记忆语义召回、Skills inline/fork、/goal·/loop·Auto Mode 自治 | https://diwang.info/claude-code-from-scratch/#/ （Claude Code 最小实现逆向教程，16 章） |
 
 ## 2. 建议优先开发顺序
@@ -81,7 +93,7 @@ flowchart LR
 4. **接 TUI 控制台**：任务创建、事件流、审批、diff 与验证报告（Ink）；
 5. **把能力模块化**：Model Gateway、Tool Registry、Context Builder、Skills、MCP Client；
 6. **搭评测与观测**：先取基线数据，再按失败分类优化上下文、工具与模型；
-7. **最后加高级能力**：语义索引、浏览器自动化、多 Agent、自治续跑（/goal、/loop、Auto Mode）、PR/Issue、团队权限。
+7. **最后加高级能力**：语义索引、浏览器自动化、多 Agent、自治续跑（/goal、/loop、Auto Mode）、工作流/团队/后台舰队、PR/Issue、团队权限。
 
 ## 3. MVP 验收清单
 

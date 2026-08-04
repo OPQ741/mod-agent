@@ -1,8 +1,8 @@
 # References · 参考来源
 
-> 供设计核验与后续深入学习。官方 SDK / API、MCP 规范与云平台策略持续演进，正式实现前应再核对所选版本，并用锁文件与契约测试锁定行为。核对日期：2026-10。
+> 供设计核验与后续深入学习。官方 SDK / API、MCP 规范与云平台策略持续演进，正式实现前应再核对所选版本，并用锁文件与契约测试锁定行为。核对日期：2026-08。
 
-> 怎么用这份清单：它不是拿来逐篇读完的「书单」，而是出问题时的「字典」。设计某一层拿不准时，按分类翻对应的官方文档；决定引入某个开源项目前，先看它后面括号里的许可证与停服 / 归档状态——「代码能看」不等于「能放心商用」。链接逐条核验：§1–§5 于 2026-08、§6–§11 于 2026-10 逐个打开核对；正式实现前请按上面提示再核对一次版本。
+> 怎么用这份清单：它不是拿来逐篇读完的「书单」，而是出问题时的「字典」。设计某一层拿不准时，按分类翻对应的官方文档；决定引入某个开源项目前，先看它后面括号里的许可证与停服 / 归档状态——「代码能看」不等于「能放心商用」。链接逐条核验：§1–§5 于 2026-08、§6–§11 于 2026-08 逐个打开核对；正式实现前请按上面提示再核对一次版本。
 
 ## Agent 运行时与范式
 
@@ -249,7 +249,7 @@
 
 - https://github.com/OpenHands/software-agent-sdk — Conversation 对象化、events 一等公民、本地 vs 临时容器工作区、内核与界面分离
 
-## 从零实现教程（Claude Code 逆向学习，2026-10 逐章核实）
+## 从零实现教程（Claude Code 逆向学习，2026-08 逐章核实）
 
 贯穿各专题的「最小可运行实现 + 真实 Claude Code 对照」一手参考，补充本设计文档的落地细节（Agent Loop 的 continue reason、工具延迟加载 / 并行、read-before-edit 与 mtime、双后端流式与前缀缓存、分层压缩、记忆语义召回、Skills inline/fork、Plan 四选项、子 Agent 配置化、MCP 握手、自治续跑、测试方法论）。
 
@@ -258,4 +258,11 @@
   源码仓库 https://github.com/Windy3f3f3f3f/claude-code-from-scratch
   章节：00 引言 / 01 Agent Loop / 02 工具 / 03 System Prompt / 04 CLI 与会话 / 05 流式双后端 / 06 权限 / 07 上下文 / 08 记忆 / 09 Skills / 10 Plan Mode / 11 多 Agent / 12 MCP / 13 架构对比 / 14 测试 / 15 自治与续跑
 
+- **how-claude-code-works（Di Wang）** — Claude Code 架构深度分析（21 章，基于 v2.1.88 泄露源码快照走读 + 官方文档 + 2.1.201 客户端明文反代抓包）：
+  在线阅读 https://diwang.info/how-claude-code-works/#/
+  快照章节（1–16）：概览 / Agent Loop / 上下文工程 / 工具系统 / 代码编辑 / Hooks / 多 Agent / 记忆 / Skills / Plan Mode / 权限安全 / 用户体验 / 最小组件 / 系统提示词 / 任务系统 / 可观测性
+  快照后前沿（17–21）：**/goal 与 /loop、Auto Mode（分类器）、Dynamic Workflows、Agent Teams、Background Fleet**
+
 > 定位说明：该教程是「教学用最小实现」（readline REPL、文件持久化、无沙箱），mod-agent 是「生产级目标架构」（Ink TUI、Zod、SQLite、Docker、Worktree）。本设计文档引用的是其**机制设计与边界处理思路**，不照搬其最小实现代码；凡涉及安全 / 持久化 / 隔离，以本设计文档的工程化选型为准。
+
+> 两篇关系：`claude-code-from-scratch` 是「最小实现 + 真实对照」的教学教程，`how-claude-code-works` 是「对真实 Claude Code 全量代码的深度架构分析」。前者覆盖 mod-agent 的 day-1 落地机制，后者补充真实工程的全貌与最新前沿能力（尤其快照后第 17–21 章，是本设计文档 `dynamic-workflows.md` / `agent-teams.md` / `background-fleet.md` 三篇的一手依据）。
