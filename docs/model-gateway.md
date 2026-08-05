@@ -10,14 +10,14 @@
 
 ```ts
 interface ModelProvider {
-  id: string;
+  id: string
   capabilities: {
-    toolCalling: boolean;   // 是否支持工具调用
-    streaming: boolean;    // 是否支持流式
-    structuredOutput: boolean; // 是否支持约束输出
-    vision: boolean;       // 是否支持图片输入
-  };
-  generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>;
+    toolCalling: boolean // 是否支持工具调用
+    streaming: boolean // 是否支持流式
+    structuredOutput: boolean // 是否支持约束输出
+    vision: boolean // 是否支持图片输入
+  }
+  generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>
 }
 ```
 
@@ -36,20 +36,21 @@ interface ModelProvider {
 - 这些字段喂给 [observability-evaluation.md](./observability-evaluation.md) 的成本指标与 [agent-loop.md §6.3](./agent-loop.md#_6-3-headless-事件流输出-claude-code-gemini-cli-实证) 的事件流输出，脚本可直接 `jq` 取数。
 
 **强弱模型分工（Aider 实证，出处：https://aider.chat/docs/git.html ）**：commit message 这类低风险文本生成交给低成本的 weak-model，主模型只做编码——路由策略里「低风险摘要用便宜模型」的落地案例。
+
 > 举个例子（示意）：主模型刚改完代码、跑通了测试，现在要写一句 git commit。这事不需要再花一次强模型的钱——交给便宜的小模型写「fix: 修复登录态过期判断」就够了。
 
 ### 1.2 两类后端的协议差异（wire-level mapping）
 
 统一接口之下，每个 Provider 真正要处理的是两类「同构不同形」的消息协议，网关必须把这些差异完全吃掉、不泄漏到业务层。以 Anthropic 与 OpenAI 兼容接口为例：
 
-| 维度 | Anthropic | OpenAI 兼容 |
-| --- | --- | --- |
-| 系统提示词 | 独立的 `system` 参数（可为带 `cache_control` 的 text block 数组） | 放在 `messages` 里一条 `role: "system"` |
-| 工具 schema 字段 | `input_schema` | `function.parameters`（外层包 `type: "function"`） |
-| 模型请求工具 | assistant 消息里的 `tool_use` content block | assistant 消息里的 `tool_calls`（含 `function.name/arguments`） |
-| 工具结果回灌 | 放在 `role: "user"` 消息里的 `tool_result` block，靠 `tool_use_id` 配对 | 独立的 `role: "tool"` 消息，靠 `tool_call_id` 配对 |
-| 结束原因 | `stop_reason` | `finish_reason` |
-| 用量 | `usage`（含 cache 分项） | `usage`（缓存命中在 `prompt_tokens_details.cached_tokens`） |
+| 维度             | Anthropic                                                               | OpenAI 兼容                                                     |
+| ---------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 系统提示词       | 独立的 `system` 参数（可为带 `cache_control` 的 text block 数组）       | 放在 `messages` 里一条 `role: "system"`                         |
+| 工具 schema 字段 | `input_schema`                                                          | `function.parameters`（外层包 `type: "function"`）              |
+| 模型请求工具     | assistant 消息里的 `tool_use` content block                             | assistant 消息里的 `tool_calls`（含 `function.name/arguments`） |
+| 工具结果回灌     | 放在 `role: "user"` 消息里的 `tool_result` block，靠 `tool_use_id` 配对 | 独立的 `role: "tool"` 消息，靠 `tool_call_id` 配对              |
+| 结束原因         | `stop_reason`                                                           | `finish_reason`                                                 |
+| 用量             | `usage`（含 cache 分项）                                                | `usage`（缓存命中在 `prompt_tokens_details.cached_tokens`）     |
 
 最容易踩坑的是**流式工具调用的分片累积**：OpenAI 接口里一个工具调用的 `function.arguments` 是**分片到达**的——`id` 与 `name` 只在第一个 chunk 出现，后续 chunk 只有 arguments 的增量片段；一次响应里多个工具调用的 chunk 会交错，需要用 `index` 字段各自累积，拼完整后才能 `JSON.parse`。Anthropic 侧则是 `content_block_start`（建 tool_use 块）→ 若干 `input_json_delta`（partial JSON）→ `content_block_stop`（该块 JSON 完整）。
 
@@ -89,13 +90,13 @@ flowchart LR
 
 不要只看厂商公开榜单选默认模型。用自己的真实仓库任务集测成功率、延迟、成本、修复轮数与副作用风险。下面是一组可用于校准的实测数字（2026 年口径）：
 
-| 场景 | 单任务成本（Sonnet 4.6 量级） |
-| --- | --- |
-| 单文件编辑 | ~\$0.031 |
-| Bug 排查 | ~\$0.089 |
-| PR 代码审查 | ~\$0.062 |
-| 多文件重构 | ~\$0.17 |
-| 端到端新功能 | ~\$0.53 |
+| 场景         | 单任务成本（Sonnet 4.6 量级） |
+| ------------ | ----------------------------- |
+| 单文件编辑   | ~\$0.031                      |
+| Bug 排查     | ~\$0.089                      |
+| PR 代码审查  | ~\$0.062                      |
+| 多文件重构   | ~\$0.17                       |
+| 端到端新功能 | ~\$0.53                       |
 
 几个结构性事实，比上面的单价更重要：
 
@@ -125,11 +126,13 @@ flowchart LR
 - Trace 记录实际使用的版本与模型配置；
 - Prompt 改动必须跑离线回归集；
 - 仓库规则与 Skill 内容作为不可信 / 低信任上下文单独添加，不拼进 system policy 取得同等信任。
+
 > 通俗地说：提示词不是写死在代码里的字符串，而是有版本号、有内容哈希的「制品」。改了哪版提示词、配哪个模型跑出来的结果，trace 里都能对上号；仓库里的 `AGENTS.md` 是用户提供的低信任内容，不能和系统级策略放在同一信任级别。
 
 ## 4. 结构化输出
 
 对计划、终止结论、风险分类与交付摘要用 Schema（Zod）约束；解析失败可有限重试或走安全失败路径。工具调用仍需执行端二次校验——JSON 合法不等于权限合法。
+
 > 举个例子（示意）：要求模型输出一个 JSON 计划，语法校验通过了，不代表它想做的事是被允许的——就像一份填得整整齐齐的申请表，格式对了，也还得人事部门再批一次权限。
 
 ## 5. 前缀缓存（Prompt Caching）
@@ -164,11 +167,11 @@ Anthropic 接口要求缓存点用 `cache_control` 标记，系统提示词里�
 
 ### 6.2 重试：只重试可恢复错误，退避要带抖动
 
-| 错误 | 是否重试 | 处理 |
-| --- | --- | --- |
-| `429`（限流）、`503` / `529`（过载）、`ECONNRESET`（连接重置） | 重试 | 指数退避 + **抖动**，上限约 30s，遵守 `Retry-After` |
-| `400`（参数错误）、`401`（鉴权失败）、`404`（模型不存在） | 不重试 | 直接失败，重试只会重复报错 |
-| 请求中断 / 超时 | 可重试一次（幂等的只读） | 非幂等写操作不自动重放，见 [tools-and-extensions.md §4](./tools-and-extensions.md#_4-重试与幂等) |
+| 错误                                                           | 是否重试                 | 处理                                                                                             |
+| -------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
+| `429`（限流）、`503` / `529`（过载）、`ECONNRESET`（连接重置） | 重试                     | 指数退避 + **抖动**，上限约 30s，遵守 `Retry-After`                                              |
+| `400`（参数错误）、`401`（鉴权失败）、`404`（模型不存在）      | 不重试                   | 直接失败，重试只会重复报错                                                                       |
+| 请求中断 / 超时                                                | 可重试一次（幂等的只读） | 非幂等写操作不自动重放，见 [tools-and-extensions.md §4](./tools-and-extensions.md#_4-重试与幂等) |
 
 抖动（jitter）不可省略：限流是所有客户端同时撞上的，若大家都用固定的「1s、2s、4s」退避，会在相同时刻再次同时发起请求、形成重试风暴；加随机抖动才能把请求散开。
 

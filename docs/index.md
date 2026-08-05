@@ -66,15 +66,15 @@ flowchart LR
 | [architecture.md](./architecture.md)                               | 总体分层架构、架构决策记录（ADR）、技术选型、monorepo 结构                                |
 | [agent-loop.md](./agent-loop.md)                                   | Agent Runtime：任务状态机、核心循环、停止/恢复/预算语义                                   |
 | [context-engineering.md](./context-engineering.md)                 | 代码库理解、分层检索、上下文装配与压缩、注入防护                                          |
-| [system-prompt.md](./system-prompt.md)                             | 系统提示词分层（静态/动态）、提示词写法、规则注入、缓存边界                                |
-| [tools-and-extensions.md](./tools-and-extensions.md)               | 工具契约、统一执行结果、延迟加载、并行执行、MCP、Skills、人工审批策略                      |
+| [system-prompt.md](./system-prompt.md)                             | 系统提示词分层（静态/动态）、提示词写法、规则注入、缓存边界                               |
+| [tools-and-extensions.md](./tools-and-extensions.md)               | 工具契约、统一执行结果、延迟加载、并行执行、MCP、Skills、人工审批策略                     |
 | [code-editing.md](./code-editing.md)                               | 文件读取与编辑策略、编辑安全校验、Worktree 隔离、用户变更保护、Diff 审核                  |
 | [verification-and-multiagent.md](./verification-and-multiagent.md) | 验证流水线、错误分类、Repair Loop、子 Agent 协作模式与隔离                                |
 | [autonomy.md](./autonomy.md)                                       | 自治与续跑：目标追达（/goal）、定时/自排程（/loop）、动作自动批准（Auto Mode）            |
-| [dynamic-workflows.md](./dynamic-workflows.md)                     | 动态工作流：确定性脚本编排、pipeline/parallel、结构化返回、三道上限、断点续跑              |
-| [agent-teams.md](./agent-teams.md)                                 | Agent 团队：对等组队、共享任务/记忆/产出、跨会话安全（用户权威不转移）                     |
-| [background-fleet.md](./background-fleet.md)                       | 后台舰队：脱终端常驻、daemon 监管、子 agent 后台化、commit/push/draft PR 收尾               |
-| [security.md](./security.md)                                       | 威胁模型、沙箱基线、权限判定引擎、命令执行层、密钥/网络、安全验收                          |
+| [dynamic-workflows.md](./dynamic-workflows.md)                     | 动态工作流：确定性脚本编排、pipeline/parallel、结构化返回、三道上限、断点续跑             |
+| [agent-teams.md](./agent-teams.md)                                 | Agent 团队：对等组队、共享任务/记忆/产出、跨会话安全（用户权威不转移）                    |
+| [background-fleet.md](./background-fleet.md)                       | 后台舰队：脱终端常驻、daemon 监管、子 agent 后台化、commit/push/draft PR 收尾             |
+| [security.md](./security.md)                                       | 威胁模型、沙箱基线、权限判定引擎、命令执行层、密钥/网络、安全验收                         |
 | [data-and-events.md](./data-and-events.md)                         | EventStream 事件模型、SQLite 持久化、检查点、一致性规则                                   |
 | [model-gateway.md](./model-gateway.md)                             | Provider 适配、模型路由、提示词版本管理、结构化输出                                       |
 | [observability-evaluation.md](./observability-evaluation.md)       | Trace/指标/日志/成本，以及评测体系与发布门禁                                              |
@@ -85,11 +85,11 @@ flowchart LR
 
 不用从头读到尾，按你的身份挑入口：
 
-| 你是谁             | 建议先读                                                                                        | 目的                                   |
-| ------------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------- |
-| 第一次来、只想快速了解 | [overview.md](./overview.md) → [research.md](./research.md) 前两节                              | 5 分钟知道它做什么、不做什么          |
-| 要参与开发         | [architecture.md](./architecture.md) → [agent-loop.md](./agent-loop.md) → [roadmap.md](./roadmap.md) | 先看分层与开发顺序，再钻细节专题       |
-| 想判断设计靠不靠谱 | [research.md](./research.md) → [security.md](./security.md) → [coding-agents.md](./coding-agents.md) | 看业界事实依据、安全边界与对标图鉴     |
+| 你是谁                 | 建议先读                                                                                             | 目的                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| 第一次来、只想快速了解 | [overview.md](./overview.md) → [research.md](./research.md) 前两节                                   | 5 分钟知道它做什么、不做什么       |
+| 要参与开发             | [architecture.md](./architecture.md) → [agent-loop.md](./agent-loop.md) → [roadmap.md](./roadmap.md) | 先看分层与开发顺序，再钻细节专题   |
+| 想判断设计靠不靠谱     | [research.md](./research.md) → [security.md](./security.md) → [coding-agents.md](./coding-agents.md) | 看业界事实依据、安全边界与对标图鉴 |
 
 下图是这份文档集的阅读主线（箭头表示「先读哪篇再读哪篇」）：
 

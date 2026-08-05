@@ -1,5 +1,5 @@
-import { defineConfig } from "vitepress";
-import { withMermaid } from "vitepress-plugin-mermaid";
+import { defineConfig } from "vitepress"
+import { withMermaid } from "vitepress-plugin-mermaid"
 
 export default withMermaid(
   defineConfig({
@@ -40,9 +40,7 @@ export default withMermaid(
         { text: "14 · 路线图", link: "/roadmap" },
         { text: "15 · 参考来源", link: "/references" },
       ],
-      socialLinks: [
-        { icon: "github", link: "https://github.com/OPQ741/mod-agent" },
-      ],
+      socialLinks: [{ icon: "github", link: "https://github.com/OPQ741/mod-agent" }],
     },
   }),
-);
+)

@@ -16,11 +16,11 @@
 
 ## 1. 脱终端：第三根轴
 
-| 轴 | 能力 | 解决什么 |
-| --- | --- | --- |
-| 时间轴 | `/loop` | 会话内部怎么跨时间续跑 |
-| 空间轴 | Workflow | 会话内部怎么并行铺开 |
-| 脱离轴 | `/bg` | 会话本身怎么脱离终端、关掉也活 |
+| 轴     | 能力     | 解决什么                       |
+| ------ | -------- | ------------------------------ |
+| 时间轴 | `/loop`  | 会话内部怎么跨时间续跑         |
+| 空间轴 | Workflow | 会话内部怎么并行铺开           |
+| 脱离轴 | `/bg`    | 会话本身怎么脱离终端、关掉也活 |
 
 字符串里把这层意思写得最反直觉的一句是：**「Sessions keep running if you close the terminal.」**——会话不再是终端的附属物。脱终端是「发射后改成异步照看」，不是「发射后不管」：会话继续跑，需要你的时候（比如一个只有你能拍板的问题）在表里亮个状态，你有空再回去。
 
@@ -36,11 +36,11 @@
 
 `claude agents` 是一个正经的 Commander 子命令（描述：「Manage background agents」），带一小组动作：
 
-| 命令 | 干什么 |
-| --- | --- |
-| `claude agents` | 列出所有后台会话，每行带**状态色**——扫一眼知道哪个在等你 |
-| `claude attach <id>` | 在当前终端把某一个打开接管 |
-| `claude logs <id>` | 翻它最近的输出 |
+| 命令                 | 干什么                                                   |
+| -------------------- | -------------------------------------------------------- |
+| `claude agents`      | 列出所有后台会话，每行带**状态色**——扫一眼知道哪个在等你 |
+| `claude attach <id>` | 在当前终端把某一个打开接管                               |
+| `claude logs <id>`   | 翻它最近的输出                                           |
 
 那张表的关键是**状态色**：把「哪个会话需要你介入」压缩成一列一眼扫过的信号，不必挨个 attach 进去看。列表里可直接**空格回一句、回车进去接管**。
 
@@ -71,15 +71,15 @@ flowchart TB
 
 ### 4.1 各子系统在干什么
 
-| 子系统 | 代表事件 | 推断职责 |
-| --- | --- | --- |
-| **总入口 / dispatch** | `bg_agent_action` / `bg_dispatch` / `bg_classify`；兜底 `_dispatch_rescued` / `_stale_drop` / `_sigkill_escalate` / `_low_mem` / `_fallback` | 派任务前先分类，派的路上有救回、丢弃、一路升级到 SIGKILL、低内存降级 |
-| **Daemon 生死** | `_daemon_install` / `_daemon_spawn_failed` / `_daemon_zombie_restart` / `_zombie_false_positive` / `_daemon_cold_start_ask`；平台分支 `_daemon_wmi_fallback`（Windows）、`_daemon_macos_aqua_wrap`（macOS） | 装服务、起不来报错、僵死重启、不误杀假僵死、冷启动先问 |
-| **Spare 预热池** | `_spare_spawn` / `_spare_claim` / `_spare_enable` / `_prewarm_per_sweep` | 任务还没来就先把几个进程热在那儿，任务一到直接认领，省掉冷启动几秒 |
-| **Worker 起落** | `_worker_spawn` / `_exit` / `_vanished` / `_stalled`；`_low_mem_mb` / `_retire_pinned_low_mem` | 生、正常退、莫名消失、卡住；内存紧张时退休不紧要的 worker |
-| **Respawn / Adopt / Orphan** | `_respawn` / `_respawn_unconfirmed_bail` / `_adopt` / `_adopt_token_lost_respawn` / `_orphan_reap` / `_roster_orphan_adopted` / `_roster_parse_failed` | 崩了重生（先确认真死防重复）、没主进程收养、孤儿回收、花名册登记 |
-| **Attach / Detach** | `_first_frame` / `_stall_respawn` / `_attach_kick` | 接管首帧、卡住重生、踢一脚 |
-| **Transport / PTY** | `_pty_unavailable` / `_pty_auth_mismatch` / `_proto_mismatch` / `_bridge_flush_truncated` | PTY 拿不到、认证不对、协议不匹配、桥接截断 |
+| 子系统                       | 代表事件                                                                                                                                                                                                    | 推断职责                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **总入口 / dispatch**        | `bg_agent_action` / `bg_dispatch` / `bg_classify`；兜底 `_dispatch_rescued` / `_stale_drop` / `_sigkill_escalate` / `_low_mem` / `_fallback`                                                                | 派任务前先分类，派的路上有救回、丢弃、一路升级到 SIGKILL、低内存降级 |
+| **Daemon 生死**              | `_daemon_install` / `_daemon_spawn_failed` / `_daemon_zombie_restart` / `_zombie_false_positive` / `_daemon_cold_start_ask`；平台分支 `_daemon_wmi_fallback`（Windows）、`_daemon_macos_aqua_wrap`（macOS） | 装服务、起不来报错、僵死重启、不误杀假僵死、冷启动先问               |
+| **Spare 预热池**             | `_spare_spawn` / `_spare_claim` / `_spare_enable` / `_prewarm_per_sweep`                                                                                                                                    | 任务还没来就先把几个进程热在那儿，任务一到直接认领，省掉冷启动几秒   |
+| **Worker 起落**              | `_worker_spawn` / `_exit` / `_vanished` / `_stalled`；`_low_mem_mb` / `_retire_pinned_low_mem`                                                                                                              | 生、正常退、莫名消失、卡住；内存紧张时退休不紧要的 worker            |
+| **Respawn / Adopt / Orphan** | `_respawn` / `_respawn_unconfirmed_bail` / `_adopt` / `_adopt_token_lost_respawn` / `_orphan_reap` / `_roster_orphan_adopted` / `_roster_parse_failed`                                                      | 崩了重生（先确认真死防重复）、没主进程收养、孤儿回收、花名册登记     |
+| **Attach / Detach**          | `_first_frame` / `_stall_respawn` / `_attach_kick`                                                                                                                                                          | 接管首帧、卡住重生、踢一脚                                           |
+| **Transport / PTY**          | `_pty_unavailable` / `_pty_auth_mismatch` / `_proto_mismatch` / `_bridge_flush_truncated`                                                                                                                   | PTY 拿不到、认证不对、协议不匹配、桥接截断                           |
 
 ### 4.2 一个 worker 的一生
 
@@ -176,15 +176,15 @@ stateDiagram-v2
 
 ## 9. 设计决策（ADR）
 
-| 决策 | 选择 | 理由 / 对立面 |
-| --- | --- | --- |
-| 后台会话怎么活 | 脱离终端进程组 + 独立状态 | 对立面：绑终端——关终端就没，长任务不成立 |
-| 监管器形态 | on-demand，闲了 idle-exit | 对立面：开机常驻——白吃内存；让位规则防多 daemon 打架 |
-| Worker 崩溃 | 先确认真死再 respawn | 对立面：立刻重生——网络抖动会起两份；`_unconfirmed_bail` 防重复 |
-| 没主进程 | adopt + orphan reap + roster 登记 | 对立面：放任变僵尸——上个 daemon 没退干净就丢进程 |
-| 会话内子 agent | 默认后台，task-notification 回来 | 对立面：同步阻塞——主会话干等；通知不伪装成用户消息；禁 sleep-poll |
-| 后台收尾 | commit + push 功能分支 + draft PR | 对立面：晾着等用户——脱终端就没闭环；硬禁主干/force-push/merge |
-| 总开关 | `CLAUDE_CODE_DISABLE_AGENT_VIEW` 整体关 | 组织要能统一禁止后台常驻进程 |
-| mod-agent 顺序 | 先会话内后台，再 /bg 脱离，daemon 监管最后 | 脱终端/跨平台最重；收尾不依赖 daemon，随后台一起做 |
+| 决策           | 选择                                       | 理由 / 对立面                                                     |
+| -------------- | ------------------------------------------ | ----------------------------------------------------------------- |
+| 后台会话怎么活 | 脱离终端进程组 + 独立状态                  | 对立面：绑终端——关终端就没，长任务不成立                          |
+| 监管器形态     | on-demand，闲了 idle-exit                  | 对立面：开机常驻——白吃内存；让位规则防多 daemon 打架              |
+| Worker 崩溃    | 先确认真死再 respawn                       | 对立面：立刻重生——网络抖动会起两份；`_unconfirmed_bail` 防重复    |
+| 没主进程       | adopt + orphan reap + roster 登记          | 对立面：放任变僵尸——上个 daemon 没退干净就丢进程                  |
+| 会话内子 agent | 默认后台，task-notification 回来           | 对立面：同步阻塞——主会话干等；通知不伪装成用户消息；禁 sleep-poll |
+| 后台收尾       | commit + push 功能分支 + draft PR          | 对立面：晾着等用户——脱终端就没闭环；硬禁主干/force-push/merge     |
+| 总开关         | `CLAUDE_CODE_DISABLE_AGENT_VIEW` 整体关    | 组织要能统一禁止后台常驻进程                                      |
+| mod-agent 顺序 | 先会话内后台，再 /bg 脱离，daemon 监管最后 | 脱终端/跨平台最重；收尾不依赖 daemon，随后台一起做                |
 
 > 后台舰队的本质不是「让 agent 在后台跑」，而是**当会话脱离了你的在场、甚至脱离了终端时，仍有一台东西替你盯着它的死活，并要求它在无人值守时自己把活收好**——会话可以脱离你，但**安全边界和交付闭环不能脱离**。

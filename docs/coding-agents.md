@@ -1034,7 +1034,7 @@ flowchart TD
 - **权限 · 审批 · 沙箱**：不适用（协议层）；但安全上需注意「只连接可信 MCP server，因为它可能在本地执行命令」（AutoGen README 同款警告）。
 - **值得借鉴的具体机制**：① tools/resources/prompts 三原语抽象；② host/server 解耦带来的生态复用；③ 已成为事实标准，几乎所有主流框架/IDE 都在接入。
 - **官方链接**：GitHub: https://github.com/modelcontextprotocol/modelcontextprotocol （由 modelcontextprotocol/specification 迁移）｜ 文档: https://modelcontextprotocol.io
-- **2026-10 更新（重要）**：
+- **2026-08 更新（重要）**：
   - **现行规范是 2026-07-28**，取代 2025-11-25，是自发布以来最大一次改版，**无状态内核**：废除 `initialize`/`initialized` 握手与 `Mcp-Session-Id` 头（SEP-2567/2575），每个请求在 `_meta` 自带协议版本与客户端能力，新增可选 `server/discover`。效果是 server 可跑在普通轮询负载均衡后，无需共享会话存储。
   - **头部路由**（SEP-2243）：必带 `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name`，网关不解析 body 就能路由与鉴权。
   - **MRTR（多往返请求，SEP-2322）**取代常开双向流的 sampling / elicitation / roots 请求。
@@ -1072,7 +1072,7 @@ flowchart TD
 - **权限 · 审批 · 沙箱**：不适用（协议层）；若在 AGENTS.md 里列了测试命令，agent 会尝试执行并修复失败。
 - **值得借鉴的具体机制**：① 「README for agents」极简约定，零学习成本；② 就近覆盖 + 嵌套文件解决 monorepo；③ 与各家 coding agent 工具解耦、跨工具通用。
 - **官方链接**：官网: https://agents.md ｜（主规范托管于 Linux 基金会 Agentic AI Foundation；本次未单独核实「View on GitHub」指向的具体仓库 slug，标注「未核实」）
-- **2026-10 补充**：采用项目已超 **6 万个**；**就近优先**（离被编辑文件最近的那份生效），**用户聊天里显式说的话优先级最高**；支持嵌套，OpenAI 主仓库在标准官网写作时已有 **88 个 AGENTS.md**（一包一个）。迁移做法：`mv AGENT.md AGENTS.md && ln -s AGENTS.md AGENT.md`。各工具接法示例——Aider 在 `.aider.conf.yml` 写 `read: AGENTS.md`；Gemini CLI 在 `.gemini/settings.json` 写 `{"context":{"fileName":"AGENTS.md"}}`。来源：https://agents.md ｜ https://agent-ready.dev/what-is-agents-md
+- **2026-08 补充**：采用项目已超 **6 万个**；**就近优先**（离被编辑文件最近的那份生效），**用户聊天里显式说的话优先级最高**；支持嵌套，OpenAI 主仓库在标准官网写作时已有 **88 个 AGENTS.md**（一包一个）。迁移做法：`mv AGENT.md AGENTS.md && ln -s AGENTS.md AGENT.md`。各工具接法示例——Aider 在 `.aider.conf.yml` 写 `read: AGENTS.md`；Gemini CLI 在 `.gemini/settings.json` 写 `{"context":{"fileName":"AGENTS.md"}}`。来源：https://agents.md ｜ https://agent-ready.dev/what-is-agents-md
 
 #### 4.19 Agent Skills（开放标准）
 
@@ -1098,22 +1098,22 @@ flowchart TD
 
 ### 5.0 机制 → 来源 → mod-agent 落点（映射总表）
 
-| 机制（可直接借鉴）                                | 最典型的来源                                                                                   | 对应 mod-agent 文档 / ADR                                                                                                            |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 项目记忆文件（CLAUDE.md / GEMINI.md / AGENTS.md） | Claude Code、Gemini CLI、OpenCode、AGENTS.md 标准                                              | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)–[§2](./context-engineering.md#_2-仓库启动扫描-repoprofile)、[data-and-events.md §4](./data-and-events.md#_4-长期记忆)                               |
-| 三档自主程度旋钮                                  | Codex CLI（suggest/auto-edit/full-auto）、OpenCode（plan/build）、Copilot（Plan/Agent/Ask）    | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[architecture.md](./architecture.md) ADR-8、[security.md §4](./security.md#_4-命令执行层) |
-| 每次改动落 Git，可回滚                            | Aider（每改自动 commit）、Cline/Roo/Kilo（checkpoint）、v0（自动分支永不碰 main）              | [code-editing.md §3](./code-editing.md#_3-工作区隔离与用户变更保护)、[data-and-events.md §2](./data-and-events.md#_2-持久化表-sqlite)                                               |
-| 沙箱与网络默认关闭                                | Codex/Gemini CLI、Devin（VM+域名过滤）、Copilot 云端（Actions 默认不跑）                       | [security.md §3](./security.md#_3-沙箱基线)                                                                                                      |
-| Repo Map + LSP 喂符号                             | Aider（repo map）、OpenCode/Crush/Qwen（LSP）、AutoCodeRover（AST）                            | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)、[§3](./context-engineering.md#_3-索引结构与刷新)、ADR-4                                                                     |
-| 分层定位而非开放式乱翻                            | Agentless（文件→类→函数三级）、Moatless（search loop）                                         | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)                                                                                |
-| 事件溯源（append-only）                           | OpenHands（EventStream）                                                                       | [data-and-events.md §1](./data-and-events.md#_1-eventstream-事件模型)、ADR-2                                                                                 |
-| 检查点持久化、断点续跑                            | LangGraph（checkpointer/durable execution）、Mastra（HITL storage）、Gemini（checkpointing）   | [agent-loop.md §5](./agent-loop.md#_5-停止与恢复语义)、ADR-5                                                                                           |
-| 子代理独立上下文、只回摘要                        | Claude Code（Task）、Roo（Boomerang）、Zed（Parallel Agents）、OpenAI Agents SDK（handoff）    | [verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略)、ADR-1                                                         |
-| 人在环上的审批点                                  | Copilot（Plan 只读）、Factory（默认只读）、Kilo（细粒度权限）、Google ADK（Tool Confirmation） | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[agent-loop.md §1](./agent-loop.md#_1-任务状态机)                                         |
-| Skills / Markdown 指令包                          | Claude Code、Gemini extensions、Goose recipes、Factory Custom Droids                           | [tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用)                                                                              |
-| 多 provider 网关 + 复用订阅                       | OpenAI Agents SDK（provider-agnostic）、Goose/Zed（ACP）、Mastra（40+ 路由）                   | [model-gateway.md](./model-gateway.md)、ADR-6                                                                                        |
-| headless / CI 模式                                | Gemini CLI（`-p --output-format json`）、Continue `cn -p`、Cline headless、`droid exec`        | [architecture.md](./architecture.md) ADR-7、[roadmap.md](./roadmap.md)                                                               |
-| 协议互操作                                        | MCP（接工具）、A2A（连 agent）、ACP（挂编辑器）、AGENTS.md（读规则）                           | [tools-and-extensions.md](./tools-and-extensions.md)、[architecture.md §4](./architecture.md#_4-技术选型)                                        |
+| 机制（可直接借鉴）                                | 最典型的来源                                                                                   | 对应 mod-agent 文档 / ADR                                                                                                                                                                       |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 项目记忆文件（CLAUDE.md / GEMINI.md / AGENTS.md） | Claude Code、Gemini CLI、OpenCode、AGENTS.md 标准                                              | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)–[§2](./context-engineering.md#_2-仓库启动扫描-repoprofile)、[data-and-events.md §4](./data-and-events.md#_4-长期记忆) |
+| 三档自主程度旋钮                                  | Codex CLI（suggest/auto-edit/full-auto）、OpenCode（plan/build）、Copilot（Plan/Agent/Ask）    | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[architecture.md](./architecture.md) ADR-8、[security.md §4](./security.md#_4-命令执行层)                              |
+| 每次改动落 Git，可回滚                            | Aider（每改自动 commit）、Cline/Roo/Kilo（checkpoint）、v0（自动分支永不碰 main）              | [code-editing.md §3](./code-editing.md#_3-工作区隔离与用户变更保护)、[data-and-events.md §2](./data-and-events.md#_2-持久化表-sqlite)                                                           |
+| 沙箱与网络默认关闭                                | Codex/Gemini CLI、Devin（VM+域名过滤）、Copilot 云端（Actions 默认不跑）                       | [security.md §3](./security.md#_3-沙箱基线)                                                                                                                                                     |
+| Repo Map + LSP 喂符号                             | Aider（repo map）、OpenCode/Crush/Qwen（LSP）、AutoCodeRover（AST）                            | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)、[§3](./context-engineering.md#_3-索引结构与刷新)、ADR-4                                                              |
+| 分层定位而非开放式乱翻                            | Agentless（文件→类→函数三级）、Moatless（search loop）                                         | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)                                                                                                                       |
+| 事件溯源（append-only）                           | OpenHands（EventStream）                                                                       | [data-and-events.md §1](./data-and-events.md#_1-eventstream-事件模型)、ADR-2                                                                                                                    |
+| 检查点持久化、断点续跑                            | LangGraph（checkpointer/durable execution）、Mastra（HITL storage）、Gemini（checkpointing）   | [agent-loop.md §5](./agent-loop.md#_5-停止与恢复语义)、ADR-5                                                                                                                                    |
+| 子代理独立上下文、只回摘要                        | Claude Code（Task）、Roo（Boomerang）、Zed（Parallel Agents）、OpenAI Agents SDK（handoff）    | [verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略)、ADR-1                                                                                                   |
+| 人在环上的审批点                                  | Copilot（Plan 只读）、Factory（默认只读）、Kilo（细粒度权限）、Google ADK（Tool Confirmation） | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[agent-loop.md §1](./agent-loop.md#_1-任务状态机)                                                                      |
+| Skills / Markdown 指令包                          | Claude Code、Gemini extensions、Goose recipes、Factory Custom Droids                           | [tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用)                                                                                                                |
+| 多 provider 网关 + 复用订阅                       | OpenAI Agents SDK（provider-agnostic）、Goose/Zed（ACP）、Mastra（40+ 路由）                   | [model-gateway.md](./model-gateway.md)、ADR-6                                                                                                                                                   |
+| headless / CI 模式                                | Gemini CLI（`-p --output-format json`）、Continue `cn -p`、Cline headless、`droid exec`        | [architecture.md](./architecture.md) ADR-7、[roadmap.md](./roadmap.md)                                                                                                                          |
+| 协议互操作                                        | MCP（接工具）、A2A（连 agent）、ACP（挂编辑器）、AGENTS.md（读规则）                           | [tools-and-extensions.md](./tools-and-extensions.md)、[architecture.md §4](./architecture.md#_4-技术选型)                                                                                       |
 
 ### 5.1 自主程度：把「信任」做成显式三档旋钮，而不是写死
 
@@ -1217,7 +1217,7 @@ Gemini CLI 的 `gemini -p "..." --output-format json/stream-json`、Continue 的
 
 > **对 mod-agent**：这是 [references.md](./references.md) 的维护纪律，也是 [roadmap.md](./roadmap.md) 选型阶段的检查项：每个依赖记录「许可证 / 最近提交 / 归档状态 / 替代方案」，锁文件固定版本（[architecture.md §5](./architecture.md#_5-建议代码仓库结构)已要求 SDK 版本锁死与契约测试）。
 
-### 5.13 2026-10 追加：两条推翻旧认知的实证
+### 5.13 2026-08 追加：两条推翻旧认知的实证
 
 图鉴主体于 2026-08 定稿，之后出现了两条**足以改变设计取舍**的新证据，单独记在这里。
 
@@ -1233,4 +1233,4 @@ Gemini CLI 的 `gemini -p "..." --output-format json/stream-json`、Continue 的
 
 ---
 
-> 本图鉴的所有项目链接与许可证均于 2026-08 逐个打开核对；star 数为核对日的动态约数，仅作量级参考。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。**[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-2026-10-追加-两条推翻旧认知的实证) 的内容为 2026-10 追加或更新。**
+> 本图鉴的所有项目链接与许可证均于 2026-08 逐个打开核对；star 数为核对日的动态约数，仅作量级参考。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。**[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-2026-08-追加-两条推翻旧认知的实证) 的内容为 2026-08 追加或更新。**

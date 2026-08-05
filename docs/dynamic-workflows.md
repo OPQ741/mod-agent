@@ -16,13 +16,13 @@ Dynamic Workflows 的解法是换一个协调器：**把那个「当协调器的
 
 先把两种编排的边界划清楚：
 
-| 维度 | 模型驱动编排（Subagent / Coordinator / Swarm） | 脚本驱动编排（Dynamic Workflows） |
-| --- | --- | --- |
-| fan-out 决策 | 模型每轮推理临场决定 | 脚本控制流写死 |
-| 并发 / 预算约束 | 提示词叮嘱，可能不遵守 | 运行时硬强制 |
-| 可复现性 | 同一输入两次跑可能不同 | 脚本确定性执行，可重放 |
-| 适用规模 | 几个到十几个子 agent | 几十到几百个 |
-| 灵活性 | 高，可边干边调整 | 分支固定，需先写脚本 |
+| 维度            | 模型驱动编排（Subagent / Coordinator / Swarm） | 脚本驱动编排（Dynamic Workflows） |
+| --------------- | ---------------------------------------------- | --------------------------------- |
+| fan-out 决策    | 模型每轮推理临场决定                           | 脚本控制流写死                    |
+| 并发 / 预算约束 | 提示词叮嘱，可能不遵守                         | 运行时硬强制                      |
+| 可复现性        | 同一输入两次跑可能不同                         | 脚本确定性执行，可重放            |
+| 适用规模        | 几个到十几个子 agent                           | 几十到几百个                      |
+| 灵活性          | 高，可边干边调整                               | 分支固定，需先写脚本              |
 
 关键判断：**Workflow 不是另一套多 Agent 底座，而是复用已有的子 agent 原语**。一个子 agent 怎么派生、异步任务怎么用 `<task-notification>` 通知回来、并行写文件怎么用 worktree 隔离——这些原封不动复用 [verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略) 的实现；Workflow 只在上面加了一层「确定性脚本 + 并发/预算/续跑」的壳。
 
@@ -32,23 +32,23 @@ Workflow 工具让主模型**现写一段 JS 脚本**，交给运行时确定性
 
 ```javascript
 export const meta = {
-  name: 'review-changes',
-  description: 'Review changed files across dimensions, verify each finding',
-  phases: [{ title: 'Review' }, { title: 'Verify' }],
+  name: "review-changes",
+  description: "Review changed files across dimensions, verify each finding",
+  phases: [{ title: "Review" }, { title: "Verify" }],
 }
 ```
 
 `meta` 之后是脚本体，用一组内置 hook 编排：
 
-| Hook | 职责 |
-| --- | --- |
-| `agent(prompt, opts?)` | 派生一个子 agent，返回它的结果；不带 schema 返回终文本，带 schema 返回校验过的对象 |
-| `pipeline(items, stage1, stage2, …)` | 让每个 item 独立穿过一串 stage，stage 之间无 barrier |
-| `parallel(thunks)` | 并发跑一批任务，**等全部完成**才返回（barrier） |
-| `phase(title)` | 把后续 `agent()` 归入某个 phase（面板分组与进度） |
-| `log(msg)` | 往 `/workflows` 面板打一条进度消息 |
-| `budget` | 查 token 预算：`budget.total` / `budget.spent()` / `budget.remaining()` |
-| `workflow(nameOrRef, args?)` | 内联跑另一个 workflow（存好的或脚本路径）；子 workflow 共享本 run 的并发上限、agent 计数、中止信号和预算，**只准嵌套一层** |
+| Hook                                 | 职责                                                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `agent(prompt, opts?)`               | 派生一个子 agent，返回它的结果；不带 schema 返回终文本，带 schema 返回校验过的对象                                         |
+| `pipeline(items, stage1, stage2, …)` | 让每个 item 独立穿过一串 stage，stage 之间无 barrier                                                                       |
+| `parallel(thunks)`                   | 并发跑一批任务，**等全部完成**才返回（barrier）                                                                            |
+| `phase(title)`                       | 把后续 `agent()` 归入某个 phase（面板分组与进度）                                                                          |
+| `log(msg)`                           | 往 `/workflows` 面板打一条进度消息                                                                                         |
+| `budget`                             | 查 token 预算：`budget.total` / `budget.spent()` / `budget.remaining()`                                                    |
+| `workflow(nameOrRef, args?)`         | 内联跑另一个 workflow（存好的或脚本路径）；子 workflow 共享本 run 的并发上限、agent 计数、中止信号和预算，**只准嵌套一层** |
 
 `agent()` 的 `opts` 能指定：`label`、`phase`、`model`、`effort`（推理强度）、`isolation: 'worktree'`（独立工作区）、`agentType`（走 Agent 工具同一个注册表）、`schema`（结构化返回）。
 
@@ -64,10 +64,16 @@ export const meta = {
 ```javascript
 const results = await pipeline(
   DIMENSIONS,
-  d => agent(d.prompt, { phase: 'Review', schema: FINDINGS }),
-  review => parallel(review.findings.map(f => () =>
-    agent(`Adversarially verify: ${f.title}`, { phase: 'Verify', schema: VERDICT })
-      .then(v => ({ ...f, verdict: v })))),
+  (d) => agent(d.prompt, { phase: "Review", schema: FINDINGS }),
+  (review) =>
+    parallel(
+      review.findings.map(
+        (f) => () =>
+          agent(`Adversarially verify: ${f.title}`, { phase: "Verify", schema: VERDICT }).then(
+            (v) => ({ ...f, verdict: v }),
+          ),
+      ),
+    ),
 )
 ```
 
@@ -108,11 +114,11 @@ flowchart LR
 
 **算一笔时间账，差别就很具体了（示意）**：3 个 item，每个要走 3 个 stage，各 stage 耗时如下。
 
-| item | stage1 | stage2 | stage3 |
-| --- | --- | --- | --- |
-| A | 1 min | 1 min | 1 min |
-| B | **3 min** | 1 min | 1 min |
-| C | 1 min | 1 min | 1 min |
+| item | stage1    | stage2 | stage3 |
+| ---- | --------- | ------ | ------ |
+| A    | 1 min     | 1 min  | 1 min  |
+| B    | **3 min** | 1 min  | 1 min  |
+| C    | 1 min     | 1 min  | 1 min  |
 
 - **用 barrier（parallel）**：stage1 要等最慢的 B（3 min），stage2 再等全员（1 min），stage3 再等（1 min）→ **总计 5 min**。A 和 C 在 stage1 结束后干等了 2 分钟。
 - **用 pipeline**：A 走完自己的链 3 min，C 也是 3 min，B 是 5 min，各自独立 → **总耗时 ≈ 最慢那条链 = 5 min**。
@@ -144,11 +150,11 @@ flowchart LR
 
 一段脚本能铺开几百个 agent，就必须有护栏——否则一个写错的循环能把机器和账单一起拖垮。运行时压了三道硬上限：
 
-| 上限 | 值 | 含义 |
-| --- | --- | --- |
-| **并发** | `min(16, CPU 核数 - 2)` | 同时在跑的 `agent()` 调用夹在此值，超出的排队，腾出槽位再跑 |
-| **单次** | `4096` 个 item | 一次 `parallel()` / `pipeline()` 最多收 4096 个 item，再多直接报错（不是静默截断） |
-| **总数** | `1000` 个 agent | 一个 workflow 整个生命周期最多派 1000 个 agent；这是「防失控循环」的兜底，设得远高于任何真实 workflow |
+| 上限     | 值                      | 含义                                                                                                  |
+| -------- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| **并发** | `min(16, CPU 核数 - 2)` | 同时在跑的 `agent()` 调用夹在此值，超出的排队，腾出槽位再跑                                           |
+| **单次** | `4096` 个 item          | 一次 `parallel()` / `pipeline()` 最多收 4096 个 item，再多直接报错（不是静默截断）                    |
+| **总数** | `1000` 个 agent         | 一个 workflow 整个生命周期最多派 1000 个 agent；这是「防失控循环」的兜底，设得远高于任何真实 workflow |
 
 第四道不是上限而是**预算**。如果给这轮任务下过 token 目标（`+500k` 式指令），`budget` 就把它变成硬天花板：`budget.total` 是目标、`budget.spent()` 是已花、`budget.remaining()` 是剩余；花到顶再调 `agent()` 就抛错。这让脚本能按预算动态决定深度：
 
@@ -188,13 +194,13 @@ while (budget.total && budget.remaining() > 50_000) {
 
 Workflow 真正有意思的地方，不只是「并行快」，而是它把一套**追求可信度的编排范式**写进工具描述，鼓励模型照着搭：
 
-| 范式 | 做法 | 防什么 |
-| --- | --- | --- |
-| **对抗式复核** | 每条发现另派 N 个独立怀疑者，各自被要求去**反驳**它；多数反驳成立就剔除 | 「看着有道理其实站不住」的发现混过去 |
-| **视角分散的复核** | 一条发现能从多个角度出问题时，给每个复核者一个不同镜头（正确性/安全/性能/可复现），而不是派 N 个一样的 | 单一视角的盲区 |
-| **Judge panel** | 从不同切入点独立生成 N 个方案，并行打分，从赢家里综合、再嫁接亚军的好点子 | 单方案次优 |
-| **Loop-until-dry** | 对不知道有多少的发现（bug、边角情况），一直派 finder，直到连续 K 轮没有新东西才停 | 「跑 N 轮」漏掉长尾 |
-| **Completeness critic** | 最后派一个 agent 专门问「还缺什么——哪种搜法没跑、哪条断言没验、哪份材料没读」 | 收尾遗漏 |
+| 范式                    | 做法                                                                                                   | 防什么                               |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| **对抗式复核**          | 每条发现另派 N 个独立怀疑者，各自被要求去**反驳**它；多数反驳成立就剔除                                | 「看着有道理其实站不住」的发现混过去 |
+| **视角分散的复核**      | 一条发现能从多个角度出问题时，给每个复核者一个不同镜头（正确性/安全/性能/可复现），而不是派 N 个一样的 | 单一视角的盲区                       |
+| **Judge panel**         | 从不同切入点独立生成 N 个方案，并行打分，从赢家里综合、再嫁接亚军的好点子                              | 单方案次优                           |
+| **Loop-until-dry**      | 对不知道有多少的发现（bug、边角情况），一直派 finder，直到连续 K 轮没有新东西才停                      | 「跑 N 轮」漏掉长尾                  |
+| **Completeness critic** | 最后派一个 agent 专门问「还缺什么——哪种搜法没跑、哪条断言没验、哪份材料没读」                          | 收尾遗漏                             |
 
 这些范式合起来是一个朴素主张：**多个 agent 的价值不在于快，而在于用结构化的冗余，把「单个 agent 容易疏漏」这件事系统地纠回来**。
 
@@ -246,14 +252,14 @@ mod-agent 不必一上来就实现全套。最小可用版本砍到：
 
 ## 10. 设计决策（ADR）
 
-| 决策 | 选择 | 理由 / 对立面 |
-| --- | --- | --- |
-| 编排决策谁来做 | 确定性 JS 脚本，而非模型临场 | 模型驱动不可复现、并发预算靠叮嘱不可靠；对立面：继续用协调器模型——规模一大就慢且漏 |
-| 默认并发原语 | pipeline（无 barrier） | pipeline 墙钟≈最慢单项链；barrier 浪费快任务空闲；只有需要全量结果才用 parallel |
-| 失败处理 | 隔离成 null/跳过 item，不带崩整批 | 对立面：一个失败整批中止——大规模运行太脆弱 |
-| 阶段间数据 | StructuredOutput + schema 校验 | 对立面：纯文本 + 正则解析——脆弱；校验放工具层，形状不对重试 |
-| 并行写隔离 | 按需 worktree，只在冲突时开 | 对立面：每个 agent 都开——贵且费磁盘 |
-| 断点续跑 | journal 内容哈希前缀命中 | 对立面：中断重跑——大运行太贵；禁不确定性 API 保证可重放 |
-| mod-agent 实现时机 | Phase 6，最小版只做 3 个 hook + 1 道并发 | 前置底座（子 agent/worktree/后台/预算）未就绪前不做 |
+| 决策               | 选择                                     | 理由 / 对立面                                                                      |
+| ------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| 编排决策谁来做     | 确定性 JS 脚本，而非模型临场             | 模型驱动不可复现、并发预算靠叮嘱不可靠；对立面：继续用协调器模型——规模一大就慢且漏 |
+| 默认并发原语       | pipeline（无 barrier）                   | pipeline 墙钟≈最慢单项链；barrier 浪费快任务空闲；只有需要全量结果才用 parallel    |
+| 失败处理           | 隔离成 null/跳过 item，不带崩整批        | 对立面：一个失败整批中止——大规模运行太脆弱                                         |
+| 阶段间数据         | StructuredOutput + schema 校验           | 对立面：纯文本 + 正则解析——脆弱；校验放工具层，形状不对重试                        |
+| 并行写隔离         | 按需 worktree，只在冲突时开              | 对立面：每个 agent 都开——贵且费磁盘                                                |
+| 断点续跑           | journal 内容哈希前缀命中                 | 对立面：中断重跑——大运行太贵；禁不确定性 API 保证可重放                            |
+| mod-agent 实现时机 | Phase 6，最小版只做 3 个 hook + 1 道并发 | 前置底座（子 agent/worktree/后台/预算）未就绪前不做                                |
 
 > Dynamic Workflow 的本质不是「让 agent 更多」，而是**把编排这件事从「模型的临场判断」变成「确定性脚本 + 运行时强制的可靠性约束」**。模型负责在脚本里写清楚「要什么」，运行时负责并发、预算、隔离、续跑这些它必须做到、而模型可能忘掉的事。

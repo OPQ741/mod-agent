@@ -2,13 +2,23 @@
   "name": "mod-agent",
   "version": "1.0.0",
   "description": "TypeScript 实现的 AI Coding Agent CLI",
+  "type": "module",
   "main": "index.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
     "docs": "vitepress dev docs --open",
-    "docs:build": "vitepress build docs"
+    "docs:build": "vitepress build docs",
+    "lint": "npm run lint:eslint && npm run lint:md && npm run lint:links && npm run format:check",
+    "lint:eslint": "eslint .",
+    "lint:md": "markdownlint-cli2 \"**/*.md\"",
+    "lint:links": "node scripts/verify-doc-links.mjs",
+    "lint:fix": "eslint . --fix && markdownlint-cli2 --fix \"**/*.md\" && prettier . --write",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
   },
   "keywords": [
     "ai",
@@ -19,6 +29,18 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "markdownlint-cli2": "^0.23.3",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.71.2",
     "vitepress": "^1.6.4",
     "vitepress-plugin-mermaid": "^2.0.17"
   }

@@ -36,6 +36,10 @@ Desktop.ini
 # 临时的研究产物
 .research/
 
+# 临时文件
+temp/
+tmp/
+
 # VitePress 缓存与构建产物
 docs/.vitepress/cache/
 docs/.vitepress/dist/

@@ -39,21 +39,21 @@ Playwright 优先用可等待的 locator assertion，不靠固定 sleep 判断�
 
 ```ts
 interface ValidationReport {
-  status: "passed" | "failed" | "partial" | "not_run";
+  status: "passed" | "failed" | "partial" | "not_run"
   checks: Array<{
-    id: string;
-    command: string[];
-    status: "passed" | "failed" | "skipped" | "blocked";
-    exitCode?: number;
-    durationMs?: number;
-    summary: string;
-    artifactUri?: string;
-  }>;
+    id: string
+    command: string[]
+    status: "passed" | "failed" | "skipped" | "blocked"
+    exitCode?: number
+    durationMs?: number
+    summary: string
+    artifactUri?: string
+  }>
   acceptance: Array<{
-    criterionId: string;
-    status: "verified" | "not_verified" | "failed";
-    evidence?: string[];
-  }>;
+    criterionId: string
+    status: "verified" | "not_verified" | "failed"
+    evidence?: string[]
+  }>
 }
 ```
 
@@ -120,11 +120,11 @@ flowchart TD
 
 真实 Claude Code 的多 Agent 不是一种形态，而是三种编排模式，区别在「谁来调度、成员能否互发」：
 
-| 模式 | 结构 | 谁来调度 | 成员通信 | mod-agent 对应 |
-| --- | --- | --- | --- | --- |
-| **Subagent（子代理）** | 主 Agent 派独立上下文的子 Agent，干完回传结果 | 主 Agent 在推理里临场派 | 子 Agent 是叶子，彼此不通气 | [§5.4](#_5-4-交接与隔离)–[§5.6](#_5-6-业界实证-子代理与并行的强制机制)（首期做这个） |
-| **Coordinator（协调器）** | 主 Agent 变成**纯协调器**，自己不执行、只分派 worker 并汇总 | 主 Agent 只编排不干活 | worker 只对协调器回传 | 大规模拆分时（见 [dynamic-workflows.md](./dynamic-workflows.md)） |
-| **Swarm（蜂群）** | 一组对等 Agent，通过共享终端（tmux/iTerm2）**点对点**协作 | 无单一中心，Agent 互相直连 | 成员之间可直接互发 | 演化为 [agent-teams.md](./agent-teams.md) |
+| 模式                      | 结构                                                        | 谁来调度                   | 成员通信                    | mod-agent 对应                                                                       |
+| ------------------------- | ----------------------------------------------------------- | -------------------------- | --------------------------- | ------------------------------------------------------------------------------------ |
+| **Subagent（子代理）**    | 主 Agent 派独立上下文的子 Agent，干完回传结果               | 主 Agent 在推理里临场派    | 子 Agent 是叶子，彼此不通气 | [§5.4](#_5-4-交接与隔离)–[§5.6](#_5-6-业界实证-子代理与并行的强制机制)（首期做这个） |
+| **Coordinator（协调器）** | 主 Agent 变成**纯协调器**，自己不执行、只分派 worker 并汇总 | 主 Agent 只编排不干活      | worker 只对协调器回传       | 大规模拆分时（见 [dynamic-workflows.md](./dynamic-workflows.md)）                    |
+| **Swarm（蜂群）**         | 一组对等 Agent，通过共享终端（tmux/iTerm2）**点对点**协作   | 无单一中心，Agent 互相直连 | 成员之间可直接互发          | 演化为 [agent-teams.md](./agent-teams.md)                                            |
 
 三个判断：
 
@@ -170,9 +170,9 @@ flowchart TD
 
 ```ts
 new Agent({
-  tools: customTools,          // 收窄后的工具集（见下方四层过滤）
-  customSystemPrompt,          // 角色定义（explore / plan / 自定义 .agents/*.md）
-  isSubAgent: true,            // 打开「子代理行为」开关
+  tools: customTools, // 收窄后的工具集（见下方四层过滤）
+  customSystemPrompt, // 角色定义（explore / plan / 自定义 .agents/*.md）
+  isSubAgent: true, // 打开「子代理行为」开关
 })
 ```
 
@@ -261,8 +261,8 @@ Anthropic 从另一侧给了同样的边界：多数编码任务里真正可并�
 
 **上多 Agent 之前的三个必答问题**（任一答不出，就不是多 agent，而是把一处模糊并行化了）：
 
-| # | 问题 | 答不上来的后果 |
-| --- | --- | --- |
-| 1 | 能否把这个角色的 brief 写得足够精确，使其产出**无需重放整段对话**就能被检验？ | 你没有「角色」，只有一团并行化的模糊 |
-| 2 | **谁写？** 是否保持写单线程且显式？ | 隐式决策冲突，产出拼不起来 |
-| 3 | **什么叫完成？** 能否写成非人也能检查的形式？ | 这不是一个可自主的步骤，只是看着像 |
+| #   | 问题                                                                          | 答不上来的后果                       |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------ |
+| 1   | 能否把这个角色的 brief 写得足够精确，使其产出**无需重放整段对话**就能被检验？ | 你没有「角色」，只有一团并行化的模糊 |
+| 2   | **谁写？** 是否保持写单线程且显式？                                           | 隐式决策冲突，产出拼不起来           |
+| 3   | **什么叫完成？** 能否写成非人也能检查的形式？                                 | 这不是一个可自主的步骤，只是看着像   |

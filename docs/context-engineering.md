@@ -23,11 +23,11 @@ SWE-agent 明确把「agent 怎么操作计算机」当成一等设计对象：*
 - 每一个工具 / 命令都不是「把系统能力直接暴露给模型」，而应像设计 prompt 一样设计：返回什么、默认裁多少、出错时说什么；
 - **输出裁剪是 ACI 的核心手段**（SWE-agent 实证，出处同上）：
 
-| 工具行为 | SWE-agent 的裁剪决策 | mod-agent 落点 |
-| --- | --- | --- |
-| 查看文件 | 每轮只渲染 100 行，配上下翻页 / 文件内搜索命令 | 文件读取默认分页，不一次性整文件入上下文 |
+| 工具行为 | SWE-agent 的裁剪决策                                                       | mod-agent 落点                              |
+| -------- | -------------------------------------------------------------------------- | ------------------------------------------- |
+| 查看文件 | 每轮只渲染 100 行，配上下翻页 / 文件内搜索命令                             | 文件读取默认分页，不一次性整文件入上下文    |
 | 全局搜索 | 只列出「有命中的文件名」，不带匹配行（展示更多匹配上下文反而让模型更困惑） | grep / 搜索工具默认先给文件清单，细节二次取 |
-| 空输出 | 固定返回 "Your command ran successfully and did not produce any output." | 空结果也要给确定性文案，避免模型误判 |
+| 空输出   | 固定返回 "Your command ran successfully and did not produce any output."   | 空结果也要给确定性文案，避免模型误判        |
 
 ## 2. 仓库启动扫描（RepoProfile）
 
@@ -35,17 +35,17 @@ SWE-agent 明确把「agent 怎么操作计算机」当成一等设计对象：*
 
 ```ts
 interface RepoProfile {
-  repoId: string;
-  rootPath: string;
-  git: { branch: string; baseCommit: string; dirty: boolean };
-  languages: string[];
-  packageManagers: string[];
-  frameworks: string[];
-  monorepo: boolean;
-  packages: Array<{ name: string; path: string; scripts: Record<string, string> }>;
-  checks: Array<{ id: string; command: string[]; confidence: number }>;
-  ruleFiles: Array<{ path: string; sha256: string }>;
-  indexVersion: string;
+  repoId: string
+  rootPath: string
+  git: { branch: string; baseCommit: string; dirty: boolean }
+  languages: string[]
+  packageManagers: string[]
+  frameworks: string[]
+  monorepo: boolean
+  packages: Array<{ name: string; path: string; scripts: Record<string, string> }>
+  checks: Array<{ id: string; command: string[]; confidence: number }>
+  ruleFiles: Array<{ path: string; sha256: string }>
+  indexVersion: string
 }
 ```
 
@@ -55,12 +55,12 @@ interface RepoProfile {
 
 业界（Claude Code / AGENTS.md 标准 / Cursor）已收敛出一致的加载语义，mod-agent 直接对齐：
 
-| 优先级 | 位置 | 作用 |
-| --- | --- | --- |
-| 最高 | 用户当场聊天指令 | 显式覆盖一切规则 |
-| ↑ | 被编辑文件最近的 AGENTS.md | 子目录就近规则 |
-| ↑ | 逐级向上的父目录 AGENTS.md | monorepo 子包各自放规则 |
-| 最低（最后读） | 根目录 AGENTS.md / CLAUDE.md | 全局约定 |
+| 优先级         | 位置                         | 作用                    |
+| -------------- | ---------------------------- | ----------------------- |
+| 最高           | 用户当场聊天指令             | 显式覆盖一切规则        |
+| ↑              | 被编辑文件最近的 AGENTS.md   | 子目录就近规则          |
+| ↑              | 逐级向上的父目录 AGENTS.md   | monorepo 子包各自放规则 |
+| 最低（最后读） | 根目录 AGENTS.md / CLAUDE.md | 全局约定                |
 
 关键语义（出处：https://code.claude.com/docs/en/memory 、https://agents.md 、https://cursor.com/docs/rules ）：
 
@@ -114,12 +114,12 @@ MVP 先做不依赖向量库的轻量索引：
 
 ```ts
 interface ContextBudget {
-  systemPromptAndTools: number;   // ~5k
-  taskDefinition: number;         // ~2k
-  recentHistory: number;          // ~10k
-  retrievedCode: number;           // ~80k（大头）
-  workingMemory: number;          // ~20k
-  responseBuffer: number;        // ~11k
+  systemPromptAndTools: number // ~5k
+  taskDefinition: number // ~2k
+  recentHistory: number // ~10k
+  retrievedCode: number // ~80k（大头）
+  workingMemory: number // ~20k
+  responseBuffer: number // ~11k
 }
 ```
 
@@ -189,24 +189,24 @@ graph TD
     style A5 fill:#7c5cfc,color:#fff
 ```
 
-| 层 | 名称 | 做什么 | 成本 / 时机 |
-| --- | --- | --- | --- |
-| 0 | 执行时截断 | 单次结果超硬上限（如 50K 字符）时**保留头尾**、截掉中间 | 零成本，工具返回时 |
-| 0.5 | 大结果持久化 | 超阈值（如 30KB）的完整结果**写磁盘**，上下文只留「路径 + 短预览」，模型可用 read 取回 | 零成本、**信息不丢** |
-| 1 | Budget 预算裁剪 | 利用率到 50%/70% 时，把历史工具结果分别收紧到 30K/15K 字符（保头尾） | 零成本，每次 API 调用前 |
-| 2 | Snip 去重 | 同一文件多次读取只留最新一次；旧搜索结果清空；保留最近 N 个结果 | 零成本，每次 API 调用前 |
-| 3 | Microcompact | 空闲超过约 5 分钟、缓存已冷时，除最近 N 个外的旧工具结果统一清成占位符 | 零成本，缓存冷后 |
-| 4 | Collapse 折叠 | 投影式折叠：**不改原始消息**，只构造一个过滤后的视图（类比数据库 View） | 零成本 |
-| 5 | Auto-compact | 利用率超约 85% 时，让模型把旧历史总结成摘要替换 | 消耗 1 次额外模型调用，turn 边界 |
+| 层  | 名称            | 做什么                                                                                 | 成本 / 时机                      |
+| --- | --------------- | -------------------------------------------------------------------------------------- | -------------------------------- |
+| 0   | 执行时截断      | 单次结果超硬上限（如 50K 字符）时**保留头尾**、截掉中间                                | 零成本，工具返回时               |
+| 0.5 | 大结果持久化    | 超阈值（如 30KB）的完整结果**写磁盘**，上下文只留「路径 + 短预览」，模型可用 read 取回 | 零成本、**信息不丢**             |
+| 1   | Budget 预算裁剪 | 利用率到 50%/70% 时，把历史工具结果分别收紧到 30K/15K 字符（保头尾）                   | 零成本，每次 API 调用前          |
+| 2   | Snip 去重       | 同一文件多次读取只留最新一次；旧搜索结果清空；保留最近 N 个结果                        | 零成本，每次 API 调用前          |
+| 3   | Microcompact    | 空闲超过约 5 分钟、缓存已冷时，除最近 N 个外的旧工具结果统一清成占位符                 | 零成本，缓存冷后                 |
+| 4   | Collapse 折叠   | 投影式折叠：**不改原始消息**，只构造一个过滤后的视图（类比数据库 View）                | 零成本                           |
+| 5   | Auto-compact    | 利用率超约 85% 时，让模型把旧历史总结成摘要替换                                        | 消耗 1 次额外模型调用，turn 边界 |
 
 **为什么是这个顺序——按「删错了有多痛」排序**：
 
-| 策略 | 删掉什么 | 风险 | 何时用 |
-| --- | --- | --- | --- |
-| 工具结果清理 | 已经用完的工具输出 | **低**（不碰推理链） | 持续地、尽早地 |
-| 锚定式摘要 | 叙述，但保留目标 / 硬约束 / 当前计划原文 | 低于普通压缩 | 状态必须存活时 |
-| 普通压缩 / 摘要 | 较早的对话叙述 | **中**（可能丢事实） | 逼近窗口上限时 |
-| 按时间裁剪最老轮次 | 最老的若干轮，不看内容 | **高**（对重要性视而不见） | 万不得已 |
+| 策略               | 删掉什么                                 | 风险                       | 何时用         |
+| ------------------ | ---------------------------------------- | -------------------------- | -------------- |
+| 工具结果清理       | 已经用完的工具输出                       | **低**（不碰推理链）       | 持续地、尽早地 |
+| 锚定式摘要         | 叙述，但保留目标 / 硬约束 / 当前计划原文 | 低于普通压缩               | 状态必须存活时 |
+| 普通压缩 / 摘要    | 较早的对话叙述                           | **中**（可能丢事实）       | 逼近窗口上限时 |
+| 按时间裁剪最老轮次 | 最老的若干轮，不看内容                   | **高**（对重要性视而不见） | 万不得已       |
 
 四种不是互斥的，正确用法是**叠加**：激进地清工具结果、周期性地压叙述、**永不压缩被锚定的那几项**。
 
@@ -227,14 +227,14 @@ graph TD
 
 **真实 Claude Code 数值对照（v2.1.88 快照，供 mod-agent 校准常量）：**
 
-| 常量 | 值 | 说明 |
-| --- | --- | --- |
-| Autocompact 触发点 | 约 **92% 有效窗口**（= 原始窗口约 **83%**） | 有效窗口 = 原始窗口 − 预留输出；触发点比直觉更早，给压缩后的续跑留余量 |
-| `AUTOCOMPACT_BUFFER_TOKENS` | 13,000 | 触发点与硬上限之间的缓冲 |
-| 工具结果硬上限 | **100,000 tokens** | 超过即截断（`MAX_TOOL_RESULT_TOKENS`） |
-| 超长文件截断 | 扫描 **2000 行**，保留 **250 行窗口** | 超 2000 行的文件按头尾 + 250 行窗口保留，中间置占位 |
-| 摘要输出预留 | 20,000 tokens | `MAX_OUTPUT_TOKENS_FOR_SUMMARY`，防摘要本身被截断 |
-| 压缩熔断阈值 | 连续失败 3 次 | `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES` |
+| 常量                        | 值                                          | 说明                                                                   |
+| --------------------------- | ------------------------------------------- | ---------------------------------------------------------------------- |
+| Autocompact 触发点          | 约 **92% 有效窗口**（= 原始窗口约 **83%**） | 有效窗口 = 原始窗口 − 预留输出；触发点比直觉更早，给压缩后的续跑留余量 |
+| `AUTOCOMPACT_BUFFER_TOKENS` | 13,000                                      | 触发点与硬上限之间的缓冲                                               |
+| 工具结果硬上限              | **100,000 tokens**                          | 超过即截断（`MAX_TOOL_RESULT_TOKENS`）                                 |
+| 超长文件截断                | 扫描 **2000 行**，保留 **250 行窗口**       | 超 2000 行的文件按头尾 + 250 行窗口保留，中间置占位                    |
+| 摘要输出预留                | 20,000 tokens                               | `MAX_OUTPUT_TOKENS_FOR_SUMMARY`，防摘要本身被截断                      |
+| 压缩熔断阈值                | 连续失败 3 次                               | `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES`                                 |
 
 > 对照 [§5.1](#_5-1-分层压缩流水线-从最廉价到最重) 表：mod-agent 用「字符」口径（50K 字符、30KB），真实 CC 用「token」口径；二者无需强行统一，但要明确**触发阈值（92%/83%）比「逼近 100% 再压」更安全**——压缩后还会续跑，必须留余量。
 
@@ -251,12 +251,12 @@ graph TD
 
 记忆采用**封闭分类法**（固定四型，不用自由标签，防止标签膨胀导致召回模糊）：
 
-| 类型 | 记什么 | 特殊要求 |
-| --- | --- | --- |
-| `user` | 用户身份、偏好、知识背景 | 了解到角色 / 偏好时记 |
-| `feedback` | 对 agent 行为的**纠正与肯定** | 正文须含 `Why` 与 `How to apply`，才知道边界 |
-| `project` | 项目进展、决策、截止日期 | **相对日期必须转绝对日期**（「周四冻结」无意义） |
-| `reference` | 外部系统 / 资源的定位 | 如 CI 看板 URL、内部文档入口 |
+| 类型        | 记什么                        | 特殊要求                                         |
+| ----------- | ----------------------------- | ------------------------------------------------ |
+| `user`      | 用户身份、偏好、知识背景      | 了解到角色 / 偏好时记                            |
+| `feedback`  | 对 agent 行为的**纠正与肯定** | 正文须含 `Why` 与 `How to apply`，才知道边界     |
+| `project`   | 项目进展、决策、截止日期      | **相对日期必须转绝对日期**（「周四冻结」无意义） |
+| `reference` | 外部系统 / 资源的定位         | 如 CI 看板 URL、内部文档入口                     |
 
 `feedback` 同时记录纠正和肯定：只记错误会让模型回避用户已认可的好做法。
 

@@ -107,12 +107,12 @@ flowchart LR
 
 2026 年这一层已经基本定型，**四个协议各管一段、互补而不竞争**。分清谁管什么，能避免把一个协议硬塞进它不该管的场景：
 
-| 协议 / 规范  | 解决谁和谁的通信      | mod-agent 的角色                                                               |
-| ------------ | --------------------- | ------------------------------------------------------------------------------ |
-| **MCP**      | agent ↔ 工具 / 数据   | 作为 Host 消费工具（[tools-and-extensions.md §1](./tools-and-extensions.md#_1-工具分层)）  |
-| **A2A**      | agent ↔ 外部 agent    | 未来可被发现 / 可调用的 remote agent（可选）；**不是内部编排协议**             |
-| **ACP**      | agent ↔ 编辑器客户端  | 未来被 Zed 等编辑器当作外部 agent 挂入（可选）                                 |
-| **AGENTS.md** | 项目 ↔ 任何 coding agent | 仓库根放一份给所有 agent 读（[data-and-events.md §4.1](./data-and-events.md#_4-1-为什么直接采用-agents-md-开放标准实证)） |
+| 协议 / 规范      | 解决谁和谁的通信            | mod-agent 的角色                                                                                                                              |
+| ---------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MCP**          | agent ↔ 工具 / 数据         | 作为 Host 消费工具（[tools-and-extensions.md §1](./tools-and-extensions.md#_1-工具分层)）                                                     |
+| **A2A**          | agent ↔ 外部 agent          | 未来可被发现 / 可调用的 remote agent（可选）；**不是内部编排协议**                                                                            |
+| **ACP**          | agent ↔ 编辑器客户端        | 未来被 Zed 等编辑器当作外部 agent 挂入（可选）                                                                                                |
+| **AGENTS.md**    | 项目 ↔ 任何 coding agent    | 仓库根放一份给所有 agent 读（[data-and-events.md §4.1](./data-and-events.md#_4-1-为什么直接采用-agents-md-开放标准实证)）                     |
 | **Agent Skills** | 人 ↔ 任何 agent（流程复用） | 技能目录 + `SKILL.md`，跨工具可移植（[tools-and-extensions.md §6.0](./tools-and-extensions.md#_6-0-agent-skills-已是一个开放标准-2026-核实)） |
 
 ```mermaid

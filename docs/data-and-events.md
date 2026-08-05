@@ -27,12 +27,12 @@ flowchart LR
 
 ```ts
 interface TaskEvent<T = unknown> {
-  eventId: string;        // task_id + sequence 的稳定标识
-  taskId: string;
-  seq: number;            // 同任务内自增序号
-  type: string;
-  timestamp: string;
-  payload: T;
+  eventId: string // task_id + sequence 的稳定标识
+  taskId: string
+  seq: number // 同任务内自增序号
+  type: string
+  timestamp: string
+  payload: T
 }
 ```
 
@@ -162,6 +162,7 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 - 主流工具已原生兼容：GitHub Copilot coding agent、Devin、Factory、Cursor、Codex、Gemini CLI、Windsurf、Zed、Warp、VS Code 等；
 - 官方明确「Rather than introducing another proprietary file, we chose a name and format that could work for anyone」——跟着标准走，用户跨工具复用同一份项目规则；
 - 加载语义：**离被编辑文件最近的 AGENTS.md 优先**；用户当场聊天指令优先级最高；支持 monorepo 嵌套（详见 [context-engineering.md §2.1](./context-engineering.md#_2-1-规则文件的加载顺序与优先级)）。
+
 > 举个例子（示意）：仓库根放一份全局 `AGENTS.md`（如「用 pnpm 不用 npm」），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
 
 **兼容读取策略（Devin 实证，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：Devin 提供 `read_config_from` 开关，可选择性导入 `AGENTS.md`（含 `AGENTS.local.md`、历史名 `AGENT.md`、`.windsurfrules`）以及 Cursor / Windsurf / Claude / OpenCode / Zed 等竞品的规则文件。mod-agent 启动时同样以开关方式兼容读取 `AGENTS.md` + 已知竞品规则文件，逐项可关。

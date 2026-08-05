@@ -1,0 +1,59 @@
+.mermaid {
+  cursor: zoom-in;
+}
+
+.mermaid-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 17, 21, 0.62);
+  backdrop-filter: blur(8px);
+  cursor: zoom-out;
+}
+
+.mermaid-zoom-overlay[hidden] {
+  display: none;
+}
+
+.mermaid-zoom-dialog {
+  max-width: 96vw;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 20px 24px;
+  border-radius: 12px;
+  background: var(--vp-c-bg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  cursor: default;
+}
+
+.mermaid-zoom-dialog svg {
+  display: block;
+  width: auto !important;
+  height: auto !important;
+  max-width: 92vw;
+  max-height: 82vh;
+}
+
+.mermaid-zoom-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.mermaid-zoom-close:hover {
+  background: var(--vp-c-bg-soft);
+}

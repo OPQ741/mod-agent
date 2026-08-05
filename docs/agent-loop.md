@@ -85,35 +85,37 @@ flowchart LR
 
 ```ts
 async function runTask(taskId: string): Promise<void> {
-  let state = await store.loadTaskState(taskId);
+  let state = await store.loadTaskState(taskId)
 
   while (!isTerminal(state.status)) {
-    await control.assertNotCancelled(taskId);
-    budget.assertWithinLimits(state.budget);
+    await control.assertNotCancelled(taskId)
+    budget.assertWithinLimits(state.budget)
 
-    const context = await contextBuilder.build(state);
-    const decision = await modelGateway.nextAction(context);
-    const parsed = decisionSchema.parse(decision);   // Zod 校验
+    const context = await contextBuilder.build(state)
+    const decision = await modelGateway.nextAction(context)
+    const parsed = decisionSchema.parse(decision) // Zod 校验
 
     if (parsed.type === "final") {
-      const report = await delivery.verifyAndBuildReport(state, parsed);
-      await store.completeTask(taskId, report);
-      return;
+      const report = await delivery.verifyAndBuildReport(state, parsed)
+      await store.completeTask(taskId, report)
+      return
     }
 
-    const tool = toolRegistry.get(parsed.toolName);
-    const permit = await policy.evaluate({ task: state, tool, args: parsed.args });
+    const tool = toolRegistry.get(parsed.toolName)
+    const permit = await policy.evaluate({ task: state, tool, args: parsed.args })
     if (permit.kind === "approval_required") {
-      await store.pauseForApproval(taskId, permit.request);
-      return; // 审批后由调度恢复，不阻塞等待
+      await store.pauseForApproval(taskId, permit.request)
+      return // 审批后由调度恢复，不阻塞等待
     }
 
     const result = await toolExecutor.execute({
-      task: state, tool, args: parsed.args,
+      task: state,
+      tool,
+      args: parsed.args,
       timeoutMs: permit.timeoutMs,
-    });
-    state = await store.appendToolResultAndCheckpoint(taskId, result);
-    state = await progressGuard.evaluate(state, result);
+    })
+    state = await store.appendToolResultAndCheckpoint(taskId, result)
+    state = await progressGuard.evaluate(state, result)
   }
 }
 ```
@@ -157,15 +159,15 @@ flowchart TD
 
 最小实现里，循环的判断只有一条：模型这一轮返回了工具调用就继续，没有就结束。但生产级运行时要处理的「为什么还要再转一圈」远不止此。逆向 Claude Code 的运行时可见其把继续循环分成约七类（参考 [claude-code-from-scratch · Agent Loop](https://diwang.info/claude-code-from-scratch/#/docs/01-agent-loop)）：
 
-| # | 继续原因 | 触发情形 | 处理 |
-| --- | --- | --- | --- |
-| 1 | 模型调用了工具 | 响应含 tool_use | 执行工具、回灌结果、继续 |
-| 2 | 折叠后重试 | 上下文超限且暂存了可折叠的旧操作 | 提交折叠腾空间后重试 |
-| 3 | 强制压缩后重试 | 折叠空间仍不够 | 触发全量摘要压缩后重试 |
-| 4 | 输出截断升级 | 到达输出 token 上限（第一次） | 升到更高输出上限（如 16K→64K）重试 |
-| 5 | 截断续写 | 升级已用尽仍被截断 | 注入续写提示，最多重试约 3 次 |
-| 6 | Stop Hook 拦截 | 模型认为做完了，但 Stop Hook 要求继续 | 执行 Hook 后继续循环 |
-| 7 | 预算续跑 | 服务端侧生成预算耗尽但任务未竟 | 续接生成 |
+| #   | 继续原因       | 触发情形                              | 处理                               |
+| --- | -------------- | ------------------------------------- | ---------------------------------- |
+| 1   | 模型调用了工具 | 响应含 tool_use                       | 执行工具、回灌结果、继续           |
+| 2   | 折叠后重试     | 上下文超限且暂存了可折叠的旧操作      | 提交折叠腾空间后重试               |
+| 3   | 强制压缩后重试 | 折叠空间仍不够                        | 触发全量摘要压缩后重试             |
+| 4   | 输出截断升级   | 到达输出 token 上限（第一次）         | 升到更高输出上限（如 16K→64K）重试 |
+| 5   | 截断续写       | 升级已用尽仍被截断                    | 注入续写提示，最多重试约 3 次      |
+| 6   | Stop Hook 拦截 | 模型认为做完了，但 Stop Hook 要求继续 | 执行 Hook 后继续循环               |
+| 7   | 预算续跑       | 服务端侧生成预算耗尽但任务未竟        | 续接生成                           |
 
 这些大多是**可恢复的边界情况**。成熟运行时的做法是先把这类错误「扣留」在循环内部、尝试自恢复，成功则用户无感，失败才最终抛出——而不是一遇到截断或超长就把错误甩到界面上。
 
@@ -225,12 +227,12 @@ flowchart TD
 3. **唯一可写的计划文件**：进入时生成一个计划文件（如 `plans/plan-<sessionId>.md`），它是规划模式下**唯一**被加入写白名单的路径——模型把计划写进这个文件，而不是直接改源码。这复用了 [security.md](./security.md) 的权限判定：规划模式的硬拦截在规则之后、放行之前，优先级高于普通 allow；
 4. **退出时的审批四选项**。模型调用 `exit_plan_mode` 提交计划后，由用户决定：
 
-| 选项 | 含义 | 之后的动作 |
-| --- | --- | --- |
-| 清空计划并执行 | 放弃这份计划、按新的理解直接执行 | 退出规划，重新开工 |
-| 按计划执行 | 认可计划 | 退出规划，按计划逐步执行 |
-| 我来手动处理 | 不交给 agent | 结束，用户自己改 |
-| 继续规划 | 计划还不成熟 | 留在规划模式，继续打磨 |
+| 选项           | 含义                             | 之后的动作               |
+| -------------- | -------------------------------- | ------------------------ |
+| 清空计划并执行 | 放弃这份计划、按新的理解直接执行 | 退出规划，重新开工       |
+| 按计划执行     | 认可计划                         | 退出规划，按计划逐步执行 |
+| 我来手动处理   | 不交给 agent                     | 结束，用户自己改         |
+| 继续规划       | 计划还不成熟                     | 留在规划模式，继续打磨   |
 
 计划文件是**持久化、可人工编辑**的产物（对齐 Windsurf 可查看 / 修改的 Todo），退出规划模式进入执行后它仍作为上下文锚点；执行中发现计划需要调整，可重新进入规划模式 replan，而不是闷头执行一份过期计划。
 
@@ -304,11 +306,11 @@ sequenceDiagram
 
 把「安全检查」做成与业务 agent 并列的第二套轻量模型，卡三个位置（出处：https://openai.github.io/openai-agents-python/guardrails/ ）：
 
-| 护栏层 | 卡在哪 | 触发动作 |
-| --- | --- | --- |
-| Input guardrail | 链上第一个 agent 收到用户输入时 | tripwire 触发即抛异常中止，agent 不执行 |
-| Output guardrail | 产生最终输出的 agent 收尾后 | 拒绝候选输出，已完成的工具调用存入 session 待回放 |
-| Tool guardrail | 每个工具调用前 / 后 | 可跳过调用、替换输出、或抛 tripwire |
+| 护栏层           | 卡在哪                          | 触发动作                                          |
+| ---------------- | ------------------------------- | ------------------------------------------------- |
+| Input guardrail  | 链上第一个 agent 收到用户输入时 | tripwire 触发即抛异常中止，agent 不执行           |
+| Output guardrail | 产生最终输出的 agent 收尾后     | 拒绝候选输出，已完成的工具调用存入 session 待回放 |
+| Tool guardrail   | 每个工具调用前 / 后             | 可跳过调用、替换输出、或抛 tripwire               |
 
 - 执行模式分**并行**（快但可能已烧 token）与**阻塞**（先检查再跑，最省钱）；
 - 对 mod-agent：写操作 / 危险命令默认**阻塞式先确认**；只读 / 可回滚操作可用并行快检。
@@ -322,11 +324,11 @@ sequenceDiagram
 
 非交互模式输出三档（出处：https://code.claude.com/docs/en/headless 、https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）：
 
-| 模式 | 用途 |
-| --- | --- |
-| text | 默认，人读 |
-| json | 一次返回 result + session_id + usage + total_cost_usd，可 `--json-schema` 约束结构 |
-| stream-json | NDJSON，逐事件实时吐，末行是 result 汇总 |
+| 模式        | 用途                                                                               |
+| ----------- | ---------------------------------------------------------------------------------- |
+| text        | 默认，人读                                                                         |
+| json        | 一次返回 result + session_id + usage + total_cost_usd，可 `--json-schema` 约束结构 |
+| stream-json | NDJSON，逐事件实时吐，末行是 result 汇总                                           |
 
 - 退出码即成败：0 成功、非 0 失败，脚本可直接分支。真实 Claude Code 的退出码更细——`0` 正常结束、`1` 出错、`2` 被中止（SIGINT/EOF），另有内部用 `51`（bypass 模式被拒）、`52`（远程/无 TTY 环境问题）等；脚本只需区分 0/非 0，但**交互模式用退出码 2 区分「人主动打断」与「真出错」**，是值得照抄的约定；
 - Gemini 的 headless JSON 还带一份「账」：`stats.models[].tokens`（prompt / candidates / total / cached / tool）、`stats.tools`（totalCalls / totalSuccess / totalFail / totalDurationMs / totalDecisions: accept | reject | modify | auto_accept）、`stats.files`（totalLinesAdded / totalLinesRemoved）——用量记账与工具成功率分析直接可做；

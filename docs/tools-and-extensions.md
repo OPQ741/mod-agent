@@ -23,12 +23,12 @@ MCP 是互操作协议，不天然代表可信或安全。每个 MCP Server 单�
 
 **MCP 的角色模型（协议规范原文，出处：https://modelcontextprotocol.io/specification/ ）**：
 
-| 角色 | 是谁 | 干什么 |
-| --- | --- | --- |
-| Host | 主应用（mod-agent CLI） | 发起并管理所有 MCP 连接 |
-| Client | Host 内部的连接器 | 与某个具体 Server 会话、做能力协商 |
-| Server | 外部工具 / 数据服务 | 暴露 Resources（可读数据）/ Prompts（模板化提示）/ Tools（可调用函数）三原语 |
-| Elicitation | Client → Server 反向 | 允许 server 在任务中向用户追问信息，映射为 CLI 提问交互 |
+| 角色        | 是谁                    | 干什么                                                                       |
+| ----------- | ----------------------- | ---------------------------------------------------------------------------- |
+| Host        | 主应用（mod-agent CLI） | 发起并管理所有 MCP 连接                                                      |
+| Client      | Host 内部的连接器       | 与某个具体 Server 会话、做能力协商                                           |
+| Server      | 外部工具 / 数据服务     | 暴露 Resources（可读数据）/ Prompts（模板化提示）/ Tools（可调用函数）三原语 |
+| Elicitation | Client → Server 反向    | 允许 server 在任务中向用户追问信息，映射为 CLI 提问交互                      |
 
 > **版本提示**：上表的 Elicitation、`initialize` 握手、Roots 等机制对应的是 **2025-11-25 及更早**的规范。现行规范为 **2026-07-28**，是自发布以来最大的一次改版，握手与会话已被移除、Elicitation 被 MRTR 取代。详见 [§1.2](#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)。**新代码一律按 2026-07-28 写。**
 
@@ -86,17 +86,17 @@ sequenceDiagram
 
 这是 MCP 自发布以来最大的一次改版，**不是增量更新**。如果你在 2026-07 之前学过 MCP，有一部分认知已经是历史了。
 
-| 变化 | 旧（≤2025-11-25） | 新（2026-07-28） | 对 mod-agent 的影响 |
-| --- | --- | --- | --- |
-| **协议内核** | 双向有状态，需 `initialize`/`initialized` 握手 + `Mcp-Session-Id` 粘性会话 | **无状态**：握手与会话头一并废除（SEP-2567/2575），每个请求在 `_meta` 自带协议版本、客户端身份与能力 | server 可跑在普通轮询负载均衡后，**无需共享会话存储** |
-| **需要跨调用状态时** | 藏在 transport 的会话里 | server 从工具里**签发一个显式 handle**，模型把它当普通参数传回来 | handle 对模型可见、可审计，比藏在传输层好 |
-| **路由** | 网关要解析 JSON body | 必带 `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` 头（SEP-2243） | 网关、限流、WAF **只看头部**就能路由和鉴权 |
-| **服务端反向请求** | `sampling/createMessage`、`elicitation/create`、`roots/list`，需常开双向流 | **MRTR（多往返请求，SEP-2322）**：返回 `resultType: "input_required"` + `inputRequests`，客户端带 `inputResponses` 重试原调用 | 审批/追问交互改造为「返回问题 → 客户端补答案重试」 |
-| **列表结果** | 每次重连重新拉 | 带 **ttl 与缓存范围 + 确定性顺序** | 可缓存工具目录，**重连后上游 prompt cache 保持稳定**（直接利好 [§1.1](#_1-1-mcp-连接生命周期-工具发现、路由与调用) 的缓存断点设计） |
-| **长任务** | 需保持 HTTP 连接打开 | **Tasks 扩展（SEP-2663）**：返回 task handle，客户端用 `tasks/get` / `tasks/update` / `tasks/cancel` 跟踪 | 数小时级任务不再占连接 |
-| **UI** | 无 | **MCP Apps 扩展（SEP-1865）**：server 可返回沙箱 iframe 里的交互 HTML | 工具可自带表单/面板 |
-| **错误码** | 资源缺失返回自定义 `-32002` | 改为 JSON-RPC 标准 **`-32602`** | 任何硬编码匹配 `-32002` 的代码会静默漏判 |
-| **废弃（12 个月最短窗口，SEP-2596）** | Roots / Sampling / Logging 可用 | 三者**废弃**，分别改用工具参数或资源 URI、直接调 LLM 厂商 API、stderr 或 OpenTelemetry；HTTP+SSE 传输也废弃，转 Streamable HTTP | 别在新代码里用它们；用了就当作已知搬迁债务 |
+| 变化                                  | 旧（≤2025-11-25）                                                          | 新（2026-07-28）                                                                                                                | 对 mod-agent 的影响                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **协议内核**                          | 双向有状态，需 `initialize`/`initialized` 握手 + `Mcp-Session-Id` 粘性会话 | **无状态**：握手与会话头一并废除（SEP-2567/2575），每个请求在 `_meta` 自带协议版本、客户端身份与能力                            | server 可跑在普通轮询负载均衡后，**无需共享会话存储**                                                                               |
+| **需要跨调用状态时**                  | 藏在 transport 的会话里                                                    | server 从工具里**签发一个显式 handle**，模型把它当普通参数传回来                                                                | handle 对模型可见、可审计，比藏在传输层好                                                                                           |
+| **路由**                              | 网关要解析 JSON body                                                       | 必带 `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` 头（SEP-2243）                                                          | 网关、限流、WAF **只看头部**就能路由和鉴权                                                                                          |
+| **服务端反向请求**                    | `sampling/createMessage`、`elicitation/create`、`roots/list`，需常开双向流 | **MRTR（多往返请求，SEP-2322）**：返回 `resultType: "input_required"` + `inputRequests`，客户端带 `inputResponses` 重试原调用   | 审批/追问交互改造为「返回问题 → 客户端补答案重试」                                                                                  |
+| **列表结果**                          | 每次重连重新拉                                                             | 带 **ttl 与缓存范围 + 确定性顺序**                                                                                              | 可缓存工具目录，**重连后上游 prompt cache 保持稳定**（直接利好 [§1.1](#_1-1-mcp-连接生命周期-工具发现、路由与调用) 的缓存断点设计） |
+| **长任务**                            | 需保持 HTTP 连接打开                                                       | **Tasks 扩展（SEP-2663）**：返回 task handle，客户端用 `tasks/get` / `tasks/update` / `tasks/cancel` 跟踪                       | 数小时级任务不再占连接                                                                                                              |
+| **UI**                                | 无                                                                         | **MCP Apps 扩展（SEP-1865）**：server 可返回沙箱 iframe 里的交互 HTML                                                           | 工具可自带表单/面板                                                                                                                 |
+| **错误码**                            | 资源缺失返回自定义 `-32002`                                                | 改为 JSON-RPC 标准 **`-32602`**                                                                                                 | 任何硬编码匹配 `-32002` 的代码会静默漏判                                                                                            |
+| **废弃（12 个月最短窗口，SEP-2596）** | Roots / Sampling / Logging 可用                                            | 三者**废弃**，分别改用工具参数或资源 URI、直接调 LLM 厂商 API、stderr 或 OpenTelemetry；HTTP+SSE 传输也废弃，转 Streamable HTTP | 别在新代码里用它们；用了就当作已知搬迁债务                                                                                          |
 
 **治理归属变了，这点在选型评审时会被问到**：Anthropic 已于 **2025-12-09 把 MCP 捐给 Linux 基金会旗下的 Agentic AI Foundation（AAIF）**，创始成员包括 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。**结论：MCP 不再是单一厂商的赌注**，协议被弃的长期风险显著下降。
 
@@ -113,15 +113,15 @@ Client 侧兼容清单（落到实现）：
 
 ```ts
 interface AgentTool<I = unknown, O = unknown> {
-  name: string;                       // 命名空间，如 repo.read_file
-  description: string;                // 写清楚，防模型幻觉 API
-  inputSchema: unknown;               // Zod / JSON Schema adapter
-  outputSchema?: unknown;
-  risk: "read" | "workspace_write" | "command" | "external_side_effect";
-  idempotency: "safe" | "keyed" | "non_idempotent";
-  timeoutMs: number;
-  requiresApproval: (input: I, ctx: TaskContext) => boolean;
-  execute(input: I, ctx: ToolExecutionContext): Promise<O>;
+  name: string // 命名空间，如 repo.read_file
+  description: string // 写清楚，防模型幻觉 API
+  inputSchema: unknown // Zod / JSON Schema adapter
+  outputSchema?: unknown
+  risk: "read" | "workspace_write" | "command" | "external_side_effect"
+  idempotency: "safe" | "keyed" | "non_idempotent"
+  timeoutMs: number
+  requiresApproval: (input: I, ctx: TaskContext) => boolean
+  execute(input: I, ctx: ToolExecutionContext): Promise<O>
 }
 ```
 
@@ -165,11 +165,11 @@ flowchart LR
 
 工具元数据（只读 / 并发安全 / 破坏性）的默认值必须 **fail-closed**：
 
-| 标记 | 安全默认 | 为什么默认成这样 |
-| --- | --- | --- |
+| 标记                | 安全默认     | 为什么默认成这样                                                       |
+| ------------------- | ------------ | ---------------------------------------------------------------------- |
 | `isConcurrencySafe` | 默认 `false` | 误标「可并发」会让写操作在无保护下并发；误标「不可并发」顶多串行慢一点 |
-| `isReadOnly` | 默认 `false` | 误标「只读」可能绕过写权限检查；误标「非只读」只是多一次确认 |
-| `isDestructive` | 默认 `false` | 破坏性由更上层的命令 / 路径策略显式判定 |
+| `isReadOnly`        | 默认 `false` | 误标「只读」可能绕过写权限检查；误标「非只读」只是多一次确认           |
+| `isDestructive`     | 默认 `false` | 破坏性由更上层的命令 / 路径策略显式判定                                |
 
 原则：标记出错时，后果应落在「多打扰用户（烦人但安全）」的方向，而不是「静默放行（危险且隐蔽）」的方向。
 
@@ -213,16 +213,16 @@ flowchart LR
 
 ```ts
 interface ToolExecutionResult<T = unknown> {
-  callId: string;
-  toolName: string;
-  status: "succeeded" | "failed" | "timed_out" | "cancelled";
-  output?: T;
-  error?: { code: string; message: string; retryable: boolean };
-  startedAt: string;
-  finishedAt: string;
-  durationMs: number;
-  artifacts?: Array<{ kind: string; uri: string; sha256?: string }>;
-  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  callId: string
+  toolName: string
+  status: "succeeded" | "failed" | "timed_out" | "cancelled"
+  output?: T
+  error?: { code: string; message: string; retryable: boolean }
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  artifacts?: Array<{ kind: string; uri: string; sha256?: string }>
+  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number }
 }
 ```
 
@@ -239,17 +239,17 @@ interface ToolExecutionResult<T = unknown> {
 
 ## 5. 人工审批策略
 
-| 风险动作 | 默认策略 |
-| --- | --- |
-| 读工作区内普通源码 | 允许，受路径策略约束 |
-| 改授权目录内源码 | 按任务模式允许，前端展示 diff |
-| 改锁文件 / 权限 / CI/CD / 部署脚本 | 更严格确认或管理员策略决定 |
-| 跑测试 / lint / 类型检查 | 命令在白名单 / 隔离环境内可自动执行 |
-| 新增依赖、访问外网装包 | 需网络策略放行；首次新增建议审批 |
-| 读密钥 / 凭证 / SSH 私钥 | 默认拒绝；确需则由服务端能力托管，不回模型上下文 |
-| 批量删文件、改 Git 历史 | 默认拒绝或强制审批 |
-| push / 建 PR / 合并 / 发布 | 先审批；MVP 默认不自动 merge / deploy |
-| 访问生产系统 / 改线上数据 | 默认拒绝，需独立授权与审计 |
+| 风险动作                           | 默认策略                                         |
+| ---------------------------------- | ------------------------------------------------ |
+| 读工作区内普通源码                 | 允许，受路径策略约束                             |
+| 改授权目录内源码                   | 按任务模式允许，前端展示 diff                    |
+| 改锁文件 / 权限 / CI/CD / 部署脚本 | 更严格确认或管理员策略决定                       |
+| 跑测试 / lint / 类型检查           | 命令在白名单 / 隔离环境内可自动执行              |
+| 新增依赖、访问外网装包             | 需网络策略放行；首次新增建议审批                 |
+| 读密钥 / 凭证 / SSH 私钥           | 默认拒绝；确需则由服务端能力托管，不回模型上下文 |
+| 批量删文件、改 Git 历史            | 默认拒绝或强制审批                               |
+| push / 建 PR / 合并 / 发布         | 先审批；MVP 默认不自动 merge / deploy            |
+| 访问生产系统 / 改线上数据          | 默认拒绝，需独立授权与审计                       |
 
 审批必须与具体动作参数绑定：用户批准了 `command.run` 的一条命令，不能复用于参数不同的另一条。保存请求摘要、参数 hash、策略版本、审批人、时间、结果与失效时间。
 
@@ -257,13 +257,13 @@ interface ToolExecutionResult<T = unknown> {
 
 不要只做一个「全自动」总开关。把动作拆成类别，各自标风险并**逐项**决定 ask / auto / deny：
 
-| 动作 | 风险等级 | 默认建议 |
-| --- | --- | --- |
-| 读文件 / 目录 | 中 | 可自动（起手推荐） |
-| 改文件 | 高 | 默认逐次确认 |
-| 执行终端命令 | 高 | 仅白名单前缀可自动 |
-| 无头浏览器 | 中 | 逐次确认 |
-| 调用 MCP 工具 | 中高 | 逐次确认 + 可单独白名单 |
+| 动作          | 风险等级 | 默认建议                |
+| ------------- | -------- | ----------------------- |
+| 读文件 / 目录 | 中       | 可自动（起手推荐）      |
+| 改文件        | 高       | 默认逐次确认            |
+| 执行终端命令  | 高       | 仅白名单前缀可自动      |
+| 无头浏览器    | 中       | 逐次确认                |
+| 调用 MCP 工具 | 中高     | 逐次确认 + 可单独白名单 |
 
 - 另设「主开关」一键全开 / 全关，便于在敏感代码与快速开发之间切换；
 - 工作区外读写、受保护文件写、删除——各自再独立标「极高」并默认关闭；
@@ -287,11 +287,11 @@ interface ToolExecutionResult<T = unknown> {
 
 ## 6. Skills · 工程流程复用
 
-| 概念 | 是什么 | 例子 |
-| --- | --- | --- |
-| **Tool** | 可被程序调用的原子能力 | 读文件、搜代码、跑测试 |
-| **Skill** | 可复用的工作流程 / 说明，指导 Agent 何时按何步骤调工具 | 「定位 React 状态竞态」「给项目加页面」「排查构建错误」 |
-| **Workflow / 状态机** | 程序强制执行的可靠流程 | 必须审批、测试失败最多修两轮、取消后不再跑命令 |
+| 概念                  | 是什么                                                 | 例子                                                    |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------------------- |
+| **Tool**              | 可被程序调用的原子能力                                 | 读文件、搜代码、跑测试                                  |
+| **Skill**             | 可复用的工作流程 / 说明，指导 Agent 何时按何步骤调工具 | 「定位 React 状态竞态」「给项目加页面」「排查构建错误」 |
+| **Workflow / 状态机** | 程序强制执行的可靠流程                                 | 必须审批、测试失败最多修两轮、取消后不再跑命令          |
 
 安全约束不能只写在 Skill 文本里：Skill 可以建议，Policy 与状态机负责强制。
 
@@ -301,14 +301,14 @@ interface ToolExecutionResult<T = unknown> {
 
 **格式小到不能再小**：一个目录 + `SKILL.md`（YAML frontmatter + Markdown 正文）。frontmatter 只有两个必需字段：
 
-| 字段 | 必需 | 约束 |
-| --- | --- | --- |
-| `name` | 是 | 1–64 字符，仅小写字母、数字、连字符；无首尾连字符、无连续连字符；**必须与父目录名一致** |
-| `description` | 是 | 1–1024 字符，非空；须同时说清**做什么**和**何时用**，并带上便于匹配的关键词 |
-| `license` | 否 | 许可证名或指向 bundled 许可证文件 |
-| `compatibility` | 否 | ≤500 字符，说明环境要求（目标产品、系统包、网络） |
-| `metadata` | 否 | 字符串键值映射，给标准未定义的属性用 |
-| `allowed-tools` | 否 | 空格分隔的预批准工具串；**规范标为实验性**，各实现支持度不一 |
+| 字段            | 必需 | 约束                                                                                    |
+| --------------- | ---- | --------------------------------------------------------------------------------------- |
+| `name`          | 是   | 1–64 字符，仅小写字母、数字、连字符；无首尾连字符、无连续连字符；**必须与父目录名一致** |
+| `description`   | 是   | 1–1024 字符，非空；须同时说清**做什么**和**何时用**，并带上便于匹配的关键词             |
+| `license`       | 否   | 许可证名或指向 bundled 许可证文件                                                       |
+| `compatibility` | 否   | ≤500 字符，说明环境要求（目标产品、系统包、网络）                                       |
+| `metadata`      | 否   | 字符串键值映射，给标准未定义的属性用                                                    |
+| `allowed-tools` | 否   | 空格分隔的预批准工具串；**规范标为实验性**，各实现支持度不一                            |
 
 目录约定（可选）：`scripts/`（可执行代码）、`references/`（按需加载的文档）、`assets/`（模板与静态资源）。正文无任何格式限制，规范建议写清：分步指令、输入输出示例、常见边界情况，并建议把过长的正文拆到被引用的文件里——因为**正文一旦激活就整体进入上下文**。
 
@@ -379,10 +379,10 @@ my-skill/
 
 执行模式有两种：
 
-| 模式 | 行为 | 适用 |
-| --- | --- | --- |
-| **inline（默认）** | 把展开后的 prompt 直接注入当前对话，由主 agent 继续 | 一两步、不污染上下文的轻量流程（如规范一次提交信息） |
-| **fork** | 派生一个**独立子 agent**，以技能 prompt 为其系统提示、按 `allowed-tools` 白名单收敛工具，单独跑完只回传最终结果 | 需要多轮工具调用、会读很多文件的流程（如代码审查）——避免这些中间过程污染主对话 |
+| 模式               | 行为                                                                                                            | 适用                                                                           |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **inline（默认）** | 把展开后的 prompt 直接注入当前对话，由主 agent 继续                                                             | 一两步、不污染上下文的轻量流程（如规范一次提交信息）                           |
+| **fork**           | 派生一个**独立子 agent**，以技能 prompt 为其系统提示、按 `allowed-tools` 白名单收敛工具，单独跑完只回传最终结果 | 需要多轮工具调用、会读很多文件的流程（如代码审查）——避免这些中间过程污染主对话 |
 
 fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制；未指定时至少摘除 `agent` / 子代理派生工具以**防止递归**；fork 出去的子 agent 必须继承主 agent 的权限模式（不能借 fork 提权，见 [verification-and-multiagent.md](./verification-and-multiagent.md) 与 [autonomy.md §3.5](./autonomy.md#_3-5-权限必须传播给子代理)）。
 
@@ -399,12 +399,12 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 
 规则不是「一股脑全塞进 prompt」。用 frontmatter 三个开关决定一条规则何时注入上下文，避免撑爆上下文还能装很多规则：
 
-| alwaysApply | description | globs | 何时注入上下文 |
-| --- | --- | --- | --- |
-| true | — | — | 每次会话都注入 |
-| false | — | 提供 | 上下文里出现匹配文件时自动挂载 |
-| false | 提供 | 省略 | agent 读描述后自行判断相关性再拉取 |
-| false | 空 | 空 | 仅当用户 `@规则名` 时注入 |
+| alwaysApply | description | globs | 何时注入上下文                     |
+| ----------- | ----------- | ----- | ---------------------------------- |
+| true        | —           | —     | 每次会话都注入                     |
+| false       | —           | 提供  | 上下文里出现匹配文件时自动挂载     |
+| false       | 提供        | 省略  | agent 读描述后自行判断相关性再拉取 |
+| false       | 空          | 空    | 仅当用户 `@规则名` 时注入          |
 
 - 规则源优先级 Team → Project → User，冲突时前者优先；
 - 最佳实践：单条规则 < 500 行、大规则拆成可组合小规则、用 `@文件` 引用而非复制内容。
@@ -415,10 +415,10 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 
 在 agent loop 的固定挂点允许用户脚本介入，事件分三类节奏：
 
-| 节奏 | 事件 | 可否阻断 |
-| --- | --- | --- |
-| 会话 | SessionStart / SessionEnd | 否 |
-| 轮次 | UserPromptSubmit / Stop | 可阻断 prompt |
+| 节奏     | 事件                                        | 可否阻断          |
+| -------- | ------------------------------------------- | ----------------- |
+| 会话     | SessionStart / SessionEnd                   | 否                |
+| 轮次     | UserPromptSubmit / Stop                     | 可阻断 prompt     |
 | 工具调用 | PreToolUse（执行前）/ PostToolUse（执行后） | PreToolUse 可阻断 |
 
 1. 钩子从 stdin 收事件 JSON，用退出码 2 阻断，stderr 作为原因回喂模型；
@@ -428,12 +428,12 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 
 **真实 Claude Code 的完整 Hooks 体系（v2.1.88 快照）：** 上面 6 个是最常用、官方文档化的事件；实际运行时按生命周期分约 **13 组、23+ 个事件**，四个执行点（会话边界 / 轮次边界 / 工具执行前 / 工具执行后），且在执行点可产出四种决策：
 
-| 决策类型 | 效果 |
-| --- | --- |
-| 继续（放行） | 正常往下走 |
-| 阻断（exit 2） | 阻止本次动作，stderr 回喂模型 |
-| 追加上下文 | 向上下文加事实（PostToolUse 的 additionalContext） |
-| 替换输出 | 改模型看到的工具输出（updatedToolOutput） |
+| 决策类型       | 效果                                               |
+| -------------- | -------------------------------------------------- |
+| 继续（放行）   | 正常往下走                                         |
+| 阻断（exit 2） | 阻止本次动作，stderr 回喂模型                      |
+| 追加上下文     | 向上下文加事实（PostToolUse 的 additionalContext） |
+| 替换输出       | 改模型看到的工具输出（updatedToolOutput）          |
 
 除上表的核心事件外，还有 Notification、SubagentStop、PreCompact、SessionStart 的 `source` 等更细挂点（如压缩前、子 agent 停止、通知时）。对 mod-agent：
 

@@ -12,13 +12,13 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 
 与 Copilot 式补全的区别：
 
-| 维度 | 行内补全 / 聊天助手 | AI Coding Agent |
-| --- | --- | --- |
-| 决策粒度 | 单段补全、单轮问答 | 读哪些文件、改什么、跑什么测试由模型自决 |
-| 执行环境 | 人打开的编辑器 | 持久沙箱（shell + editor + browser） |
-| 验证闭环 | 无 | 跑仓库测试、读失败输出、再改代码 |
-| 交付物 | 文本 / 代码片段 | 分支上的 diff、draft PR、可运行补丁 |
-| 自主程度 | 人逐字确认 | Plan/审批点后人放手，连续跑数小时 |
+| 维度     | 行内补全 / 聊天助手 | AI Coding Agent                          |
+| -------- | ------------------- | ---------------------------------------- |
+| 决策粒度 | 单段补全、单轮问答  | 读哪些文件、改什么、跑什么测试由模型自决 |
+| 执行环境 | 人打开的编辑器      | 持久沙箱（shell + editor + browser）     |
+| 验证闭环 | 无                  | 跑仓库测试、读失败输出、再改代码         |
+| 交付物   | 文本 / 代码片段     | 分支上的 diff、draft PR、可运行补丁      |
+| 自主程度 | 人逐字确认          | Plan/审批点后人放手，连续跑数小时        |
 
 **判断**：底层范式已经收敛为「自主工具循环 + 确定性测试闭环」；循环里用哪种心智（ReAct/Reflexion）不是决定成败的主要因素，ACI、scaffolding、context engineering 这三层工程才是。
 
@@ -26,33 +26,33 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 
 ### 商业产品
 
-| 产品 | 形态 | 核心架构 | 关键理念 |
-| --- | --- | --- | --- |
-| Devin (Cognition) | 云端工作台，输出 PR | planner + executor 分层、scratchpad 记忆 | 人可观察可接管的完整工作台 + 测试闭环 |
-| Cursor | AI IDE（fork VS Code） | Tab + Agent/Composer 双梯度、codebase embedding、Plan 模式 | 索引 + `@` 取上下文 + 远程并行 git worktree |
-| Claude Code | CLI + IDE 扩展 | 极简 ReAct loop、subagents 独立上下文（最多嵌套 5 层） | 简单 loop + 分层权限 + 子代理隔离 + CLAUDE.md |
-| GitHub Copilot agent | 平台原语 issue→draft PR | 跑在 Actions VM、code search、推 draft PR | 产物天然是 PR、workflow 改动人审、auto-merge 交平台 |
+| 产品                 | 形态                    | 核心架构                                                   | 关键理念                                            |
+| -------------------- | ----------------------- | ---------------------------------------------------------- | --------------------------------------------------- |
+| Devin (Cognition)    | 云端工作台，输出 PR     | planner + executor 分层、scratchpad 记忆                   | 人可观察可接管的完整工作台 + 测试闭环               |
+| Cursor               | AI IDE（fork VS Code）  | Tab + Agent/Composer 双梯度、codebase embedding、Plan 模式 | 索引 + `@` 取上下文 + 远程并行 git worktree         |
+| Claude Code          | CLI + IDE 扩展          | 极简 ReAct loop、subagents 独立上下文（最多嵌套 5 层）     | 简单 loop + 分层权限 + 子代理隔离 + CLAUDE.md       |
+| GitHub Copilot agent | 平台原语 issue→draft PR | 跑在 Actions VM、code search、推 draft PR                  | 产物天然是 PR、workflow 改动人审、auto-merge 交平台 |
 
 ### 开源 / 学术
 
-| 项目 | 定位 | 关键理念 |
-| --- | --- | --- |
-| SWE-agent (Princeton) | 证明瓶颈在 agent-计算机接口 | ACI 三件套：定制编辑器、分页 viewer、精简 bash；发布时 SWE-bench 12.47% |
-| OpenHands (原 OpenDevin) | 开源通用平台 | Agent + EventStream（append-only 事件溯源）+ Docker runtime |
-| Aider | 终端 pair-programming、git-native | Repo Map（tree-sitter 符号索引 ~1k token）、多编辑格式自动 commit |
-| Cline | IDE 内、每步人批 | Plan/Act 双模式、Shadow Git 每工具调用后快照任意回滚 |
-| Agentless (UIUC) | 反 agent 固定三阶段流水线 | 分层定位→生成 patch→多候选跑测试；SWE-bench Lite 32%、单 issue \$0.70 |
+| 项目                     | 定位                              | 关键理念                                                                |
+| ------------------------ | --------------------------------- | ----------------------------------------------------------------------- |
+| SWE-agent (Princeton)    | 证明瓶颈在 agent-计算机接口       | ACI 三件套：定制编辑器、分页 viewer、精简 bash；发布时 SWE-bench 12.47% |
+| OpenHands (原 OpenDevin) | 开源通用平台                      | Agent + EventStream（append-only 事件溯源）+ Docker runtime             |
+| Aider                    | 终端 pair-programming、git-native | Repo Map（tree-sitter 符号索引 ~1k token）、多编辑格式自动 commit       |
+| Cline                    | IDE 内、每步人批                  | Plan/Act 双模式、Shadow Git 每工具调用后快照任意回滚                    |
+| Agentless (UIUC)         | 反 agent 固定三阶段流水线         | 分层定位→生成 patch→多候选跑测试；SWE-bench Lite 32%、单 issue \$0.70   |
 
 > 2026 年的产品版图已经远不止这 9 个。我们对 **45 个** coding agent / 框架 / 协议做了逐一对标（每个都实际打开了官方仓库与文档核实），完整画像见新页 **[Coding Agent 全景图鉴](./coding-agents.md)**；下面只给分类结论与精简对比。
 
 ### 2.1 四大形态速览
 
-| 形态 | 代表产品 | 运行位置 | 典型产物 | mod-agent 关注的点 |
-| --- | --- | --- | --- | --- |
-| **终端 / CLI agent** | Claude Code、Codex CLI、Gemini CLI、Aider、OpenCode、Goose、Crush、Qwen Code | 本地终端 | 工作区改动 + commit | 直接对标形态：AGENTS.md、审批三档、沙箱、headless |
-| **IDE 内 agent** | Cursor、Windsurf、Cline、Kilo Code、Zed、Trae、Copilot Chat agent mode | 编辑器内 | inline diff / 检查点 | Shadow Git、checkpoint、细粒度权限、MCP |
-| **云端 / 自治 agent** | Devin、Copilot cloud agent、Replit Agent、v0、Lovable、Factory Droid、bolt.diy | 厂商云 VM / 容器 | draft PR、可访问 URL | 云端沙箱、draft PR 护栏、自动分支、永不碰 main |
-| **开源框架 / 学术 / 协议** | SWE-agent、OpenHands、Agentless、AutoCodeRover、MetaGPT、AutoGen、CrewAI、LangGraph、Agents SDK、MCP、A2A、AGENTS.md | 自托管 | 论文结果 / 可编排平台 | EventStream、ACI、分层定位、多 agent 教训、协议 |
+| 形态                       | 代表产品                                                                                                             | 运行位置         | 典型产物              | mod-agent 关注的点                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------- | --------------------- | ------------------------------------------------- |
+| **终端 / CLI agent**       | Claude Code、Codex CLI、Gemini CLI、Aider、OpenCode、Goose、Crush、Qwen Code                                         | 本地终端         | 工作区改动 + commit   | 直接对标形态：AGENTS.md、审批三档、沙箱、headless |
+| **IDE 内 agent**           | Cursor、Windsurf、Cline、Kilo Code、Zed、Trae、Copilot Chat agent mode                                               | 编辑器内         | inline diff / 检查点  | Shadow Git、checkpoint、细粒度权限、MCP           |
+| **云端 / 自治 agent**      | Devin、Copilot cloud agent、Replit Agent、v0、Lovable、Factory Droid、bolt.diy                                       | 厂商云 VM / 容器 | draft PR、可访问 URL  | 云端沙箱、draft PR 护栏、自动分支、永不碰 main    |
+| **开源框架 / 学术 / 协议** | SWE-agent、OpenHands、Agentless、AutoCodeRover、MetaGPT、AutoGen、CrewAI、LangGraph、Agents SDK、MCP、A2A、AGENTS.md | 自托管           | 论文结果 / 可编排平台 | EventStream、ACI、分层定位、多 agent 教训、协议   |
 
 ### 2.2 从 45 个项目里得到的分类结论
 
@@ -63,7 +63,7 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 5. **协议层基本定型**：MCP 管「agent 接工具」、A2A 管「agent 连 agent」、ACP 管「编辑器挂 CLI agent」、AGENTS.md 管「agent 读项目规则」，四者互补。
 6. **活跃度与许可证是硬约束**：2026 年 Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 转维护模式、Amazon Q CLI 停更；Crush（FSL）、Claude Code（自定义源码许可）、AutoCodeRover（Sonar 源码可用）、Zed（GPL-3.0）都不是标准宽松许可——选型时必须逐项目核对 LICENSE 与最近提交（见 [references.md](./references.md)）。
 
-## 3. 真实能力水平（2025–2026，2026-10 核实）
+## 3. 真实能力水平（2025–2026，2026-08 核实）
 
 ### 3.1 SWE-bench Verified：先看「谁跑的」，再看分数
 
@@ -71,33 +71,33 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 
 **表 A · 官方统一 harness 榜**（swebench.com，全部用 mini-SWE-agent 跑，2026-02 更新）——这张表内部可比：
 
-| 模型 | % Resolved | 平均成本/题 |
-| --- | --- | --- |
-| Claude 4.5 Opus（high reasoning） | 76.80% | \$0.75 |
-| Gemini 3 Flash（high reasoning） | 75.80% | \$0.36 |
-| MiniMax M2.5（high reasoning） | 75.80% | **\$0.07** |
-| Claude Opus 4.6 | 75.60% | \$0.55 |
-| GPT-5-2 Codex / GLM-5 | 72.80% | \$0.45 / \$0.53 |
-| Claude 4.5 Sonnet | 71.40% | \$0.66 |
-| Kimi K2.5 | 70.80% | **\$0.15** |
-| DeepSeek V3.2 | 70.00% | \$0.45 |
-| GPT-5 Mini | 56.20% | \$0.05 |
+| 模型                              | % Resolved | 平均成本/题     |
+| --------------------------------- | ---------- | --------------- |
+| Claude 4.5 Opus（high reasoning） | 76.80%     | \$0.75          |
+| Gemini 3 Flash（high reasoning）  | 75.80%     | \$0.36          |
+| MiniMax M2.5（high reasoning）    | 75.80%     | **\$0.07**      |
+| Claude Opus 4.6                   | 75.60%     | \$0.55          |
+| GPT-5-2 Codex / GLM-5             | 72.80%     | \$0.45 / \$0.53 |
+| Claude 4.5 Sonnet                 | 71.40%     | \$0.66          |
+| Kimi K2.5                         | 70.80%     | **\$0.15**      |
+| DeepSeek V3.2                     | 70.00%     | \$0.45          |
+| GPT-5 Mini                        | 56.20%     | \$0.05          |
 
 **表 B · 厂商自报 / 第三方独立复跑**（harness 各不相同）——只能看趋势：
 
-| 时间 | 系统 | 分数 | 口径 |
-| --- | --- | --- | --- |
-| 2025-02 | Claude 3.7 Sonnet + extended thinking | 62.3% | 自定义 scaffold 70.3% |
-| 2025-05 | Claude Opus 4 / Sonnet 4 | ~72.5% | 自报 |
-| 2025-09 | Claude Sonnet 4.5 | 77.2% | 自报 |
-| 2025-12 | Claude 4.5 Opus（live-SWE-agent） | 79.2% | 自报，\$0.86/题 |
-| 2026-05 | Claude Opus 4.8 | 88.6% | 自报 |
-| 2026-07 | Claude Opus 5 | 96.0% | 自报（5 次平均） |
-| 2026-09 | Claude Opus 5 | **97.00% ±0.76** | **Vals.ai 独立复跑**（bash-only harness） |
+| 时间    | 系统                                  | 分数             | 口径                                      |
+| ------- | ------------------------------------- | ---------------- | ----------------------------------------- |
+| 2025-02 | Claude 3.7 Sonnet + extended thinking | 62.3%            | 自定义 scaffold 70.3%                     |
+| 2025-05 | Claude Opus 4 / Sonnet 4              | ~72.5%           | 自报                                      |
+| 2025-09 | Claude Sonnet 4.5                     | 77.2%            | 自报                                      |
+| 2025-12 | Claude 4.5 Opus（live-SWE-agent）     | 79.2%            | 自报，\$0.86/题                           |
+| 2026-05 | Claude Opus 4.8                       | 88.6%            | 自报                                      |
+| 2026-07 | Claude Opus 5                         | 96.0%            | 自报（5 次平均）                          |
+| 2026-09 | Claude Opus 5                         | **97.00% ±0.76** | **Vals.ai 独立复跑**（bash-only harness） |
 
 前面那些数字到底在说什么：62.3% → 77.2% → 88.6% → 96%，意思是「修 GitHub issue 这类任务，一年半里成功率从六成出头涨到接近满分」。确实变强了，但**这个涨幅本身要打折看**，原因见下。
 
-**饱和与污染警告（必读）**：第三方核查（benchlm，2026-10-09）指出：收录的 82 个模型里 **76 个是厂商自报、0 个来自榜主或独立运行**；前三名差距不到 1.0 分，顶部严重聚集 —— 这是**饱和**信号。榜主后续审计也发现，高分段仍残留有缺陷或欠规范的测试题。所以接近顶部的分数，读出「谁更强」的能力已经很弱了。
+**饱和与污染警告（必读）**：第三方核查（benchlm，2026-08-09）指出：收录的 82 个模型里 **76 个是厂商自报、0 个来自榜主或独立运行**；前三名差距不到 1.0 分，顶部严重聚集 —— 这是**饱和**信号。榜主后续审计也发现，高分段仍残留有缺陷或欠规范的测试题。所以接近顶部的分数，读出「谁更强」的能力已经很弱了。
 
 ```mermaid
 flowchart LR
@@ -122,13 +122,13 @@ flowchart LR
 
 ### 3.3 成本：agent 的钱主要烧在「重发的上下文」上
 
-| 场景 | 单任务成本（Sonnet 4.6 量级，2026-03 价） |
-| --- | --- |
-| 单文件编辑 | ~\$0.031 |
-| Bug 排查 | ~\$0.089 |
-| PR 代码审查 | ~\$0.062 |
-| 多文件重构 | ~\$0.17 |
-| 端到端新功能 | ~\$0.53 |
+| 场景         | 单任务成本（Sonnet 4.6 量级，2026-03 价） |
+| ------------ | ----------------------------------------- |
+| 单文件编辑   | ~\$0.031                                  |
+| Bug 排查     | ~\$0.089                                  |
+| PR 代码审查  | ~\$0.062                                  |
+| 多文件重构   | ~\$0.17                                   |
+| 端到端新功能 | ~\$0.53                                   |
 
 其他可引用数字：
 
@@ -146,27 +146,27 @@ flowchart LR
 
 ## 4. 核心架构范式
 
-| 范式 | 机制 | Coding 适用性 |
-| --- | --- | --- |
-| **ReAct** | thought→action→observation 交错 | 现代 coding agent 最小内核；缺点是贪心单路径、无回溯 |
-| **Plan-and-Execute** | 先出多步计划，不符时 replan | 跨文件重构有效；bug 根因事前不可知，需高层 plan + 动态 replan 折中 |
-| **Reflexion** | 失败后用自然语言写教训进下次 prompt | 编译/测试报错是免费 reward signal；反思质量上限=模型自诊能力，可能自欺 |
-| **Orchestrator-Worker** | 中央拆子任务、独立上下文 worker | 多文件修改典型模式；但 agent 间通信引入不一致（MetaGPT 失败约 44% 是一致性问题） |
-| **ACI** | 为 LLM 定制薄接口：输出裁剪、报错带提示、强制绝对路径 | Anthropic 实测「改强制绝对路径后模型再没犯过这类错」 |
-| **Context Engineering** | just-in-time 检索、compaction、外置笔记、子代理隔离 | 长时程任务能跑数小时的核心；缺它跑十几轮就 context rot |
-| **Subagent** | 子 agent 独立上下文翻几十文件，只回 1–2k token 摘要 | 复杂研究任务显著优于单 agent；并行写文件用 worktree 隔离 |
+| 范式                    | 机制                                                  | Coding 适用性                                                                    |
+| ----------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **ReAct**               | thought→action→observation 交错                       | 现代 coding agent 最小内核；缺点是贪心单路径、无回溯                             |
+| **Plan-and-Execute**    | 先出多步计划，不符时 replan                           | 跨文件重构有效；bug 根因事前不可知，需高层 plan + 动态 replan 折中               |
+| **Reflexion**           | 失败后用自然语言写教训进下次 prompt                   | 编译/测试报错是免费 reward signal；反思质量上限=模型自诊能力，可能自欺           |
+| **Orchestrator-Worker** | 中央拆子任务、独立上下文 worker                       | 多文件修改典型模式；但 agent 间通信引入不一致（MetaGPT 失败约 44% 是一致性问题） |
+| **ACI**                 | 为 LLM 定制薄接口：输出裁剪、报错带提示、强制绝对路径 | Anthropic 实测「改强制绝对路径后模型再没犯过这类错」                             |
+| **Context Engineering** | just-in-time 检索、compaction、外置笔记、子代理隔离   | 长时程任务能跑数小时的核心；缺它跑十几轮就 context rot                           |
+| **Subagent**            | 子 agent 独立上下文翻几十文件，只回 1–2k token 摘要   | 复杂研究任务显著优于单 agent；并行写文件用 worktree 隔离                         |
 
 ## 5. 典型失败模式
 
-| 失败模式 | 实证 |
-| --- | --- |
-| 错误定位 / 改错文件 | 仓库级定位 File Hit@10 仅约 68% |
-| 多文件不一致 / 跨文件漏改 | 多 agent 失败约 44% 是一致性问题；未合并 PR 平均触碰更多文件 |
-| CI / 测试失败 | 每多一个失败 CI check，合并 odds 约降 15% |
-| 上下文丢失 / context rot | 上下文越长准确召回越差，靠压缩 + 外置记忆对冲 |
-| 幻觉 API / 工具误用 | 与工具集臃肿、文档不清直接相关；相对路径迷路靠强制绝对路径根治 |
-| 循环卡死 | ReAct 单路径贪心 + 错误反思，必须设最大迭代与 stuck 判定 |
-| 测试造假 / 改测试变绿 | 业界广泛报告；测试文件改动须单独标记并告警 |
+| 失败模式                  | 实证                                                           |
+| ------------------------- | -------------------------------------------------------------- |
+| 错误定位 / 改错文件       | 仓库级定位 File Hit@10 仅约 68%                                |
+| 多文件不一致 / 跨文件漏改 | 多 agent 失败约 44% 是一致性问题；未合并 PR 平均触碰更多文件   |
+| CI / 测试失败             | 每多一个失败 CI check，合并 odds 约降 15%                      |
+| 上下文丢失 / context rot  | 上下文越长准确召回越差，靠压缩 + 外置记忆对冲                  |
+| 幻觉 API / 工具误用       | 与工具集臃肿、文档不清直接相关；相对路径迷路靠强制绝对路径根治 |
+| 循环卡死                  | ReAct 单路径贪心 + 错误反思，必须设最大迭代与 stuck 判定       |
+| 测试造假 / 改测试变绿     | 业界广泛报告；测试文件改动须单独标记并告警                     |
 
 **自主边界**：高自主可行的前提是任务边界清晰、有可自动执行的验收信号、改动局部化、环境可沙箱化。因此当前产品形态一律是「人在环里」：agent 自主干活，在 checkpoint/blocker 暂停等人，人保留最终 review 与合并权。
 

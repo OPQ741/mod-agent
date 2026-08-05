@@ -1,0 +1,45 @@
+{
+  // markdownlint-cli2 配置：https://github.com/DavidAnson/markdownlint-cli2
+  // 规则说明：https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+  "config": {
+    // 中文段落普遍为长行，换行交给作者控制（Prettier proseWrap: preserve）
+    "MD013": false,
+    // 允许不同父级下出现同名标题
+    "MD024": { "siblings_only": true },
+    // VitePress 允许行内 HTML（<details>、<br>、<kbd> 等）
+    "MD033": false,
+    // 允许 HTML 前后缺少空行（VitePress 容器/组件场景）
+    "MD022": { "lines_above": 1, "lines_below": 1 },
+    // 文档首行必须是一级标题
+    "MD041": true,
+    // 代码块语言标注：允许空语言（VitePress 中纯文本示例）
+    "MD040": false,
+    // 强调式伪标题在长文档中常用
+    "MD036": false,
+    // 自动链接（裸 URL）在参考来源类文档中常见
+    "MD034": false,
+    // 页内锚点由 VitePress 自定义 slugify 生成（数字开头加下划线、
+    // 标点转横线），与 GitHub 算法不一致；锚点有效性改由
+    // scripts/verify-doc-links.mjs 按 VitePress 规则校验
+    "MD051": false,
+    // 允许多个连续引用块（VitePress 自定义容器旁的引用）
+    "MD028": false,
+    // 标题末尾标点：中文文档常以冒号等收尾
+    "MD026": { "punctuation": ".,;:!?" },
+    // 列表样式不做强制
+    "MD004": false,
+    // 强调符号风格不做强制
+    "MD049": false,
+    "MD050": false,
+  },
+  "ignores": [
+    "node_modules",
+    "**/node_modules/**",
+    "docs/.vitepress/cache/**",
+    "docs/.vitepress/dist/**",
+    ".workbuddy/**",
+    ".research/**",
+    "temp/**",
+    "tmp/**",
+  ],
+}

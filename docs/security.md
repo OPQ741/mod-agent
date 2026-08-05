@@ -55,6 +55,7 @@ flowchart TB
 ### 3.1 沙箱安全与网络过滤的业界实证
 
 **fail-closed（失败即关闭）原则（Devin 官方文档原文，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：当隔离执行环境无法建立时（例如沙箱工具在平台不可用），CLI 应**拒绝启动任务**，而不是降级为裸跑——原文："If `--sandbox` is passed but sandbox resolution fails… the CLI will refuse to start rather than running unsandboxed." 这是「隔离意图永不被静默绕过」的安全底线。
+
 > 举个例子（示意）：你本来要求「必须在沙箱里跑」，结果这台机器没装沙箱工具。错误做法是「算了，直接在本机跑吧」；正确做法是干脆报错退出——宁可任务不跑，也不能偷偷失去隔离。
 
 **网络分级过滤（出处同上）**：
@@ -62,33 +63,39 @@ flowchart TB
 - `allowed_domains` 白名单（空 = 不过滤）、`denied_domains` 黑名单（**优先级更高**）、`network_mode`：`full`（全方法）/ `limited`（仅 GET / HEAD / OPTIONS）；
 - 域名通配：`example.com` 精确、`*.example.com` 任意子域（不含 apex）、`.example.com` 含 apex 与任意子域；
 - 与 [§5](#_5-网络、密钥与外部数据) 的 allowlist 互补：Devin 在本机 loopback 起受控代理，把所有联网请求按名单过滤，连「只能发 GET 不能 POST」都能限制。
+
 > 举个例子（示意）：把 `network_mode` 设成 `limited` 后，agent 想 `curl -X POST` 把数据发到外面也发不出去——连请求方法都被管起来。
 
 **执行权限分三集合（Devin，出处同上）**：
 
 ```json
-{ "permissions": {
+{
+  "permissions": {
     "allow": ["Read(**)", "Exec(git)"],
-    "deny":  ["Exec(sudo)"],
-    "ask":   ["Write(**/.env*)"] } }
+    "deny": ["Exec(sudo)"],
+    "ask": ["Write(**/.env*)"]
+  }
+}
 ```
 
 - `allow` 自动放行 / `deny` 硬拒绝 / `ask` 每次弹确认；规则形如 `Read(...)` / `Write(...)` / `Exec(...)`；
 - 配套开关 `respect_gitignore`：开启后禁止工具读写 gitignored 路径；
 - 项目级可提交（团队共用）+ `*.local.json` gitignore（个人覆盖）分层。
+
 > 通俗地说：`.env*` 这种碰了就是 `ask`（每次问你），`sudo` 这种直接 `deny`（想都别想），`git`、读文件这种安全的标 `allow`（不问）。
 
 **自治等级逐级放权（Factory Droid CLI 参考，出处：https://docs.factory.ai/droid-cli/cli-reference.md ）**：
 
-| 等级 | 用途 | 放权内容 |
-| --- | --- | --- |
-| （默认） | 只读侦察 | 文件读取、git diff、环境检查 |
-| `--auto low` | 安全编辑 | 建 / 改文件、格式化、非破坏命令 |
-| `--auto medium` | 本地开发 | 装依赖、build / test、本地 git commit |
-| `--auto high` | CI/CD 编排 | git push、部署脚本、长时操作 |
-| `--skip-permissions-unsafe` | 仅一次性隔离容器 | 移除全部护栏 |
+| 等级                        | 用途             | 放权内容                              |
+| --------------------------- | ---------------- | ------------------------------------- |
+| （默认）                    | 只读侦察         | 文件读取、git diff、环境检查          |
+| `--auto low`                | 安全编辑         | 建 / 改文件、格式化、非破坏命令       |
+| `--auto medium`             | 本地开发         | 装依赖、build / test、本地 git commit |
+| `--auto high`               | CI/CD 编排       | git push、部署脚本、长时操作          |
+| `--skip-permissions-unsafe` | 仅一次性隔离容器 | 移除全部护栏                          |
 
 官方注记："Only raise access when the environment is safe."——权限跟着环境危险度逐级解锁，默认只读。
+
 > 举个例子（示意）：默认先只让 agent 看仓库；确认这是个干净的隔离容器，才逐步开放改文件、跑测试；要 `git push` 这种对外动作，得升到最高档——绝不一上来就全自动。
 
 **CI / 无人值守的最小面（Claude Code `--bare`，出处：https://code.claude.com/docs/en/headless ）**：CI 与脚本默认推荐 bare 模式——不自动加载 hooks / skills / 自定义命令 / subagent / 插件 / MCP / auto memory / CLAUDE.md，不读本机 OAuth 与钥匙串，必须显式给 API key；需要的设置用 `--settings <file|json>`、MCP 用 `--mcp-config` 显式注入。安全含义：避免「仓库里一份 `.mcp.json` 在你从未信任的文件夹里被静默执行」。
@@ -114,12 +121,12 @@ flowchart TB
 
 四款工具、7 个发现，归为**四种失败模式**：
 
-| # | 失败模式 | 具体表现 | 处置 |
-| --- | --- | --- | --- |
-| 1 | **denylist 沙箱跟不上操作系统** | macOS Seatbelt 的拒绝名单被绕过 | 见厂商回应 |
-| 2 | **工作区配置其实就是可执行代码** | Cursor 的工作区 hook 配置导致非沙箱命令执行（**CVE-2026-48124**，3.0.0 修复）；`.vscode` task 配置绕过 Antigravity Secure Mode | 已修 / 见下 |
-| 3 | **「安全」命令白名单只信命令名、不信参数** | Codex CLI 把 `git show` 列为只读安全命令，实际调用并非只读，可写入攻击者控制的内容 | v0.95.0 修复，OpenAI 支付高额赏金 |
-| 4 | **特权本地守护进程完全在沙箱外** | Docker socket 同时影响 Cursor / Codex / Gemini CLI | 已修 |
+| #   | 失败模式                                   | 具体表现                                                                                                                       | 处置                              |
+| --- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| 1   | **denylist 沙箱跟不上操作系统**            | macOS Seatbelt 的拒绝名单被绕过                                                                                                | 见厂商回应                        |
+| 2   | **工作区配置其实就是可执行代码**           | Cursor 的工作区 hook 配置导致非沙箱命令执行（**CVE-2026-48124**，3.0.0 修复）；`.vscode` task 配置绕过 Antigravity Secure Mode | 已修 / 见下                       |
+| 3   | **「安全」命令白名单只信命令名、不信参数** | Codex CLI 把 `git show` 列为只读安全命令，实际调用并非只读，可写入攻击者控制的内容                                             | v0.95.0 修复，OpenAI 支付高额赏金 |
+| 4   | **特权本地守护进程完全在沙箱外**           | Docker socket 同时影响 Cursor / Codex / Gemini CLI                                                                             | 已修                              |
 
 还有一个特别刁钻的：Git 元数据**不必放在叫 `.git` 的目录里**。攻击者借 `fsmonitor` 触发执行，绕过了 Cursor 基于路径的规则（3.0.0 修复）。
 
@@ -144,13 +151,13 @@ flowchart TB
 
 ```ts
 interface CommandRequest {
-  executable: string;
-  args: string[];
-  cwd: string;                  // 必须位于授权工作区
-  env?: Record<string, string>; // 仅白名单变量
-  timeoutMs: number;
-  networkProfile: "none" | "package_registry" | "approved_domains";
-  reason: string;
+  executable: string
+  args: string[]
+  cwd: string // 必须位于授权工作区
+  env?: Record<string, string> // 仅白名单变量
+  timeoutMs: number
+  networkProfile: "none" | "package_registry" | "approved_domains"
+  reason: string
 }
 ```
 
@@ -167,6 +174,7 @@ interface CommandRequest {
 - `allow` 列表跨层取**并集**；`deny` / `ask` 优先且**立即生效**（不需要信任文件夹）；
 - 团队提交的 `allow` 规则需用户「信任文件夹」后才生效；`deny` 不受此限——即「团队可以放权，但绝不能越权替你解禁」；
 - 个人例外写 `settings.local.json`，自动加进 git exclude，不污染团队。
+
 > 举个例子（示意）：团队在仓库里塞一条「允许跑 npm test」的规则，得你点了「信任这个文件夹」才作数；但团队绝对写不了一条「帮你把 sudo 也允许了」——因为 `deny` 永远压过 `allow`，且个人能在 `settings.local.json` 里加自己的例外。
 
 **命令层的前缀双表（Kilo Code 实证，出处：https://kilo.ai/docs/features/auto-approving-actions ）**：自动执行终端命令用「前缀白名单 + 前缀黑名单」两张表，**黑名单永远优先**——即使白名单写了 `*`（放开全部）也照样拦下；危险前缀（sudo、rm -rf 类）应主动进黑名单；生产 / 敏感数据场景禁止 `*`。
@@ -214,6 +222,7 @@ flowchart TD
 - MCP Server 用最小 OAuth scope，校验来源，必要时独立网络出口；
 - 文件内容、MCP 工具描述、模型输出都不等于可信策略；策略引擎独立判定权限；
 - 所有写入、命令、外部调用都写审计事件，含操作者、任务、工具、参数摘要、审批关联与结果。
+
 > 一条要刻在脑子里的原则：**agent 读到的任何文本（README、MCP 返回、模型自己的输出）都不能拿来当权限依据**。能不能干这件事，只由独立的策略引擎说了算。
 
 ## 6. 安全验收清单
