@@ -1,9 +1,44 @@
 {
   "name": "mod-agent",
   "version": "1.0.0",
-  "description": "TypeScript 实现的 AI Coding Agent CLI",
+  "description": "TypeScript 实现的 AI Coding Agent CLI，形态对标 Claude Code。当前处于设计阶段，仓库主体是 VitePress 文档站。",
   "type": "module",
   "main": "index.js",
+  "license": "ISC",
+  "author": {
+    "name": "OPQ741",
+    "url": "https://github.com/OPQ741"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OPQ741/mod-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OPQ741/mod-agent/issues"
+  },
+  "homepage": "https://opq741.github.io/mod-agent/",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "llm",
+    "cli",
+    "agent",
+    "typescript",
+    "developer-tools"
+  ],
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "packageManager": "npm@10.9.2",
+  "files": [
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "AGENTS.md",
+    "docs",
+    "scripts"
+  ],
   "directories": {
     "doc": "docs"
   },
@@ -21,14 +56,6 @@
     "typecheck": "tsc --noEmit",
     "prepare": "husky"
   },
-  "keywords": [
-    "ai",
-    "coding-agent",
-    "llm",
-    "cli"
-  ],
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",

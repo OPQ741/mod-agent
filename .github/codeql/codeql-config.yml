@@ -1,0 +1,7 @@
+name: javascript-typescript
+queries:
+  - uses: security-extended
+paths-ignore:
+  - "docs/.vitepress/dist/**"
+  - "docs/.vitepress/cache/**"
+  - "node_modules/**"

@@ -1,0 +1,10 @@
+# 代码所有者：GitHub 会用它给匹配路径的 PR 自动指派 review 请求，
+# Copilot Coding Agent 与 Dependabot PR 也依赖这个文件解析 reviewer。
+# 单人阶段全部指向 @OPQ741；引入协作者后按模块拆分。
+
+*                @OPQ741
+/docs            @OPQ741
+/.github         @OPQ741
+/AGENTS.md       @OPQ741
+/CONTRIBUTING.md @OPQ741
+/SECURITY.md     @OPQ741

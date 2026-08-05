@@ -23,10 +23,14 @@ coverage/
 .nyc_output/
 
 # editor / IDE
-.vscode/
+# 团队共享的 .vscode 配置（settings.json / extensions.json）纳入版本管理，
+# 个人 workspace 与状态文件不入库。
 .idea/
 *.swp
 *.swo
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # OS
 .DS_Store

@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "EditorConfig.EditorConfig",
+    "DavidAnson.vscode-markdownlint",
+    "eamodio.gitlens",
+    "github.vscode-github-actions",
+    "ms-vscode.vscode-typescript-next"
+  ]
+}

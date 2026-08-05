@@ -1,0 +1,10 @@
+# .git-blame-ignore-revs
+#
+# 列在此文件中的 commit 会在 `git blame` 时被跳过，用于隔离大规模机械化改动
+# （例如一次全仓库 Prettier 重排、一次 import 路径批量迁移），避免污染代码归属追踪。
+#
+# 本地一次性启用：
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# 用法：发生大格式化后，把该 commit 的完整 40 位 hash 逐行追加到这里，
+# 与格式化提交一起进 PR，评审时不要求逐行 review。

@@ -44,3 +44,13 @@ body:
         - 分支 / commit:
     validations:
       required: true
+  - type: dropdown
+    id: ai_generated
+    attributes:
+      label: 相关改动是否由 AI 工具生成或协助生成？
+      description: 这条信号本身就是 mod-agent 设计阶段的产品输入，请如实选择。
+      options:
+        - 否，全部人工
+        - 部分，人工为主 AI 辅助
+        - 是，主要由 AI 编码工具生成
+        - 不确定

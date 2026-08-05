@@ -1,0 +1,43 @@
+# mod-agent
+
+> TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。当前处于设计阶段，仓库主体是 VitePress 文档站，尚无运行时代码。
+
+## 项目定位
+
+mod-agent 的目标是提供一个可读、可扩展、可审计的编程智能体运行时：读入自然语言编程需求，自主完成「读代码 → 改文件 → 跑测试 → 迭代修复」的闭环，最终产出人可审查的 diff。设计文档以 21 篇源文档组织，覆盖架构、主循环、上下文工程、权限自治、安全边界、模型网关、工具与扩展、观测与评估、Coding Agent 参考等主题。
+
+## 主要文档
+
+- 架构总览：`docs/architecture.md`
+- Agent 主循环：`docs/agent-loop.md`
+- 上下文工程：`docs/context-engineering.md`
+- 权限与自治：`docs/autonomy.md`
+- 系统提示：`docs/system-prompt.md`
+- 安全边界：`docs/security.md`
+- 工具与扩展：`docs/tools-and-extensions.md`
+- 模型网关：`docs/model-gateway.md`
+- Coding Agent 参考：`docs/coding-agents.md`
+- 完整章节索引：见 `docs/index.md`
+
+## 开发命令
+
+- `npm run docs` — 本地预览文档站（http://localhost:5173）
+- `npm run docs:build` — 构建静态产物到 `docs/.vitepress/dist`
+- `npm run lint` — 全量校验：ESLint / markdownlint / 文档链接 / AGENTS 命令 / Prettier
+- `npm run typecheck` — TypeScript 严格模式类型检查
+- `make check` — 一次性跑 lint + typecheck
+
+## 贡献者约定
+
+- 阅读根目录 `AGENTS.md`，它是对所有 AI 编码代理（Codex、Copilot、Cursor、Windsurf、Amp、Devin、Claude Code）统一的仓库操作手册。
+- 编辑 `docs/*.md` 前必读 `AGENTS.md` §2 §5：标题文字逐字不动，技术并列里的 `/` 保留原样。
+- 提交信息遵循 Conventional Commits；分支默认 `master`；只允许 squash 合并。
+
+## 环境要求
+
+- Node.js >= 22
+- npm >= 10
+
+## 许可
+
+ISC，见 `LICENSE`。

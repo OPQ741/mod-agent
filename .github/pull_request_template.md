@@ -20,7 +20,6 @@
 - [ ] `npm run lint` 全绿（含 ESLint / markdownlint / 链接校验 / AGENTS 命令校验 / Prettier）
 - [ ] 已 `git status` 建立基线，未覆盖与本次任务无关的既有改动
 - [ ] 文档改动未修改任何标题文字，交叉链接仍有效
-- [ ] 涉及跨模块取舍或新增依赖时，已在 `adr/` 记录 ADR
 - [ ] 未提交任何密钥、Token、密码等敏感信息
 
 ## 截图或输出示例

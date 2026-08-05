@@ -28,4 +28,4 @@ body:
     id: scope
     attributes:
       label: 影响范围
-      description: 涉及哪些模块或文档？是否属于跨模块的架构决策（可能需要 ADR）？
+      description: 涉及哪些模块或文档？是否跨多个子系统？
