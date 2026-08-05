@@ -10,10 +10,11 @@
   "scripts": {
     "docs": "vitepress dev docs --open",
     "docs:build": "vitepress build docs",
-    "lint": "npm run lint:eslint && npm run lint:md && npm run lint:links && npm run format:check",
+    "lint": "npm run lint:eslint && npm run lint:md && npm run lint:links && npm run lint:agents && npm run format:check",
     "lint:eslint": "eslint .",
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "lint:links": "node scripts/verify-doc-links.mjs",
+    "lint:agents": "node scripts/verify-agents-md-commands.mjs",
     "lint:fix": "eslint . --fix && markdownlint-cli2 --fix \"**/*.md\" && prettier . --write",
     "format": "prettier . --write",
     "format:check": "prettier . --check",

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题私密报告
+    url: https://github.com/OPQ741/mod-agent/security/advisories/new
+    about: 请勿公开报告安全漏洞，参见 SECURITY.md。
+  - name: 使用与讨论
+    url: https://github.com/OPQ741/mod-agent/discussions
+    about: 使用问题、想法交流请走 Discussions（需在仓库启用）。

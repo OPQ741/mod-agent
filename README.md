@@ -77,5 +77,19 @@ fix(tools): 修复并行工具执行的结果顺序错乱
 
 GitHub Actions（`.github/workflows/ci.yml`）在推送和 PR 时自动运行：
 
-1. ESLint / markdownlint / 文档链接 / Prettier 全套校验；
-2. VitePress 文档站构建。
+1. ESLint / markdownlint / 文档链接 / AGENTS.md 命令校验 / Prettier 全套校验；
+2. TypeScript 类型检查（`tsc --noEmit`）；
+3. VitePress 文档站构建。
+
+## 项目治理
+
+| 文件                                       | 作用                                     |
+| ------------------------------------------ | ---------------------------------------- |
+| [AGENTS.md](./AGENTS.md)                   | 给 AI 编码代理看的项目操作手册（跨工具） |
+| [CONTRIBUTING.md](./CONTRIBUTING.md)       | 从本地跑起到提交 PR 的完整流程           |
+| [SECURITY.md](./SECURITY.md)               | 安全漏洞私密报告方式与设计边界           |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 社区行为准则                             |
+| [adr/](./adr)                              | 架构决策记录，记录「为什么这样选」       |
+| [LICENSE](./LICENSE)                       | ISC 许可证                               |
+
+依赖更新由 `.github/dependabot.yml` 自动开 PR；Issue / PR 模板位于 `.github/`。

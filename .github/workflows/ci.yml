@@ -31,8 +31,14 @@ jobs:
       - name: ESLint
         run: npm run lint:eslint
 
-      - name: Markdown & docs links
-        run: npm run lint:md && npm run lint:links
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Markdown, docs links & AGENTS.md commands
+        run: |
+          npm run lint:md
+          npm run lint:links
+          npm run lint:agents
 
       - name: Prettier check
         run: npm run format:check
