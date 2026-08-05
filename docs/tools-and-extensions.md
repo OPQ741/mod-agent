@@ -30,38 +30,84 @@ MCP 是互操作协议，不天然代表可信或安全。每个 MCP Server 单�
 | Server | 外部工具 / 数据服务 | 暴露 Resources（可读数据）/ Prompts（模板化提示）/ Tools（可调用函数）三原语 |
 | Elicitation | Client → Server 反向 | 允许 server 在任务中向用户追问信息，映射为 CLI 提问交互 |
 
+> **版本提示**：上表的 Elicitation、`initialize` 握手、Roots 等机制对应的是 **2025-11-25 及更早**的规范。现行规范为 **2026-07-28**，是自发布以来最大的一次改版，握手与会话已被移除、Elicitation 被 MRTR 取代。详见 [§1.2](#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)。**新代码一律按 2026-07-28 写。**
+
 **MCP 工具安全基线（规范原文，出处同上）**：协议文档明确「Tools represent arbitrary code execution（工具就是任意代码执行）」，且「工具描述、注释等应按不可信处理」，并承认「MCP itself cannot enforce these security principles at the protocol level」——consent / 授权流必须由本 CLI 自己实现：
 
 1. 一个 MCP 工具 = 任意本地代码执行，不能因为它「来自某个 server」就信任；
-2. 调用有副作用的工具前走显式确认（与 §5 审批、agent-loop 的阻塞式校验同源）；
+2. 调用有副作用的工具前走显式确认（与 [§5](#_5-人工审批策略) 审批、agent-loop 的阻塞式校验同源）；
 3. Host 必须让用户理解每个工具干什么再授权。
 
-### 1.1 MCP 连接生命周期：JSON-RPC 握手与工具路由
+### 1.1 MCP 连接生命周期：工具发现、路由与调用
 
-第 1 节的角色模型回答「谁是谁」，这里补「连接怎么建、工具怎么发现、调用怎么路由」。以最常用的 stdio 传输为例，Host 为每个 MCP Server 拉起一个独立子进程，通过标准输入输出跑 JSON-RPC 2.0：
+第 1 节的角色模型回答「谁是谁」，这里补「连接怎么建、工具怎么发现、调用怎么路由」。下面两张图：**第一张是现行规范（2026-07-28）的写法，第二张是已被移除的旧握手**，保留旧图是为了让你在读存量资料和旧 server 时不至于困惑。
+
+**现行（2026-07-28，无状态）**：
 
 ```mermaid
 sequenceDiagram
     participant H as "Host (CLI)"
-    participant C as "Client (连接器)"
-    participant S as "MCP Server (子进程)"
-    H->>S: 启动 stdio 子进程（按需懒加载）
-    C->>S: initialize（协议版本 / 客户端能力）
-    S-->>C: 响应（服务端能力：tools/resources/prompts）
-    C->>S: notifications/initialized（握手完成通知）
-    C->>S: tools/list（发现工具及其 inputSchema）
-    S-->>C: 工具清单
-    Note over C: 重命名为 mcp__<server>__<tool> 并合并进工具池
-    C->>S: tools/call（name + arguments）
-    S-->>C: 结果 / isError（按不可信内容处理）
+    participant S as "MCP Server"
+    H->>S: 启动 stdio 子进程 / 连上 Streamable HTTP
+    H->>S: server/discover（可选，想先摸能力才调）
+    S-->>H: 支持的协议版本与身份
+    H->>S: tools/list（带 Mcp-Method / Mcp-Name 头）
+    S-->>H: 工具清单 + ttlMs 缓存提示（可缓存）
+    Note over H: 重命名为 mcp__<server>__<tool> 并合并进工具池
+    H->>S: tools/call（每个请求自带 _meta：协议版本/客户端信息）
+    S-->>H: 结果 / isError（按不可信内容处理）
+    Note over H,S: 无需握手、无需会话粘性，任意请求可落任意实例
+```
+
+**旧版（≤2025-11-25，已移除，仅供对照）**：
+
+```mermaid
+sequenceDiagram
+    participant H as "Host (CLI)"
+    participant S as "MCP Server"
+    H->>S: 启动 stdio 子进程
+    H->>S: initialize（协议版本 / 客户端能力）
+    S-->>H: 服务端能力
+    H->>S: notifications/initialized（握手完成）
+    H->>S: tools/list
+    S-->>H: 工具清单
+    H->>S: tools/call
+    S-->>H: 结果（依赖 Mcp-Session-Id 粘性会话）
 ```
 
 落地要点：
 
 - **三段式命名**：每个外部工具重命名为 `mcp__<serverName>__<toolName>`，既避免不同 server 同名工具冲突，也让模型与权限规则能精确路由到具体 server；
-- **懒加载 + 失败隔离**：server 可按需启动而非开局全拉起；单个 server 启动失败、握手超时或调用超时，只让它名下的工具不可用，**不得拖垮主进程或其他 server**；连接、发现、调用各设独立超时；
-- **合并进工具池时分区排序**：内置工具按字母序在前、MCP 工具追加在后，不做全局混排——缓存断点设在最后一个内置工具之后，动态挂接的 MCP 工具不影响内置工具部分的前缀缓存命中（见 [system-prompt.md §6](./system-prompt.md)、[model-gateway.md](./model-gateway.md)）；
-- **工具 schema 也要过校验**：server 声明的参数模式在注册时做兼容性校验，畸形 schema 不注册；工具结果一律标记为不可信数据，走 [context-engineering.md §6](./context-engineering.md#6-输入注入与不可信内容) 的注入防护。
+- **懒加载 + 失败隔离**：server 可按需启动而非开局全拉起；单个 server 启动失败、发现超时或调用超时，只让它名下的工具不可用，**不得拖垮主进程或其他 server**；连接、发现、调用各设独立超时；
+- **合并进工具池时分区排序**：内置工具按字母序在前、MCP 工具追加在后，不做全局混排——缓存断点设在最后一个内置工具之后，动态挂接的 MCP 工具不影响内置工具部分的前缀缓存命中（见 [system-prompt.md §6](./system-prompt.md#_6-工具清单如何呈现给模型)、[model-gateway.md](./model-gateway.md)）；
+- **工具 schema 也要过校验**：server 声明的参数模式在注册时做兼容性校验，畸形 schema 不注册；工具结果一律标记为不可信数据，走 [context-engineering.md §6](./context-engineering.md#_6-输入注入与不可信内容) 的注入防护。**注意**：2026-07-28 起 `inputSchema` 支持完整 JSON Schema 2020-12（含 `oneOf` / `anyOf` / `$ref`），校验器不能再假设它是扁平结构。
+
+### 1.2 2026-07-28 规范改了什么（必读，影响所有 MCP 代码）
+
+这是 MCP 自发布以来最大的一次改版，**不是增量更新**。如果你在 2026-07 之前学过 MCP，有一部分认知已经是历史了。
+
+| 变化 | 旧（≤2025-11-25） | 新（2026-07-28） | 对 mod-agent 的影响 |
+| --- | --- | --- | --- |
+| **协议内核** | 双向有状态，需 `initialize`/`initialized` 握手 + `Mcp-Session-Id` 粘性会话 | **无状态**：握手与会话头一并废除（SEP-2567/2575），每个请求在 `_meta` 自带协议版本、客户端身份与能力 | server 可跑在普通轮询负载均衡后，**无需共享会话存储** |
+| **需要跨调用状态时** | 藏在 transport 的会话里 | server 从工具里**签发一个显式 handle**，模型把它当普通参数传回来 | handle 对模型可见、可审计，比藏在传输层好 |
+| **路由** | 网关要解析 JSON body | 必带 `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` 头（SEP-2243） | 网关、限流、WAF **只看头部**就能路由和鉴权 |
+| **服务端反向请求** | `sampling/createMessage`、`elicitation/create`、`roots/list`，需常开双向流 | **MRTR（多往返请求，SEP-2322）**：返回 `resultType: "input_required"` + `inputRequests`，客户端带 `inputResponses` 重试原调用 | 审批/追问交互改造为「返回问题 → 客户端补答案重试」 |
+| **列表结果** | 每次重连重新拉 | 带 **ttl 与缓存范围 + 确定性顺序** | 可缓存工具目录，**重连后上游 prompt cache 保持稳定**（直接利好 [§1.1](#_1-1-mcp-连接生命周期-工具发现、路由与调用) 的缓存断点设计） |
+| **长任务** | 需保持 HTTP 连接打开 | **Tasks 扩展（SEP-2663）**：返回 task handle，客户端用 `tasks/get` / `tasks/update` / `tasks/cancel` 跟踪 | 数小时级任务不再占连接 |
+| **UI** | 无 | **MCP Apps 扩展（SEP-1865）**：server 可返回沙箱 iframe 里的交互 HTML | 工具可自带表单/面板 |
+| **错误码** | 资源缺失返回自定义 `-32002` | 改为 JSON-RPC 标准 **`-32602`** | 任何硬编码匹配 `-32002` 的代码会静默漏判 |
+| **废弃（12 个月最短窗口，SEP-2596）** | Roots / Sampling / Logging 可用 | 三者**废弃**，分别改用工具参数或资源 URI、直接调 LLM 厂商 API、stderr 或 OpenTelemetry；HTTP+SSE 传输也废弃，转 Streamable HTTP | 别在新代码里用它们；用了就当作已知搬迁债务 |
+
+**治理归属变了，这点在选型评审时会被问到**：Anthropic 已于 **2025-12-09 把 MCP 捐给 Linux 基金会旗下的 Agentic AI Foundation（AAIF）**，创始成员包括 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。**结论：MCP 不再是单一厂商的赌注**，协议被弃的长期风险显著下降。
+
+规模参考：Tier 1 SDK 月下载接近 5 亿次，TypeScript 与 Python SDK 累计下载各破 10 亿。
+
+Client 侧兼容清单（落到实现）：
+
+- 本地 / 私有 server 用 **stdio**；远端共享 server 用 **Streamable HTTP**（SSE 已是兼容回退，不是推荐）；
+- 优先用官方或厂商维护的 server，其次才自建；自建时把工具面做到最窄，写权限单独设闸；
+- 信任一个 server 之前，先跑一次低成本健康检查；
+- 一次性 HTTP 调用、或「包一个巨大通用 wrapper」的场景，**不要用 MCP**，直接写个简单工具更合适。
 
 ## 2. 工具描述契约（ACI）
 
@@ -134,11 +180,11 @@ flowchart LR
 1. **工具查找**：按名解析，找不到就回 `Unknown tool` 作为工具结果（不抛异常）；
 2. **输入验证（两阶段）**：先做低成本的 Zod schema 校验（字段类型），再做业务校验（如 `edit_file` 的待替换串是否唯一、配置文件改完是否仍是合法 JSON）——先做便宜的检查，减少无谓磁盘 I/O；
 3. **并行启动**：Pre-Tool Hook 与命令安全分类器**同时启动**，各耗时几十到几百毫秒，并行化压低权限判定总延迟；
-4. **权限检查**：Hook → 工具自带 `checkPermissions` → 规则引擎 → 分类器 → 交互式确认，顺序裁决（见 §5 与 [security.md](./security.md)）；
+4. **权限检查**：Hook → 工具自带 `checkPermissions` → 规则引擎 → 分类器 → 交互式确认，顺序裁决（见 [§5](#_5-人工审批策略) 与 [security.md](./security.md)）；
 5. **执行**：在沙箱内运行，支持流式进度回调（长命令、多文件任务可回报进度）；
-6. **结果处理**：标准化、裁剪；超过 `maxResultSizeChars` 的**大结果落盘**，模型只收到「路径 + 短预览 + 用 read 取回全文」的指示（与 [context-engineering.md §5](./context-engineering.md#5-压缩compaction与外置记忆) 的分层裁剪衔接）；
+6. **结果处理**：标准化、裁剪；超过 `maxResultSizeChars` 的**大结果落盘**，模型只收到「路径 + 短预览 + 用 read 取回全文」的指示（与 [context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆) 的分层裁剪衔接）；
 7. **Post-Tool Hook**：可向上下文追加事实或替换输出（如把 stdout 里的密钥打码）；
-8. **返回 `tool_result`**：成功或失败都以数据形式回灌模型（见 [agent-loop.md §2.3](./agent-loop.md#23-工具错误是数据不是异常最轻的自修复)）。
+8. **返回 `tool_result`**：成功或失败都以数据形式回灌模型（见 [agent-loop.md §2.3](./agent-loop.md#_2-3-工具错误是「数据」-不是异常-最轻的自修复)）。
 
 > 每个工具还可自带两类渲染：`prompt()` 向系统提示词注入该工具的专属使用指南（内聚于工具），`renderToolUse / renderToolResult` 决定它在 TUI 里怎么展示——新增工具无需改全局渲染。
 
@@ -148,9 +194,9 @@ flowchart LR
 
 - 不常用工具打 `deferred` 标记，下发时**只给名字、不给完整 schema**；系统提示词里告知模型「这些工具可以通过 `tool_search` 按需激活」；
 - 模型需要时调用 `tool_search`（按名字 / 关键词检索），匹配到的工具被加入「已激活集合」，**下一次模型请求**才带上其完整 schema；
-- 典型例子是 `enter_plan_mode` / `exit_plan_mode`（见 [agent-loop.md §3.2](./agent-loop.md#32-plan-mode-的落地只读契约--计划文件--审批四选项)）：只在用户要规划时才值得占 schema。
+- 典型例子是 `enter_plan_mode` / `exit_plan_mode`（见 [agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）：只在用户要规划时才值得占 schema。
 
-这与 §6 Skills 的「常驻只放 frontmatter 摘要、正文按需加载」是同一思路：**把能力的「目录」给模型，把「详情」推迟到真正使用的时刻**。
+这与 [§6](#_6-skills-·-工程流程复用) Skills 的「常驻只放 frontmatter 摘要、正文按需加载」是同一思路：**把能力的「目录」给模型，把「详情」推迟到真正使用的时刻**。
 
 ### 2.4 并行工具执行
 
@@ -158,7 +204,7 @@ flowchart LR
 
 - 并发安全判定**按参数而非按工具**：`isConcurrencySafe(input)` 接收本次入参——同一个 shell 工具，对 `ls` 判只读、对 `rm` 判非并发，比给整个工具贴标签精确；
 - 调度规则：**有非并发安全工具在执行时，它独占执行；只存在并发安全工具时可并行**，并设并发上限（如 10）；
-- 与流式配合：流式响应中某个只读工具的参数 JSON 一旦完整（`content_block_stop`）就提前开跑（见 [agent-loop.md §2.4](./agent-loop.md#24-流式窗口里提前执行工具)）；对不支持「工具 block 级」流式事件的后端，则把**连续的并发安全工具分组**用 `Promise.all` 并行执行；
+- 与流式配合：流式响应中某个只读工具的参数 JSON 一旦完整（`content_block_stop`）就提前开跑（见 [agent-loop.md §2.4](./agent-loop.md#_2-4-流式窗口里提前执行工具)）；对不支持「工具 block 级」流式事件的后端，则把**连续的并发安全工具分组**用 `Promise.all` 并行执行；
 - 混合序列要保持语义：`[读, 读, 写, 读]` 被切成 `[读‖读] → [写] → [读]` 三个批次，写操作前后的读不会跨越写操作并行，避免读到中间态。
 
 典型收益：模型一轮读 3–5 个文件时，并行通常带来 2–3 倍的提速，且文件读取（毫秒级）几乎能完全藏进模型流式生成（数秒到数十秒）的窗口里。
@@ -221,7 +267,7 @@ interface ToolExecutionResult<T = unknown> {
 
 - 另设「主开关」一键全开 / 全关，便于在敏感代码与快速开发之间切换；
 - 工作区外读写、受保护文件写、删除——各自再独立标「极高」并默认关闭；
-- 自动批准与快照是**捆绑设计**：单独放开 auto-approve 而无每步快照等于裸奔（见 [code-editing.md](./code-editing.md) §3）；官方同样警告 auto-approve 可能造成数据丢失 / 文件损坏。
+- 自动批准与快照是**捆绑设计**：单独放开 auto-approve 而无每步快照等于裸奔（见 [code-editing.md §3](./code-editing.md#_3-工作区隔离与用户变更保护)）；官方同样警告 auto-approve 可能造成数据丢失 / 文件损坏。
 
 **命令执行 = 前缀白名单 + 前缀黑名单，且黑名单优先级最高**（出处同上）：
 
@@ -248,6 +294,42 @@ interface ToolExecutionResult<T = unknown> {
 | **Workflow / 状态机** | 程序强制执行的可靠流程 | 必须审批、测试失败最多修两轮、取消后不再跑命令 |
 
 安全约束不能只写在 Skill 文本里：Skill 可以建议，Policy 与状态机负责强制。
+
+### 6.0 Agent Skills 已是一个开放标准（2026 核实）
+
+`SKILL.md` 这套「一个目录 + 一个 Markdown 文件」的格式，已经不只是某家产品的功能，而是**由 Anthropic 提出并开源、被大量 agent 产品采用的开放标准**（出处：https://skill.md ）。这一点决定了 mod-agent 该怎么选：直接跟标准，而不是自造一套。
+
+**格式小到不能再小**：一个目录 + `SKILL.md`（YAML frontmatter + Markdown 正文）。frontmatter 只有两个必需字段：
+
+| 字段 | 必需 | 约束 |
+| --- | --- | --- |
+| `name` | 是 | 1–64 字符，仅小写字母、数字、连字符；无首尾连字符、无连续连字符；**必须与父目录名一致** |
+| `description` | 是 | 1–1024 字符，非空；须同时说清**做什么**和**何时用**，并带上便于匹配的关键词 |
+| `license` | 否 | 许可证名或指向 bundled 许可证文件 |
+| `compatibility` | 否 | ≤500 字符，说明环境要求（目标产品、系统包、网络） |
+| `metadata` | 否 | 字符串键值映射，给标准未定义的属性用 |
+| `allowed-tools` | 否 | 空格分隔的预批准工具串；**规范标为实验性**，各实现支持度不一 |
+
+目录约定（可选）：`scripts/`（可执行代码）、`references/`（按需加载的文档）、`assets/`（模板与静态资源）。正文无任何格式限制，规范建议写清：分步指令、输入输出示例、常见边界情况，并建议把过长的正文拆到被引用的文件里——因为**正文一旦激活就整体进入上下文**。
+
+**真正让这套格式好用机制是「渐进披露」三段**，也是所有实现唯一的共同行为：
+
+```mermaid
+flowchart LR
+    D["1 发现<br/>启动只加载 name + description<br/>约 50–100 token/个"] --> A["2 激活<br/>任务匹配上才读正文"]
+    A --> E["3 执行<br/>脚本/参考按需再读"]
+    E -.->|"未命中则永不加载"| N["其余技能零成本躺在磁盘上"]
+    style D fill:#e7f1ff
+    style N fill:#f5f5f5
+```
+
+这张图在说什么：一个团队可以装几十个技能，平时只付几十个「名字 + 一句话」的 token 成本。这也意味着 **`description` 是整份文件里权重最高的字段**——它是模型在做决定前唯一能看到的文字：写得太模糊，技能永远不会触发；写得太宽泛，技能会在不该触发的时候乱触发。
+
+规模与落地：规范的客户端展示页列出 **46 个产品**支持，包括 Claude Code、ChatGPT/Codex、Cursor、GitHub Copilot、VS Code、Gemini CLI、OpenHands、Goose、Amp 等。安装路径的**通用位置是项目根的 `.agents/skills/`**，Claude Code 另扫 `.claude/skills/`（个人 `~/.claude/skills/`、项目 `.claude/skills/`）。规范建议正文 <5000 token / <500 行。
+
+**要清醒的边界**：规范**只定义了目录里放什么**，没有定义「目录放哪」「重名怎么解」「遇到没见过的 frontmatter 字段怎么办」。跨 agent 移植时坏掉的正是这三件事——所以 [§6.3](#_6-3-选择与版本管理) 要求自己维护 `id` / `version` / `content_hash`，不要指望标准替你解决。
+
+**安全（规范原文强调）**：只从可信来源装技能。恶意技能可以让 agent 以与其声称目的不符的方式调用工具或执行代码，造成数据外泄或未授权访问。启用前需审计 `SKILL.md` **及其所有附带文件**（`scripts/`、图片、资源），重点看：异常的网络调用、与声称目的不符的文件访问模式。**从外部 URL 取数**的技能风险尤其高——即使技能本身可信，它的外部依赖也可能随时间变坏。把装技能当成装软件来对待。
 
 ### 6.1 Skill 文件结构
 
@@ -302,7 +384,7 @@ my-skill/
 | **inline（默认）** | 把展开后的 prompt 直接注入当前对话，由主 agent 继续 | 一两步、不污染上下文的轻量流程（如规范一次提交信息） |
 | **fork** | 派生一个**独立子 agent**，以技能 prompt 为其系统提示、按 `allowed-tools` 白名单收敛工具，单独跑完只回传最终结果 | 需要多轮工具调用、会读很多文件的流程（如代码审查）——避免这些中间过程污染主对话 |
 
-fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制；未指定时至少摘除 `agent` / 子代理派生工具以**防止递归**；fork 出去的子 agent 必须继承主 agent 的权限模式（不能借 fork 提权，见 [verification-and-multiagent.md](./verification-and-multiagent.md) 与 [autonomy.md §3.5](./autonomy.md#35-权限必须传播给子代理)）。
+fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制；未指定时至少摘除 `agent` / 子代理派生工具以**防止递归**；fork 出去的子 agent 必须继承主 agent 的权限模式（不能借 fork 提权，见 [verification-and-multiagent.md](./verification-and-multiagent.md) 与 [autonomy.md §3.5](./autonomy.md#_3-5-权限必须传播给子代理)）。
 
 > 技能发现遵循「项目级覆盖用户级」（先加载用户目录、再加载项目目录，同名以项目为准）；启动时只载入 frontmatter，正文调用时才读取。技能清单也要受 token 预算约束：预算充足时全量展示描述，紧张时保留内置常用技能的完整描述、其余降级为仅列名称。
 
@@ -357,5 +439,5 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 
 - **MVP 先做上表 6 个事件 + 阻断/追加/替换三类决策**，覆盖 90% 场景；其余事件按真实需求再补；
 - **Hook 是「确定性扩展」，比让模型临场改行为可靠**——它是用户/组织在不写代码的前提下插进主循环的确定性逻辑；
-- Hook 与 Auto Mode 的 Stop hook 是同一套引擎：`/goal` 本质就是封装了一个会话级 Stop hook（见 [autonomy.md §1.5](./autonomy.md)）；
-- CI/无人值守默认不自动加载仓库自带 hooks（`--bare`，见 [security.md §3](./security.md)），防止恶意仓库借 hook 执行任意代码。
+- Hook 与 Auto Mode 的 Stop hook 是同一套引擎：`/goal` 本质就是封装了一个会话级 Stop hook（见 [autonomy.md §1.5](./autonomy.md#_1-5-真实-claude-code-证据-goal-其实是-stop-hook-的封装)）；
+- CI/无人值守默认不自动加载仓库自带 hooks（`--bare`，见 [security.md §3](./security.md#_3-沙箱基线)），防止恶意仓库借 hook 执行任意代码。

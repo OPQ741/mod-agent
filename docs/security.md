@@ -61,7 +61,7 @@ flowchart TB
 
 - `allowed_domains` 白名单（空 = 不过滤）、`denied_domains` 黑名单（**优先级更高**）、`network_mode`：`full`（全方法）/ `limited`（仅 GET / HEAD / OPTIONS）；
 - 域名通配：`example.com` 精确、`*.example.com` 任意子域（不含 apex）、`.example.com` 含 apex 与任意子域；
-- 与 §5 的 allowlist 互补：Devin 在本机 loopback 起受控代理，把所有联网请求按名单过滤，连「只能发 GET 不能 POST」都能限制。
+- 与 [§5](#_5-网络、密钥与外部数据) 的 allowlist 互补：Devin 在本机 loopback 起受控代理，把所有联网请求按名单过滤，连「只能发 GET 不能 POST」都能限制。
 > 举个例子（示意）：把 `network_mode` 设成 `limited` 后，agent 想 `curl -X POST` 把数据发到外面也发不出去——连请求方法都被管起来。
 
 **执行权限分三集合（Devin，出处同上）**：
@@ -92,6 +92,49 @@ flowchart TB
 > 举个例子（示意）：默认先只让 agent 看仓库；确认这是个干净的隔离容器，才逐步开放改文件、跑测试；要 `git push` 这种对外动作，得升到最高档——绝不一上来就全自动。
 
 **CI / 无人值守的最小面（Claude Code `--bare`，出处：https://code.claude.com/docs/en/headless ）**：CI 与脚本默认推荐 bare 模式——不自动加载 hooks / skills / 自定义命令 / subagent / 插件 / MCP / auto memory / CLAUDE.md，不读本机 OAuth 与钥匙串，必须显式给 API key；需要的设置用 `--settings <file|json>`、MCP 用 `--mcp-config` 显式注入。安全含义：避免「仓库里一份 `.mcp.json` 在你从未信任的文件夹里被静默执行」。
+
+### 3.2 「沙箱没被打破，人却出来了」：2026 年最值得记住的一次实证
+
+这一节是整篇文档里最该读的一段。它推翻了一个很自然的假设：**「只要沙箱结实，agent 就出不来」是错的。**
+
+Pillar Security 在 2026-07-20 发布「Week of Sandbox Escapes」系列，在 **Cursor、OpenAI Codex CLI、Google Gemini CLI、Antigravity** 四款主流工具上复现了 7 个绕过。关键在于：**agent 全程待在沙箱里、每一条规则都遵守**，它只是写了一个文件 —— 沙箱外某个受信任的程序稍后读、执行或扫描了这个文件，逃逸就自行完成了。
+
+```mermaid
+flowchart TB
+    PJ["prompt injection<br/>藏在 README / issue / 依赖 / diff 里"] --> AG["agent 在沙箱内<br/>完全遵守规则地写一个文件"]
+    AG --> W["工作区里的一个普通文件<br/>hook 配置 / venv 解释器 / .git 元数据 / task 配置"]
+    W --> OUT["沙箱外的受信任程序<br/>Python 扩展 · Git 集成 · VS Code 任务 · hook 引擎"]
+    OUT --> HOST["宿主机上执行了命令"]
+    style PJ fill:#ff6b6b,color:#fff
+    style HOST fill:#ff6b6b,color:#fff
+    AG -. "agent 从不越界<br/>却改写了别人未来的输入" .-> W
+```
+
+这张图在说什么：红色两头都不是 agent 直接干的。agent 只是「写了个文件」，但那个文件恰好是外面某个程序的输入。**攻击者拿下的不是沙箱，是沙箱外程序的输入源。**
+
+四款工具、7 个发现，归为**四种失败模式**：
+
+| # | 失败模式 | 具体表现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | **denylist 沙箱跟不上操作系统** | macOS Seatbelt 的拒绝名单被绕过 | 见厂商回应 |
+| 2 | **工作区配置其实就是可执行代码** | Cursor 的工作区 hook 配置导致非沙箱命令执行（**CVE-2026-48124**，3.0.0 修复）；`.vscode` task 配置绕过 Antigravity Secure Mode | 已修 / 见下 |
+| 3 | **「安全」命令白名单只信命令名、不信参数** | Codex CLI 把 `git show` 列为只读安全命令，实际调用并非只读，可写入攻击者控制的内容 | v0.95.0 修复，OpenAI 支付高额赏金 |
+| 4 | **特权本地守护进程完全在沙箱外** | Docker socket 同时影响 Cursor / Codex / Gemini CLI | 已修 |
+
+还有一个特别刁钻的：Git 元数据**不必放在叫 `.git` 的目录里**。攻击者借 `fsmonitor` 触发执行，绕过了 Cursor 基于路径的规则（3.0.0 修复）。
+
+**对 mod-agent 的四条硬结论**：
+
+1. **别用 denylist 做主防线**。名单永远追不上操作系统。默认拒绝（allowlist）+ 策略引擎判定才是主轴 —— 这正是 [§4.1](#_4-1-配置优先级与权限规则合并-claude-code-settings-实证-出处-https-code-claude-com-docs-en-settings)「黑名单永远优先」之外还必须补的另一半。
+2. **「命令白名单」必须连参数一起判**。只匹配 `executable` 字段是不够的：`git show` 可以是读，`git show "..."` 带上特定参数就能写。`CommandRequest` 里 `args` 是数组而非字符串，就是为了能被逐项检查。
+3. **把「agent 能写」和「外部程序会读」的交集当成真正的攻击面**。工作区里的 hook 配置、IDE 任务配置、venv 解释器路径、`.git` 元数据 —— 这些**看着像数据、实则是代码**的位置要单独列一份高危清单。
+4. **沙箱外的特权守护进程（Docker socket、SSH agent、云凭证目录）绝不能暴露** —— [§3](#_3-沙箱基线) 基线里那条「不挂载 Docker Socket」就是这么来的。
+
+> 一句话记住它：**「If an agent gets to write the future inputs of systems, it was never sandboxed in the first place.」**（如果一个 agent 能写系统未来的输入，那它从来就没被真正沙箱化过。—— Pillar Security）
+
+**厂商反应本身也是一条经验**：Google 把两个 Antigravity 发现降级为「其他有效漏洞」、判定难以利用因而未修补；Pillar 的反驳是 ——「难利用」之所以成立，是因为需要开发者信任一个被投毒的仓库，而**信任陌生仓库恰恰是这类 agent 引入的日常风险**。换句话说，别把「需要受害者先上当」当成不算漏洞的理由。
+
+**同类发现的延续**：Cymulate 在 2026-04 已在 Claude Code / Gemini CLI / Codex CLI 上命名过同一模式「Configuration-Based Sandbox Escape」。到 2026-08，Adversa AI 汇总中出现更重的一类：零点击 prompt injection 逃逸终端沙箱并**覆写沙箱辅助二进制** —— 这意味着光验证 agent 行为不够，还得做**沙箱组件自身的二进制完整性校验**。
 
 **agent 产出的工作流默认不自动跑（GitHub Copilot，出处：https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ）**：Copilot 云端代理 push 后，GitHub Actions **默认不自动执行**——因为 workflow 可能有权限访问敏感密钥，而 agent 可能改过 `.github/workflows/`；需人亲眼看过改动后手动点「Approve and run workflows」。凡 agent 改动涉及工作流定义 / 密钥读取路径时，评审界面显式提示。
 
@@ -130,7 +173,7 @@ interface CommandRequest {
 
 ### 4.2 单次动作的判定管线（fail-closed）
 
-静态规则（§4.1 合并出的 allow / deny / ask 集合）回答「预先怎么配」，这里回答「模型真的发起一个动作时，按什么顺序判」。整个管线默认安全：任何一环拿不准，结果都落在「问人」而非「放行」。
+静态规则（[§4.1](#_4-1-配置优先级与权限规则合并-claude-code-settings-实证-出处-https-code-claude-com-docs-en-settings) 合并出的 allow / deny / ask 集合）回答「预先怎么配」，这里回答「模型真的发起一个动作时，按什么顺序判」。整个管线默认安全：任何一环拿不准，结果都落在「问人」而非「放行」。
 
 ```mermaid
 flowchart TD
@@ -160,9 +203,9 @@ flowchart TD
 - **会话白名单**：用户在确认框可选择「本会话对相同参数放行」，记录参数 hash，仅在本次会话有效、不写回配置；
 - **拒绝追踪**：自动模式下连续被拒（如 3 次）回落到交互式确认，累计拒绝达上限（如 20 次）中止任务，防止模型反复硬闯；
 - **确认竞速**：UI 对话框、Pre-Tool Hook、Auto 分类器三者并发时，以**首个确定结论**生效且**人类意图优先**——用户一旦操作，分类器结论作废，并设防误触宽限期；
-- **权限随子代理传播**：plan / auto 等模式强制被派生的子代理继承，不能借子代理提权（见 [autonomy.md §3.5](./autonomy.md#35-权限必须传播给子代理)、[verification-and-multiagent.md §5.4](./verification-and-multiagent.md#54-子-agent-的实现模式一个-agent-类配置不同)）。
+- **权限随子代理传播**：plan / auto 等模式强制被派生的子代理继承，不能借子代理提权（见 [autonomy.md §3.5](./autonomy.md#_3-5-权限必须传播给子代理)、[verification-and-multiagent.md §5.5](./verification-and-multiagent.md#_5-5-子-agent-的实现模式-一个-agent-类-配置不同)）。
 
-分类器如何脱敏、两段式快慢路径与 fail-closed 细节见 [autonomy.md §3](./autonomy.md#3-动作自动批准auto-mode)。
+分类器如何脱敏、两段式快慢路径与 fail-closed 细节见 [autonomy.md §3](./autonomy.md#_3-动作自动批准-auto-mode)。
 
 ## 5. 网络、密钥与外部数据
 
@@ -184,4 +227,8 @@ flowchart TD
 - [ ] 拒绝审批后不会继续执行该动作；
 - [ ] 取消任务后不再启动新命令；
 - [ ] 多任务之间无目录、凭证、事件、产物越权；
-- [ ] 通过故障注入验证恢复能力：超时、重复消息、Worker 崩溃、队列重复投递。
+- [ ] 通过故障注入验证恢复能力：超时、重复消息、Worker 崩溃、队列重复投递；
+- [ ] **命令白名单按「程序 + 参数」判定**，而非只匹配程序名（[§3.2](#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证) 失败模式 3）；
+- [ ] **「看着像数据、实则是代码」的位置有独立高危清单**：工作区 hook 配置、IDE task 配置、venv 解释器、`.git` 元数据、CI 配置（[§3.2](#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证) 失败模式 2）；
+- [ ] 沙箱外特权守护进程（Docker socket / SSH agent / 云凭证目录）确认不可达（[§3.2](#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证) 失败模式 4）；
+- [ ] 沙箱辅助二进制自身有完整性校验，不被 agent 覆写。

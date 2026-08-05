@@ -42,6 +42,25 @@ flowchart LR
 - `edit`：允许工作区文件变更，验证后等待人审阅；
 - `autopilot`：在明确权限策略与预算内自动循环修复，仍不能跳过强制审批点。
 
+四档模式的差别，本质上是「agent 的手能伸多远」：
+
+```mermaid
+flowchart LR
+    ASK["ask<br/>只读分析"] --> PLAN["plan<br/>探索 + 出计划"]
+    PLAN --> EDIT["edit<br/>可改文件 + 验证"]
+    EDIT --> AUTO["autopilot<br/>自动循环修复"]
+    ASK -.->|"禁止写文件<br/>禁止有副作用的命令"| X1["只能看"]
+    PLAN -.->|"不改文件"| X2["只能想"]
+    EDIT -.->|"改完等人审"| X3["能动手 · 但不自合"]
+    AUTO -.->|"预算 + 强制审批点照旧"| X4["能连跑 · 但撞线必停"]
+    style ASK fill:#d4edda
+    style PLAN fill:#d4edda
+    style EDIT fill:#fff3cd
+    style AUTO fill:#ff6b6b,color:#fff
+```
+
+这张图在说什么：越往右，agent 的手伸得越远，但**每一档都保留了「人」这个终点**。注意最右的 autopilot 是红色——**它也不是无边界的**：预算上限和强制审批点照样生效，只是省掉了中间的逐次确认。
+
 默认模式应为 `plan` 或 `edit`，而不是无边界全自动。**人与管理员的授权范围，优先级永远高于模型提出的动作。**
 
 举个例子（示意）：你说「看看登录页为什么偶发报错」——用 `ask`，它只查不改；说「把这个报错修了」——用 `edit`，它改完把 diff 给你审；说「这一串重构你自己连跑几轮」——才上 `autopilot`，且预算和强制审批点照旧生效。

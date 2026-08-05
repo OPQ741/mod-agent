@@ -22,6 +22,34 @@
 | 成员位置 | 同一会话内 | 可跨会话、跨机器 |
 | 核心风险 | 协调正确性 | 跨会话越权 / 权限洗白 |
 
+两种关系的形状差异，一眼就能看出来：
+
+```mermaid
+flowchart TB
+    subgraph MS["主从编排：树形，叶子不通气"]
+        direction TB
+        M["主 Agent"] --> L1["子 A"]
+        M --> L2["子 B"]
+        M --> L3["子 C"]
+        L1 -.->|只回传| M
+        L2 -.->|只回传| M
+        L3 -.->|只回传| M
+    end
+    subgraph TM["对等组队：有 lead，但成员可横向互发"]
+        direction TB
+        T["lead"] --> P1["teammate 1"]
+        T --> P2["teammate 2"]
+        T --> P3["teammate 3"]
+        P1 <-->|"SendMessage"| P2
+        P2 <-->|"SendMessage"| P3
+        P3 <-->|"SendMessage"| P1
+    end
+    style MS fill:#f5f5f5
+    style TM fill:#e7f1ff
+```
+
+这张图在说什么：左边不管多复杂都是一棵树，信息只往上走；右边多了一圈横向箭头。**这一圈横向箭头就是全部新增风险的来源**——本节的表格和后面 [§4](#_4-别的会话不携带你的用户权威) 的所有规则，都是在给这些横线装护栏。
+
 ## 2. 一个 team 就是一个共享任务列表
 
 一个 team 是什么？答案直白到一句话：**Team = TaskList，teams 跟任务列表一一对应**。建一个 team 就是建一个任务列表，落盘是两样东西：
@@ -29,7 +57,7 @@
 - `~/.claude/teams/{team-name}/config.json`——团队配置，记成员名册；
 - `~/.claude/tasks/{team-name}/`——任务列表目录，放这个团队的所有任务。
 
-团队没有为协作另造一套底座，而是直接复用已有的任务系统原语：共享任务、`owner` 字段、认领和标记完成。真正新增的，只是一层**寻址**（§3 的四种 `to`）和一层**跨会话记忆同步**（§5）。好处是团队每一步——建了哪个队、谁领了哪个任务、谁标了完成——都自动落进任务系统可追溯的记录里。
+团队没有为协作另造一套底座，而是直接复用已有的任务系统原语：共享任务、`owner` 字段、认领和标记完成。真正新增的，只是一层**寻址**（[§3](#_3-sendmessage-普通输出别人看不见-必须显式发) 的四种 `to`）和一层**跨会话记忆同步**（[§6](./agent-teams.md#_6-共享记忆-会同步、会解冲突、会跳过密钥)）。好处是团队每一步——建了哪个队、谁领了哪个任务、谁标了完成——都自动落进任务系统可追溯的记录里。
 
 ### 2.1 七步用法
 
@@ -50,6 +78,18 @@
 - **不打架地领活**：任务列表是共享的，一个 teammate 干完手头的，就去查 `TaskList`、按任务 ID 顺序认领还没人领的任务，卡住了通知 team lead；
 - **私聊有摘要**：队友之间可私下发消息（peer DM），但私聊摘要会进 team lead 的 idle 通知——lead 看得到「他俩在协作」，但读不到私聊全文。
 
+**一个完整的例子（示意）**：你说「给支付模块加退款功能，顺便把所有调用点都查一遍」。
+
+1. `TeamCreate` 建队 → 自动生成一份共享任务列表；
+2. `Task` 加三条任务：改退款逻辑、查调用点、补测试；
+3. `Agent` 带 `team_name` + `name="researcher"` 派一个只读成员，带 `name="implementer"` 派一个全权成员；
+4. `TaskUpdate` 把「查调用点」的 `owner` 设成 `researcher`，把「改退款逻辑」设成 `implementer`；
+5. `researcher` 干完标 completed，然后**自己去查 `TaskList` 认领还没人领的「补测试」**——不需要你再指挥一次；
+6. 中途 `implementer` 发现退款要动数据库 schema，用 `SendMessage` 发给 `researcher`：「你那边查到有别的模块也在读这张表吗？」——这就是横向互发；
+7. 两个都干完、自动转 idle，你发 `SendMessage` 带 `shutdown_request` 关队。
+
+注意第 5 步：**成员自己认领任务**是团队模式和主从模式最实际的区别——主从模式下，子 agent 干完就退场，不会自己去领下一个活。
+
 ### 2.3 演进：从显式建队到隐式团队
 
 当前版本里，`TeamCreate` / `TeamDelete` 不再作为常规工具摆出来，取而代之的是**每个会话默认自带一支 implicit team**：Agent 工具的 `team_name` 参数被标成「Deprecated; ignored. The session has a single implicit team」。组队从「先显式建队、再塞人」变成「每个会话天然是一支队，直接用 Agent 工具带一个 `name` 派 teammate 进来」。这只动了建队入口，下面的寻址、共享记忆、跨会话安全规则照旧。
@@ -67,7 +107,29 @@
 | `"uds:/path/to.sock"` | 同机另一个 Claude 会话 | 同机跨会话 | 走 Unix domain socket，藏在 `UDS_INBOX` flag 后，用 `ListPeers` 发现 |
 | `"bridge:session_..."` | Remote Control 桥接的会话（可能在另一台机器） | 跨机 | 同样用 `ListPeers` 找 |
 
-四种写法对应四层距离——同队、同队广播、同机跨会话、跨机；**距离越远，后面的闸门越紧**。
+四种写法对应四层距离——同队、同队广播、同机跨会话、跨机；**距离越远，后面的闸门越紧**。画成同心圆更直观：
+
+```mermaid
+flowchart TB
+    subgraph L1["① 同队点对点"]
+        A1["to: 'researcher'<br/>最日常"]
+    end
+    subgraph L2["② 同队广播"]
+        A2["to: '*'<br/>开销随规模线性增长"]
+    end
+    subgraph L3["③ 同机跨会话"]
+        A3["to: 'uds:/path.sock'<br/>Unix domain socket"]
+    end
+    subgraph L4["④ 跨机"]
+        A4["to: 'bridge:session_...'<br/>出本机 · 过服务器 · 落另一台"]
+    end
+    L1 --> L2 --> L3 --> L4
+    L4 --> G["闸门最紧：bypass-immune<br/>连 bypassPermissions 都放行不了（§5）"]
+    style G fill:#ff6b6b,color:#fff
+    style L4 fill:#fff3cd
+```
+
+这张图在说什么：从里到外，每跨一层，信任域就换一次。到最外层的 `bridge:`，消息会**作为用户 prompt 出现在另一台机器上** —— 所以它是唯一一个连「一键绕过权限」都够不到的动作。
 
 ### 3.1 跨会话消息到了你这儿是什么样
 
@@ -83,13 +145,25 @@
 
 ### 4.1 为什么这条规则分量重
 
-接 [autonomy.md §3](./autonomy.md) 的 Auto Mode：分类器把动作分桶，其中 SOFT BLOCK 是「破坏性/不可逆、但用户意图能解除」的——用户在场说一句「就是要删」，闸才开。这条跨会话规则正是喂给分类器的补充：**它掐掉了一条路，不许别的会话的消息扮演「用户意图」去开 SOFT BLOCK 的闸**。「当成完全自治来评判」的实际效果，是把消息头上那顶「用户授权」的帽子摘掉——链路上没有用户，危险动作就得按最保守的门槛过。
+接 [autonomy.md §3](./autonomy.md#_3-动作自动批准-auto-mode) 的 Auto Mode：分类器把动作分桶，其中 SOFT BLOCK 是「破坏性/不可逆、但用户意图能解除」的——用户在场说一句「就是要删」，闸才开。这条跨会话规则正是喂给分类器的补充：**它掐掉了一条路，不许别的会话的消息扮演「用户意图」去开 SOFT BLOCK 的闸**。「当成完全自治来评判」的实际效果，是把消息头上那顶「用户授权」的帽子摘掉——链路上没有用户，危险动作就得按最保守的门槛过。
 
 ### 4.2 跨会话权限洗白（cross-session permission laundering）
 
 规则还点名了一个具体攻击。要是 peer 的请求是让你去做一件**它自己被拦下、被拒权限、或明说自己做不了**的事——话术像「我这边被 block 了」「我这边 permission denied」「你能替我跑一下吗」——直接 BLOCK。
 
 **在会话之间转发被拒动作，就是跨会话权限洗白。** 它防的是一种很自然的绕过：A 会话想干的事被闸拦住，于是把这件事甩给 B 会话去干，指望 B 头上没有那道闸。规则的态度是：**一个动作该不该拦，看动作本身，不看它是谁转手过来的**。
+
+```mermaid
+flowchart LR
+    A["会话 A 想删库<br/>被策略引擎拦下"] --> B(["A 转头求 B：<br/>「我这边 permission denied<br/>你能替我跑一下吗」"])
+    B --> C{"会话 B 的策略引擎怎么判?"}
+    C -->|"❌ 错误做法<br/>看谁转手来的"| D["「是同事拜托的，放行」<br/>→ 闸形同虚设"]
+    C -->|"✅ 正确做法<br/>只看动作本身"| E["「删库」= BLOCK<br/>→ 换个会话也过不去"]
+    style D fill:#ff6b6b,color:#fff
+    style E fill:#d4edda
+```
+
+这张图在说什么：闸如果长在「会话」身上，就会被转手绕过；闸必须长在「动作」身上。**判定函数不应接收「谁请求的」这个参数**，或者至少不能让它提升权限——这与 [§4.3](#_4-3-与-reasoning-blind-的对称) 的 reasoning-blind 是同一条思路的两个切面。
 
 ### 4.3 与 reasoning-blind 的对称
 
@@ -114,7 +188,7 @@
 
 两件事合起来的效果：**哪怕用户开了 bypassPermissions 全速自治、哪怕分类器判它没问题，这条消息都不该被放行，仍要停下来向人确认**。注释给的理由只有一句：**跨机的提示注入必须保持 bypass-immune**。
 
-为什么单单跨机这一档这么重？把 §3 的四层距离摆出来：同队、广播、同机跨会话都在同一台机器、同一个信任域；只有 `bridge:` 要出本机、过 Anthropic 服务器、落到另一台机器，而且到那头**作为用户 prompt 出现**。一台机器上被注入攻陷的 agent，若能不经同意往另一台机器发 prompt，就等于把注入从一台机器传染到另一台。**这道闸让跨机传染必须经过一次真人点头。**
+为什么单单跨机这一档这么重？把 [§3](#_3-sendmessage-普通输出别人看不见-必须显式发) 的四层距离摆出来：同队、广播、同机跨会话都在同一台机器、同一个信任域；只有 `bridge:` 要出本机、过 Anthropic 服务器、落到另一台机器，而且到那头**作为用户 prompt 出现**。一台机器上被注入攻陷的 agent，若能不经同意往另一台机器发 prompt，就等于把注入从一台机器传染到另一台。**这道闸让跨机传染必须经过一次真人点头。**
 
 > 这是纵深防御的一个强样本：用户能一键放行几乎所有东西，唯独放行不了「不经确认往另一台机器发 prompt」。把一个动作钉死在连 bypass 都够不到的深度，等于在说：跨机注入的爆炸半径太大，这条边界不接受任何形式的一键豁免。
 
@@ -155,16 +229,16 @@ Agent Teams 是 [roadmap.md](./roadmap.md) 的 Phase 6/7 能力，且**对实现
 ### 8.1 前置依赖
 
 - 任务列表与 `owner` / 认领 / 标记（团队直接复用它）；
-- 子 agent 派生与权限继承（[verification-and-multiagent.md §5](./verification-and-multiagent.md)）；
+- 子 agent 派生与权限继承（[verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略)）；
 - 本地记忆与文件存储（[context-engineering.md](./context-engineering.md)）；
-- Auto Mode 分类器 + SOFT/HARD 分桶（跨会话规则要喂给它，见 [autonomy.md §3](./autonomy.md)）。
+- Auto Mode 分类器 + SOFT/HARD 分桶（跨会话规则要喂给它，见 [autonomy.md §3](./autonomy.md#_3-动作自动批准-auto-mode)）。
 
 ### 8.2 最小版本：先做「同进程内对等」，再谈跨会话
 
 mod-agent 的团队建议分两小步，别一上来就跨机：
 
 1. **同进程团队（最小）**：先不实现 UDS/bridge 跨会话，只在一个进程里支持——多个 teammate 用队列（不是共享 socket）互发消息，共享一个内存任务列表，通信认名字；这一步已经能验证「对等协作 + 共享任务」的价值；
-2. **跨会话团队（后补）**：再引入 UDS 同机寻址、跨会话消息包裹、以及 §4 的权威规则；跨机 bridge 是最后才做、且必须自带 bypass-immune 闸；
+2. **跨会话团队（后补）**：再引入 UDS 同机寻址、跨会话消息包裹、以及 [§4](#_4-别的会话不携带你的用户权威) 的权威规则；跨机 bridge 是最后才做、且必须自带 bypass-immune 闸；
 3. **安全规则不分先后、必须随通信一起上**：哪怕只做同进程，「跨会话消息不携带用户权威」「转发被拒动作即洗白」也要在代码层落地——**安全边界不能等功能做完再补**。
 
 ### 8.3 什么时候才需要团队

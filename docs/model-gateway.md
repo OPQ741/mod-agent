@@ -27,13 +27,13 @@ interface ModelProvider {
 
 ### 1.1 配置分层与用量计量（业界实证）
 
-**Provider / 权限配置分层（Claude Code settings，出处：https://code.claude.com/docs/en/settings ）**：托管策略 > 命令行 `--settings` > 团队项目文件 > 用户文件 > 项目本地 `settings.local.json`；`allow` 列表跨层取并集，`deny` / `ask` 优先且立即生效（详见 [security.md](./security.md) §4.1）。
+**Provider / 权限配置分层（Claude Code settings，出处：https://code.claude.com/docs/en/settings ）**：托管策略 > 命令行 `--settings` > 团队项目文件 > 用户文件 > 项目本地 `settings.local.json`；`allow` 列表跨层取并集，`deny` / `ask` 优先且立即生效（详见 [security.md §4.1](./security.md#_4-1-配置优先级与权限规则合并-claude-code-settings-实证-出处-https-code-claude-com-docs-en-settings)）。
 
 **用量计量是网关的一等输出**：
 
 - Claude Code headless 的 JSON 载荷自带 `total_cost_usd` 与 per-model 成本拆分（出处：https://code.claude.com/docs/en/headless ）；
 - Gemini CLI headless 的 `stats` 返回 per-model token 分项（prompt / candidates / total / cached / tool）、工具调用统计（totalCalls / totalSuccess / totalFail / totalDecisions: accept | reject | modify | auto_accept）与文件增删行（出处：https://google-gemini.github.io/gemini-cli/docs/cli/headless.html ）；
-- 这些字段喂给 [observability-evaluation.md](./observability-evaluation.md) 的成本指标与 [agent-loop.md](./agent-loop.md) §6.3 的事件流输出，脚本可直接 `jq` 取数。
+- 这些字段喂给 [observability-evaluation.md](./observability-evaluation.md) 的成本指标与 [agent-loop.md §6.3](./agent-loop.md#_6-3-headless-事件流输出-claude-code-gemini-cli-实证) 的事件流输出，脚本可直接 `jq` 取数。
 
 **强弱模型分工（Aider 实证，出处：https://aider.chat/docs/git.html ）**：commit message 这类低风险文本生成交给低成本的 weak-model，主模型只做编码——路由策略里「低风险摘要用便宜模型」的落地案例。
 > 举个例子（示意）：主模型刚改完代码、跑通了测试，现在要写一句 git commit。这事不需要再花一次强模型的钱——交给便宜的小模型写「fix: 修复登录态过期判断」就够了。
@@ -57,7 +57,7 @@ interface ModelProvider {
 
 - **两套后端各自维护一份消息历史**：因为 system 位置、工具调用 / 结果的载体都不同，运行时按后端分别维护，而不是在一种格式上反复转换；
 - 网关对外暴露的统一事件（文本增量、工具调用开始 / 参数完整、结束、用量）与上述具体事件解耦；
-- 「工具块何时算完整」是流式提前执行的触发点（见 [tools-and-extensions.md §2.4](./tools-and-extensions.md#24-并行工具执行) 与 [agent-loop.md §2.4](./agent-loop.md#24-流式窗口里提前执行工具)）。
+- 「工具块何时算完整」是流式提前执行的触发点（见 [tools-and-extensions.md §2.4](./tools-and-extensions.md#_2-4-并行工具执行) 与 [agent-loop.md §2.4](./agent-loop.md#_2-4-流式窗口里提前执行工具)）。
 
 ## 2. 模型路由策略
 
@@ -85,7 +85,38 @@ flowchart LR
 
 **多 Provider 中立（OpenAI Agents SDK 实证，出处：https://openai.github.io/openai-agents-python/ ）**：SDK 官方定位 provider-agnostic——同一套 agent 定义可经 LiteLLM / any-llm 接 100+ 模型，不绑死 OpenAI；mod-agent 的 `ModelProvider` 接口方向一致，MVP 先建一条可靠基线、再横向铺 Provider。
 
-> 不要只看厂商公开榜单选默认模型。用自己的真实仓库任务集测成功率、延迟、成本、修复轮数与副作用风险。成本锚点参考：公开榜单上 agentic 修复平均约 \$0.86/题。
+### 2.1 路由的成本账：为什么「一律上最强模型」是错的
+
+不要只看厂商公开榜单选默认模型。用自己的真实仓库任务集测成功率、延迟、成本、修复轮数与副作用风险。下面是一组可用于校准的实测数字（2026 年口径）：
+
+| 场景 | 单任务成本（Sonnet 4.6 量级） |
+| --- | --- |
+| 单文件编辑 | ~\$0.031 |
+| Bug 排查 | ~\$0.089 |
+| PR 代码审查 | ~\$0.062 |
+| 多文件重构 | ~\$0.17 |
+| 端到端新功能 | ~\$0.53 |
+
+几个结构性事实，比上面的单价更重要：
+
+1. **智能路由相对「一律上最强模型」平均省 82–84%**。差距主要不在「贵模型贵」，而在「便宜的活占了大多数」；
+2. **agent 的成本大头是输入，不是输出**。每一步都要把整段对话重发一遍，实测典型编码 agent 调用发 15k–42k 输入 token，只回几百输出 token —— 所以选型时**输入价格远比输出价格重要**；
+3. **长任务占成本约 80%**。一个跑到底的自治会话，比二十次小修小补贵得多；因此预算门禁要卡在长任务上（见 [agent-loop.md §6](./agent-loop.md#_6-预算与循环防护)）；
+4. **便宜模型可能更贵**：要看「每次成功解决的成本」而非「每次调用的成本」。一个便宜但失败率高的模型，算上重试和人工收拾烂摊子的时间，常常更贵；
+5. **快慢模型配对有个隐藏前提**：弱模型**不知道自己什么时候已经超出能力范围**，所以「简单活给弱模型、难的升级到强模型」这套路由，需要一个可靠的「难度判定」信号——判不准就退化成「质量天花板由弱模型决定」（见 [verification-and-multiagent.md §5.7](./verification-and-multiagent.md#_5-7-2026-年的反转-多-agent-从「别做」到「这样做」)）。
+
+```mermaid
+flowchart LR
+    T["一个任务"] --> Q{"难度判定信号<br/>可靠吗?"}
+    Q -->|"可靠"| R["路由：便宜活给便宜模型<br/>平均省 82–84%"]
+    Q -->|"不可靠"| W["天花板被弱模型锁死<br/>反而更贵"]
+    R --> M["看「每次成功解决的成本」<br/>而非「每次调用的成本」"]
+    W --> M2["改回：默认强模型<br/>只在确定性子任务上降配"]
+    style R fill:#d4edda
+    style W fill:#ff6b6b,color:#fff
+```
+
+这张图在说什么：路由不是「越省越好」，而是「要有能信的难度信号」。没有信号就别硬分桶——把便宜模型留给那些**确定简单**的活（格式化、摘要、分类），而不是让分类器去猜。
 
 ## 3. 提示词版本管理
 
@@ -117,9 +148,9 @@ Anthropic 接口要求缓存点用 `cache_control` 标记，系统提示词里�
 ### 5.2 保持缓存有效的几条硬规则
 
 - **动态尾巴不进静态块**：`cwd`、平台、git 状态、当前日期这些每次都变的内容，必须放在静态块之后；`CLAUDE.md` / `AGENTS.md` 因项目而异，放进首条 user 的 `<system-reminder>`，而不是系统提示词——否则静态块每个项目一份、缓存碎片化；
-- **内置工具分区排序、MCP 工具追加在后**：工具列表变化不能动到前面的静态前缀（见 [tools-and-extensions.md §1.1](./tools-and-extensions.md#11-mcp-连接生命周期json-rpc-握手与工具路由)）；
+- **内置工具分区排序、MCP 工具追加在后**：工具列表变化不能动到前面的静态前缀（见 [tools-and-extensions.md §1.1](./tools-and-extensions.md#_1-1-mcp-连接生命周期-工具发现、路由与调用)）；
 - **前缀缓存极其脆弱**：缓存点之前的任何一个字节变化，都会让其后的缓存全部失效，所以静态内容必须稳定、确定性渲染（无随机顺序、无时间戳）；
-- **缓存与压缩互相矛盾**：为腾窗口而裁剪、压缩历史，会改变已缓存的前缀。需要按缓存热度权衡——刚缓存上、利用率还低时不动它，等缓存 TTL 过期或窗口逼近上限再压缩（见 [context-engineering.md §5.1](./context-engineering.md#51-分层压缩流水线从最廉价到最重)）。
+- **缓存与压缩互相矛盾**：为腾窗口而裁剪、压缩历史，会改变已缓存的前缀。需要按缓存热度权衡——刚缓存上、利用率还低时不动它，等缓存 TTL 过期或窗口逼近上限再压缩（见 [context-engineering.md §5.1](./context-engineering.md#_5-1-分层压缩流水线-从最廉价到最重)）。
 
 ### 5.3 命中率监控
 
@@ -137,7 +168,7 @@ Anthropic 接口要求缓存点用 `cache_control` 标记，系统提示词里�
 | --- | --- | --- |
 | `429`（限流）、`503` / `529`（过载）、`ECONNRESET`（连接重置） | 重试 | 指数退避 + **抖动**，上限约 30s，遵守 `Retry-After` |
 | `400`（参数错误）、`401`（鉴权失败）、`404`（模型不存在） | 不重试 | 直接失败，重试只会重复报错 |
-| 请求中断 / 超时 | 可重试一次（幂等的只读） | 非幂等写操作不自动重放，见 [tools-and-extensions.md §4](./tools-and-extensions.md) |
+| 请求中断 / 超时 | 可重试一次（幂等的只读） | 非幂等写操作不自动重放，见 [tools-and-extensions.md §4](./tools-and-extensions.md#_4-重试与幂等) |
 
 抖动（jitter）不可省略：限流是所有客户端同时撞上的，若大家都用固定的「1s、2s、4s」退避，会在相同时刻再次同时发起请求、形成重试风暴；加随机抖动才能把请求散开。
 

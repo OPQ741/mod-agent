@@ -103,16 +103,36 @@ flowchart LR
 | ADR-8 Policy 独立判定     | MCP 规范：协议不 enforce 安全，「Tools represent arbitrary code execution」，consent / 授权流必须实现者自己做（https://modelcontextprotocol.io/specification/ ）                                                                                                                     | 权限判定天然不能信任工具描述 / 模型自述，必须框架层独立                                                                  |
 | 沙箱 / 运行时抽象         | OpenAI Agents SDK SandboxAgent：manifest 声明工作区 + 沙箱后端可切换（本地 Unix / Docker）+ 会话可恢复（https://openai.github.io/openai-agents-python/ ）；OpenHands：内核（Agent Server）与界面（Canvas）分离，控制端可连多后端（https://github.com/OpenHands/software-agent-sdk ） | 单进程 CLI 也先把「执行内核」与「交互界面」用清晰边界隔开，未来加远程 agent / 云端长任务不改内核                         |
 
-### 4.1 协议层边界（MCP / A2A / ACP / AGENTS.md）
+### 4.1 协议层边界（MCP / A2A / ACP / AGENTS.md / Skills）
 
-| 协议      | 解决谁和谁的通信         | mod-agent 的角色                                                               |
-| --------- | ------------------------ | ------------------------------------------------------------------------------ |
-| MCP       | agent ↔ 工具 / 数据      | 作为 Host 消费工具（[tools-and-extensions.md](./tools-and-extensions.md) §1）  |
-| A2A       | agent ↔ 外部 agent       | 未来可被发现 / 可调用的 remote agent（可选）；**不是内部编排协议**             |
-| ACP       | agent ↔ 编辑器客户端     | 未来被 Zed 等编辑器当作外部 agent 挂入（可选）                                 |
-| AGENTS.md | 项目 ↔ 任何 coding agent | 仓库根放一份给所有 agent 读（[data-and-events.md](./data-and-events.md) §4.1） |
+2026 年这一层已经基本定型，**四个协议各管一段、互补而不竞争**。分清谁管什么，能避免把一个协议硬塞进它不该管的场景：
+
+| 协议 / 规范  | 解决谁和谁的通信      | mod-agent 的角色                                                               |
+| ------------ | --------------------- | ------------------------------------------------------------------------------ |
+| **MCP**      | agent ↔ 工具 / 数据   | 作为 Host 消费工具（[tools-and-extensions.md §1](./tools-and-extensions.md#_1-工具分层)）  |
+| **A2A**      | agent ↔ 外部 agent    | 未来可被发现 / 可调用的 remote agent（可选）；**不是内部编排协议**             |
+| **ACP**      | agent ↔ 编辑器客户端  | 未来被 Zed 等编辑器当作外部 agent 挂入（可选）                                 |
+| **AGENTS.md** | 项目 ↔ 任何 coding agent | 仓库根放一份给所有 agent 读（[data-and-events.md §4.1](./data-and-events.md#_4-1-为什么直接采用-agents-md-开放标准实证)） |
+| **Agent Skills** | 人 ↔ 任何 agent（流程复用） | 技能目录 + `SKILL.md`，跨工具可移植（[tools-and-extensions.md §6.0](./tools-and-extensions.md#_6-0-agent-skills-已是一个开放标准-2026-核实)） |
+
+```mermaid
+flowchart TB
+    P["项目仓库"] -->|"AGENTS.md<br/>告诉 agent 本仓库的规矩"| AG["mod-agent"]
+    AG -->|"MCP<br/>接外部工具/数据"| T["工具与数据源"]
+    AG -->|"A2A（可选，未来）<br/>连外部 agent"| OA["别的 agent"]
+    ED["编辑器（Zed 等）"] -->|"ACP<br/>把 CLI agent 挂进编辑器"| AG
+    SK["SKILL.md 技能目录"] -->|"Agent Skills<br/>跨工具可移植的流程"| AG
+    style AG fill:#7c5cfc,color:#fff
+```
+
+这张图在说什么：紫色那个是我们的位置，其余四个都是「别人定好、我们去适配」的开放标准。**只有 A2A 是可选的远期项**，其余三个首期就该接上——因为它们不需要我们造轮子，且能直接换来生态兼容性。
 
 边界原则：日常默认只做 MCP；A2A 官方明确「不是框架、不是子代理协议」——内部多步 / 子任务编排用单主循环 + 子工具委托（ADR-1），不在主线里把 A2A 当工具调用协议用（出处：https://a2a-protocol.org/latest/ ）。
+
+**两个影响选型的近期变化（2026）**：
+
+1. **MCP 治理归属变了**：Anthropic 已于 2025-12-09 将 MCP 捐给 Linux 基金会旗下的 **Agentic AI Foundation（AAIF）**，创始成员含 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。**含义**：MCP 不再是单一厂商的赌注，长期协议废弃风险下降——选型评审被问到「这协议谁说了算」时，答案是基金会，不是某家厂商。
+2. **MCP 现行规范是 2026-07-28**（替代 2025-11-25），握手与会话已移除、改无状态内核。这是自发布以来最大的一次改版，实现细节见 [tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)。
 
 ## 3. 组件职责边界
 

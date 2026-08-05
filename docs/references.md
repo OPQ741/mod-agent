@@ -1,10 +1,101 @@
 # References · 参考来源
 
-> 供设计核验与后续深入学习。官方 SDK / API、MCP 规范与云平台策略持续演进，正式实现前应再核对所选版本，并用锁文件与契约测试锁定行为。核对日期：2026-08。
+> 供设计核验与后续深入学习。官方 SDK / API、MCP 规范与云平台策略持续演进，正式实现前应再核对所选版本，并用锁文件与契约测试锁定行为。核对日期：**2026-08（主体）+ 2026-10（补充，见 [§0](#_0-2026-10-补充核验来源)）**。
 
-> 怎么用这份清单：它不是拿来逐篇读完的「书单」，而是出问题时的「字典」。设计某一层拿不准时，按分类翻对应的官方文档；决定引入某个开源项目前，先看它后面括号里的许可证与停服 / 归档状态——「代码能看」不等于「能放心商用」。链接逐条核验：§1–§5 于 2026-08、§6–§11 于 2026-08 逐个打开核对；正式实现前请按上面提示再核对一次版本。
+> 怎么用这份清单：它不是拿来逐篇读完的「书单」，而是出问题时的「字典」。设计某一层拿不准时，按分类翻对应的官方文档；决定引入某个开源项目前，先看它后面括号里的许可证与停服 / 归档状态——「代码能看」不等于「能放心商用」。链接逐条核验：[§1](#_1-agent-运行时与范式)–[§5](#_5-安全与沙箱) 于 2026-08、[§6](#_6-评测)–[§11](#_11-云端-自治-coding-agent) 于 2026-08 逐个打开核对；正式实现前请按上面提示再核对一次版本。
 
-## Agent 运行时与范式
+## 0. 2026-10 补充核验来源
+
+这一节是 2026-10 新开的一批来源，**其中有几条推翻或更新了 2026-08 时的认识**，按主题列出。若与前面章节的说法冲突，以本节为准。
+
+**基准与能力（更新了旧的分数口径）**
+
+- **SWE-bench 官方榜**（统一 mini-SWE-agent harness，可横向比较）
+  https://www.swebench.com
+- **SWE-bench Verified 榜单核查**（指出 82 行中 76 行为厂商自报、顶部饱和）
+  https://benchlm.ai/benchmarks/mercorsweverified
+- **Terminal-Bench 2.0 官方榜**（注意：当前版本已是 4.0，2.x 分数不可直接比较）
+  https://www.tbench.ai/leaderboard/terminal-bench/2.0
+- **Terminal-Bench 2.0 深度解读**（脚手架效应、Easy/Hard 难度断层）
+  https://explainx.ai/blog/terminal-bench-2-0-ai-agent-benchmark-evaluation
+- **Agent 成本基准（2026）**（单任务成本、路由节省幅度）
+  https://relayplane.com/benchmarks/agent-costs
+- **AI Agent Cost Per Task 2026**（Aider Polyglot 成本、Claude Code 企业用量）
+  https://www.kunalganglani.com/blog/ai-agent-cost-per-task-2026
+
+**MCP 规范改版（自 2025-11-25 以来最大一次）**
+
+- **MCP 2026-07-28 发布公告**（无状态内核、MRTR、头部路由、扩展框架、废弃策略）
+  https://blog.modelcontextprotocol.io/posts/2026-07-28/
+- **MCP 捐给 Agentic AI Foundation**（2025-12-09，Linux 基金会旗下）
+  https://blog.modelcontextprotocol.io/posts/2025-12-09-mcp-joins-agentic-ai-foundation
+- **MCP 2026-07-28 变更解读**（错误码 -32002 → -32602、inputSchema 支持 2020-12 等破坏性变更）
+  https://witho2.com/news/mcp-2026-spec-is-live-what-the-stateless-rewrite-means-for-ai-tools
+
+**开放规范**
+
+- **AGENTS.md 官方站**（已由 Agentic AI Foundation 托管；6 万+ 仓库；就近优先；OpenAI 主仓 88 份）
+  https://agents.md
+- **AGENTS.md 通俗指南**（与 README / CLAUDE.md / .cursorrules / llms.txt 的分别）
+  https://agent-ready.dev/what-is-agents-md
+- **Agent Skills 规范官方站**（SKILL.md 格式、渐进披露三段、客户端清单）
+  https://skill.md
+- **Agent Skills 规范详解**（六个 frontmatter 字段的约束、规范到底定义了什么 / 没定义什么）
+  https://www.skillsboard.sh/agent-skills
+
+**安全（2026 年最重要的实证）**
+
+- **Pillar Security：Week of Sandbox Escapes**（Cursor / Codex / Gemini CLI / Antigravity 四款，7 个发现，四种失败模式）
+  https://www.pillar.security/blog/the-week-of-sandbox-escapes
+- **相关报道汇总**（CVE-2026-48124、Codex v0.95.0 修复、Google 降级的争议）
+  https://www.bleepingcomputer.com/news/security/cursor-codex-gemini-cli-antigravity-hit-by-sandbox-escapes/
+- **Cymulate：Configuration-Based Sandbox Escape**（更早的同模式命名，2026-04）
+  https://cymulate.com/blog/the-race-to-ship-ai-tools-left-security-behind-part-1-sandbox-escape/
+- **Adversa AI 2026-08 汇总**（零点击注入覆写沙箱辅助二进制）
+  https://aigovernance.com/news/zero-click-prompt-injection-escapes-coding-agent-sandbox-binary-overwritten
+
+**多 Agent（立场反转）**
+
+- **Don't Build Multi-Agents**（Cognition / Walden Yan，2025-06 原立场）
+  https://cognition-labs.com/blog/dont-build-multi-agents
+- **十个月后的反转与其解读**（写入单线程、审查 agent 平均抓 2 bug/PR、58% 严重、不共享上下文反而更好）
+  https://aijourn.com/your-agents-are-failing-at-the-parts-of-the-job-nobody-wrote-down
+
+**Claude Code 机制细节**
+
+- **Best practices for Claude Code**（上下文窗口是最需管理的资源；给 agent 一个它能跑的检查）
+  https://www.anthropic.com/engineering/claude-code-best-practices
+- **Steering Claude Code: skills, hooks, rules, subagents**（CLAUDE.md <200 行、路径作用域规则、子 agent 嵌套 5 层）
+  https://claude.com/blog/steering-claude-code-skills-hooks-rules-subagents-and-more
+- **Agent SDK：How the agent loop works**（自动压缩、compact_boundary、MCP 工具 schema 延迟加载）
+  https://docs.anthropic.com/en/docs/agent-sdk/agent-loop
+- **Agent SDK：Hooks**（事件清单、permissionDecision、退出码语义）
+  https://platform.claude.com/docs/en/agent-sdk/hooks
+
+**上下文管理**
+
+- **Managing context on the Claude Developer Platform**（context editing +29%、加 memory tool +39%、100 轮评测省 84% token）
+  https://anthropic.com/news/context-management
+- **Context Engineering: Compaction, Memory, Drift**（锚定式摘要、write-before-compact、压缩策略风险排序）
+  https://www.tmls.nyc/research/context-engineering
+- **The Context Engineering Playbook**（Write / Select / Compress / Isolate 四分类）
+  https://dreaming.press/posts/context-engineering-playbook-write-select-compress-isolate.html
+
+**ACI 与编辑**
+
+- **SWE-agent: Agent Computer Interface**（四条设计准则、100 行查看器、只列文件名的搜索、空输出固定串）
+  https://swe-agent.com/latest/background/aci/
+- **SWE-agent 论文**（arXiv:2405.15793，ACI 消融 +10.7 个百分点）
+  https://arxiv.org/abs/2405.15793
+
+**Git worktree 与并行**
+
+- **Git worktrees: branches without the context switch**（Claude Code `--worktree`、Codex app、并行的适用与不适用）
+  https://tylercrosse.com/ideas/2026/git-worktrees
+- **Best Git Worktree Tools for AI Coding 2026**（worktree 不解决语义冲突、共享运行时比共享文件更致命、一分支一 worktree）
+  https://nimbalyst.com/blog/best-git-worktree-tools-ai-coding-2026/
+
+## 1. Agent 运行时与范式
 
 - **Building Effective Agents** — Anthropic：workflow 模式（chaining/routing/parallelization/orchestrator-workers/evaluator-optimizer）
   https://www.anthropic.com/engineering/building-effective-agents
@@ -21,7 +112,7 @@
 - **Agentless**：固定三阶段流水线 baseline
   https://arxiv.org/abs/2407.1489
 
-## 模型与网关
+## 2. 模型与网关
 
 - **OpenAI Agents 文档：运行时方案比较**
   https://developers.openai.com/api/docs/guides/agents
@@ -30,7 +121,7 @@
 - **LangGraph Persistence**（checkpoint / 恢复 / 人类审批对比参考，不意味着必须采用）
   https://github.com/langchain-ai/docs/blob/main/src/oss/langgraph/persistence.mdx
 
-## MCP 扩展
+## 3. MCP 扩展
 
 - **MCP Tools 规范**
   https://modelcontextprotocol.io/specification/2026-07-28/server/tools
@@ -39,7 +130,7 @@
 - **MCP Security Best Practices**
   https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices
 
-## 代码检索与解析
+## 4. 代码检索与解析
 
 - **Tree-sitter**（增量语法、多语言、错误恢复）
   https://github.com/tree-sitter/tree-sitter/blob/master/docs/src/index.md
@@ -48,7 +139,7 @@
 - **Aider Repo Map**（tree-sitter 符号索引）
   https://aider.chat/docs/git.html
 
-## 安全与沙箱
+## 5. 安全与沙箱
 
 - **OWASP Top 10 for LLM Applications 2025**
   https://genai.owasp.org/resource/owasp-top-10-for-llm-applications-2025/
@@ -60,19 +151,19 @@
 - **GitHub Copilot 沙箱与安全设置**
   https://docs.github.com/en/copilot/concepts/security-governance-and-network-settings
 
-## 评测
+## 6. 评测
 
 - **SWE-bench 项目**
   https://github.com/SWE-bench/SWE-bench
 - **Playwright 测试断言**（异步 UI、自动重试）
   https://playwright.dev/docs/test-assertions
 
-## 观测
+## 7. 观测
 
 - **OpenTelemetry Semantic Conventions**
   https://opentelemetry.io/docs/specs/semconv/
 
-## 主流产品官方文档
+## 8. 主流产品官方文档
 
 - Claude Code：permissions / sub-agents / skills & hooks
   https://code.claude.com/docs/en/permissions
@@ -85,7 +176,7 @@
 
 以下五个分类为 [Coding Agent 全景图鉴](./coding-agents.md) 的链接清单，2026-08-13 逐个打开核对（GitHub 仓库页 + 官方文档）。star 数为核对日动态约数，仅作量级参考；仓库 slug 若发生迁移，GitHub 旧地址会自动跳转。
 
-## 终端 / CLI Coding Agent
+## 9. 终端 / CLI Coding Agent
 
 | 项目                   | GitHub（已核实）                                                                                         | 官方文档                                                                              |
 | ---------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -100,7 +191,7 @@
 | Amazon Q Developer CLI | https://github.com/aws/amazon-q-developer-cli （Apache-2.0；README 声明仅收安全补丁，转向闭源 Kiro CLI） | https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-installing.html |
 | Continue（CLI `cn`）   | https://github.com/continuedev/continue （Apache-2.0；README 声明只读停更，最终 2.0.0）                  | https://docs.continue.dev/cli/quickstart                                              |
 
-## IDE 内 Coding Agent
+## 10. IDE 内 Coding Agent
 
 | 项目                      | GitHub（已核实）                                                                           | 官方文档                                                                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -114,7 +205,7 @@
 | Trae（字节）              | IDE 闭源；仅研究型 CLI 开源 https://github.com/bytedance/trae-agent （MIT）                | https://docs.trae.ai/ide/what-is-trae                                                                                            |
 | Void                      | https://github.com/voideditor/void （Apache-2.0；**已弃用归档**）                          | https://voideditor.com                                                                                                           |
 
-## 云端 / 自治 Coding Agent
+## 11. 云端 / 自治 Coding Agent
 
 | 项目                       | GitHub（已核实）                                                                            | 官方文档                                                                                            |
 | -------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -126,7 +217,7 @@
 | Lovable                    | 无开源仓库                                                                                  | https://docs.lovable.dev                                                                            |
 | Factory / Droid            | 核心闭源；开源 TS SDK https://github.com/Factory-AI/droid-sdk-typescript （license 未核实） | https://docs.factory.com/                                                                           |
 
-## 开源平台、框架与学术项目
+## 12. 开源平台、框架与学术项目
 
 | 项目              | GitHub（已核实）                                                                                       | 官方文档 / 论文                                                              |
 | ----------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
@@ -146,7 +237,7 @@
 | gpt-engineer      | https://github.com/AntonOsika/gpt-engineer （MIT；**已 archived**）                                    | https://github.com/AntonOsika/gpt-engineer                                   |
 | smol developer    | https://github.com/smol-ai/developer （MIT）                                                           | https://github.com/smol-ai/developer                                         |
 
-## 开放协议与规范
+## 13. 开放协议与规范
 
 | 协议                         | 仓库 / 官网（已核实）                                                                                                         | 备注                                                                   |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -155,13 +246,13 @@
 | ACP (Agent Client Protocol)  | https://zed.dev/docs/ai/agents                                                                                                | 编辑器 ↔ 外部 CLI agent（Zed 主推）                                    |
 | AGENTS.md                    | https://agents.md                                                                                                             | 给 agent 看的项目 README，Linux 基金会 AAIF 托管；仓库 slug 未单独核实 |
 
-## 维护说明
+## 14. 维护说明
 
 - 每个依赖 / 对标项目记录四件事：**许可证、最近提交、归档状态、替代方案**；「源码可见」不等于 OSI 开源（Claude Code 自定义许可、Crush FSL、AutoCodeRover Sonar、Mastra 双许可、Zed GPL-3.0 均需单独合规判断）。
 - 本清单与 [coding-agents.md](./coding-agents.md) 的画像一一对应；发现链接失效或项目停服 / 迁移时，以官方仓库为准并同步更新两处。
 - 本文档随设计推进持续更新：新选型、新 ADR、新踩坑记录都会回链到这里。
 
-## 机制精读来源（2026-08-13 逐页 fetch 核实）
+## 15. 机制精读来源（2026-08-13 逐页 fetch 核实）
 
 供各专题设计文档（agent-loop / context-engineering / tools-and-extensions / security / code-editing / verification-and-multiagent / data-and-events / model-gateway / observability-evaluation / architecture / roadmap / overview）引用的机制级原文页面：
 
@@ -249,7 +340,7 @@
 
 - https://github.com/OpenHands/software-agent-sdk — Conversation 对象化、events 一等公民、本地 vs 临时容器工作区、内核与界面分离
 
-## 从零实现教程（Claude Code 逆向学习，2026-08 逐章核实）
+## 16. 从零实现教程（Claude Code 逆向学习，2026-08 逐章核实）
 
 贯穿各专题的「最小可运行实现 + 真实 Claude Code 对照」一手参考，补充本设计文档的落地细节（Agent Loop 的 continue reason、工具延迟加载 / 并行、read-before-edit 与 mtime、双后端流式与前缀缓存、分层压缩、记忆语义召回、Skills inline/fork、Plan 四选项、子 Agent 配置化、MCP 握手、自治续跑、测试方法论）。
 

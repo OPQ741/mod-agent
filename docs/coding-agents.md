@@ -1034,6 +1034,16 @@ flowchart TD
 - **权限 · 审批 · 沙箱**：不适用（协议层）；但安全上需注意「只连接可信 MCP server，因为它可能在本地执行命令」（AutoGen README 同款警告）。
 - **值得借鉴的具体机制**：① tools/resources/prompts 三原语抽象；② host/server 解耦带来的生态复用；③ 已成为事实标准，几乎所有主流框架/IDE 都在接入。
 - **官方链接**：GitHub: https://github.com/modelcontextprotocol/modelcontextprotocol （由 modelcontextprotocol/specification 迁移）｜ 文档: https://modelcontextprotocol.io
+- **2026-10 更新（重要）**：
+  - **现行规范是 2026-07-28**，取代 2025-11-25，是自发布以来最大一次改版，**无状态内核**：废除 `initialize`/`initialized` 握手与 `Mcp-Session-Id` 头（SEP-2567/2575），每个请求在 `_meta` 自带协议版本与客户端能力，新增可选 `server/discover`。效果是 server 可跑在普通轮询负载均衡后，无需共享会话存储。
+  - **头部路由**（SEP-2243）：必带 `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name`，网关不解析 body 就能路由与鉴权。
+  - **MRTR（多往返请求，SEP-2322）**取代常开双向流的 sampling / elicitation / roots 请求。
+  - **列表可缓存**：`tools/list` 等带 ttl 与确定性顺序，重连后上游 prompt cache 稳定。
+  - **新扩展**：Tasks（SEP-2663，长任务 handle）、MCP Apps（SEP-1865，沙箱 iframe UI）、Enterprise Managed Authorization。
+  - **废弃三类能力 + 12 个月最短窗口**（SEP-2596）：Roots、Sampling、Logging；HTTP+SSE 传输也废弃。缺失资源错误码 `-32002` → 标准 `-32602`；`inputSchema` 支持完整 JSON Schema 2020-12（SEP-2106）。
+  - **治理**：Anthropic 于 2025-12-09 捐给 Linux 基金会旗下 **Agentic AI Foundation（AAIF）**，创始成员含 AWS、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI 等；基金会不干预技术方向。**MCP 不再是单一厂商的赌注。**
+  - **规模**：Tier 1 SDK 月下载近 5 亿次，TypeScript 与 Python SDK 累计各破 10 亿。
+  - 来源：https://blog.modelcontextprotocol.io/posts/2026-07-28/ ｜ https://blog.modelcontextprotocol.io/posts/2025-12-09-mcp-joins-agentic-ai-foundation
 
 #### 4.17 Agent2Agent Protocol (A2A)
 
@@ -1062,6 +1072,23 @@ flowchart TD
 - **权限 · 审批 · 沙箱**：不适用（协议层）；若在 AGENTS.md 里列了测试命令，agent 会尝试执行并修复失败。
 - **值得借鉴的具体机制**：① 「README for agents」极简约定，零学习成本；② 就近覆盖 + 嵌套文件解决 monorepo；③ 与各家 coding agent 工具解耦、跨工具通用。
 - **官方链接**：官网: https://agents.md ｜（主规范托管于 Linux 基金会 Agentic AI Foundation；本次未单独核实「View on GitHub」指向的具体仓库 slug，标注「未核实」）
+- **2026-10 补充**：采用项目已超 **6 万个**；**就近优先**（离被编辑文件最近的那份生效），**用户聊天里显式说的话优先级最高**；支持嵌套，OpenAI 主仓库在标准官网写作时已有 **88 个 AGENTS.md**（一包一个）。迁移做法：`mv AGENT.md AGENTS.md && ln -s AGENTS.md AGENT.md`。各工具接法示例——Aider 在 `.aider.conf.yml` 写 `read: AGENTS.md`；Gemini CLI 在 `.gemini/settings.json` 写 `{"context":{"fileName":"AGENTS.md"}}`。来源：https://agents.md ｜ https://agent-ready.dev/what-is-agents-md
+
+#### 4.19 Agent Skills（开放标准）
+
+- **一句话看懂**：一个目录 + 一个 `SKILL.md`，把「这件事该分几步做」打包成任何 agent 都能读的流程包——写一次，到处能用。
+- **形态与平台**：**开放标准**（非可运行框架）。由 Anthropic 提出并开源，官网 https://skill.md 。
+- **是否开源 / 许可证**：开放标准。客户端展示页列出 **46 个产品**支持，含 Claude Code、ChatGPT/Codex、Cursor、GitHub Copilot、VS Code、Gemini CLI、OpenHands、Goose、Amp 等。
+- **支持模型 / 供应商**：与模型无关（它是给 agent 读的 Markdown，不是模型能力）。
+- **核心架构与运行机制**：**渐进披露三段**——① 发现：启动只加载每个技能的 `name` + `description`（约 50–100 token/个）；② 激活：任务匹配上才读正文；③ 执行：脚本与参考按需再读。这是所有实现唯一的共同行为，也是能装几十个技能而不付 token 账的原因。
+- **格式约束**：`SKILL.md` = YAML frontmatter + Markdown 正文。必需字段仅两个：`name`（1–64 字符，小写字母数字连字符，须与父目录名一致）、`description`（1–1024 字符，须同时说清做什么与何时用）。可选：`license`、`compatibility`（≤500 字符）、`metadata`、`allowed-tools`（规范标为实验性）。目录约定：`scripts/` / `references/` / `assets/`。规范建议正文 <5000 token / <500 行。
+- **上下文与代码检索**：不适用——它是流程说明，不是检索机制。
+- **编辑与变更策略**：不适用（但技能里常常就写着怎么改）。
+- **工具与扩展**：与 MCP 是**互补而非替代**——MCP 给 agent「访问 Elasticsearch 的能力」，Skill 教 agent「怎么用 Elasticsearch 分析日志」。技能可以把 MCP server 当依赖引用。
+- **权限 · 审批 · 沙箱**：规范**不定义**沙箱。安全上官方强调：只装可信来源；启用前须审计 `SKILL.md` 及其**所有附带文件**（脚本/图片/资源），重点看异常网络调用与和声称目的不符的文件访问；**从外部 URL 取数的技能风险尤其高**。
+- **值得借鉴的具体机制**：① 极简到「一个 Markdown」的格式，零门槛；② 渐进披露让技能数量与上下文成本解耦；③ **`description` 是整份文件权重最高的字段**（它是模型决策前唯一能看到的文字，太模糊永不触发、太宽泛乱触发）；④ 跨工具可移植，避免每家各造一套。
+- **规范没定义的部分（移植时会坏的地方）**：技能目录放哪、重名怎么解、遇到没见过的 frontmatter 字段怎么办。通用安装路径是项目根的 `.agents/skills/`，Claude Code 另扫 `.claude/skills/`。
+- **官方链接**：规范站: https://skill.md ｜ 规范详解: https://www.skillsboard.sh/agent-skills
 
 ---
 
@@ -1073,20 +1100,20 @@ flowchart TD
 
 | 机制（可直接借鉴）                                | 最典型的来源                                                                                   | 对应 mod-agent 文档 / ADR                                                                                                            |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 项目记忆文件（CLAUDE.md / GEMINI.md / AGENTS.md） | Claude Code、Gemini CLI、OpenCode、AGENTS.md 标准                                              | [context-engineering.md](./context-engineering.md) §1–2、[data-and-events.md](./data-and-events.md) §4                               |
-| 三档自主程度旋钮                                  | Codex CLI（suggest/auto-edit/full-auto）、OpenCode（plan/build）、Copilot（Plan/Agent/Ask）    | [tools-and-extensions.md](./tools-and-extensions.md) §5、[architecture.md](./architecture.md) ADR-8、[security.md](./security.md) §4 |
-| 每次改动落 Git，可回滚                            | Aider（每改自动 commit）、Cline/Roo/Kilo（checkpoint）、v0（自动分支永不碰 main）              | [code-editing.md](./code-editing.md) §3、[data-and-events.md](./data-and-events.md) §2                                               |
-| 沙箱与网络默认关闭                                | Codex/Gemini CLI、Devin（VM+域名过滤）、Copilot 云端（Actions 默认不跑）                       | [security.md](./security.md) §3                                                                                                      |
-| Repo Map + LSP 喂符号                             | Aider（repo map）、OpenCode/Crush/Qwen（LSP）、AutoCodeRover（AST）                            | [context-engineering.md](./context-engineering.md) §1、§3、ADR-4                                                                     |
-| 分层定位而非开放式乱翻                            | Agentless（文件→类→函数三级）、Moatless（search loop）                                         | [context-engineering.md](./context-engineering.md) §1                                                                                |
-| 事件溯源（append-only）                           | OpenHands（EventStream）                                                                       | [data-and-events.md](./data-and-events.md) §1、ADR-2                                                                                 |
-| 检查点持久化、断点续跑                            | LangGraph（checkpointer/durable execution）、Mastra（HITL storage）、Gemini（checkpointing）   | [agent-loop.md](./agent-loop.md) §5、ADR-5                                                                                           |
-| 子代理独立上下文、只回摘要                        | Claude Code（Task）、Roo（Boomerang）、Zed（Parallel Agents）、OpenAI Agents SDK（handoff）    | [verification-and-multiagent.md](./verification-and-multiagent.md) §5、ADR-1                                                         |
-| 人在环上的审批点                                  | Copilot（Plan 只读）、Factory（默认只读）、Kilo（细粒度权限）、Google ADK（Tool Confirmation） | [tools-and-extensions.md](./tools-and-extensions.md) §5、[agent-loop.md](./agent-loop.md) §1                                         |
-| Skills / Markdown 指令包                          | Claude Code、Gemini extensions、Goose recipes、Factory Custom Droids                           | [tools-and-extensions.md](./tools-and-extensions.md) §6                                                                              |
+| 项目记忆文件（CLAUDE.md / GEMINI.md / AGENTS.md） | Claude Code、Gemini CLI、OpenCode、AGENTS.md 标准                                              | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)–[§2](./context-engineering.md#_2-仓库启动扫描-repoprofile)、[data-and-events.md §4](./data-and-events.md#_4-长期记忆)                               |
+| 三档自主程度旋钮                                  | Codex CLI（suggest/auto-edit/full-auto）、OpenCode（plan/build）、Copilot（Plan/Agent/Ask）    | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[architecture.md](./architecture.md) ADR-8、[security.md §4](./security.md#_4-命令执行层) |
+| 每次改动落 Git，可回滚                            | Aider（每改自动 commit）、Cline/Roo/Kilo（checkpoint）、v0（自动分支永不碰 main）              | [code-editing.md §3](./code-editing.md#_3-工作区隔离与用户变更保护)、[data-and-events.md §2](./data-and-events.md#_2-持久化表-sqlite)                                               |
+| 沙箱与网络默认关闭                                | Codex/Gemini CLI、Devin（VM+域名过滤）、Copilot 云端（Actions 默认不跑）                       | [security.md §3](./security.md#_3-沙箱基线)                                                                                                      |
+| Repo Map + LSP 喂符号                             | Aider（repo map）、OpenCode/Crush/Qwen（LSP）、AutoCodeRover（AST）                            | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)、[§3](./context-engineering.md#_3-索引结构与刷新)、ADR-4                                                                     |
+| 分层定位而非开放式乱翻                            | Agentless（文件→类→函数三级）、Moatless（search loop）                                         | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)                                                                                |
+| 事件溯源（append-only）                           | OpenHands（EventStream）                                                                       | [data-and-events.md §1](./data-and-events.md#_1-eventstream-事件模型)、ADR-2                                                                                 |
+| 检查点持久化、断点续跑                            | LangGraph（checkpointer/durable execution）、Mastra（HITL storage）、Gemini（checkpointing）   | [agent-loop.md §5](./agent-loop.md#_5-停止与恢复语义)、ADR-5                                                                                           |
+| 子代理独立上下文、只回摘要                        | Claude Code（Task）、Roo（Boomerang）、Zed（Parallel Agents）、OpenAI Agents SDK（handoff）    | [verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略)、ADR-1                                                         |
+| 人在环上的审批点                                  | Copilot（Plan 只读）、Factory（默认只读）、Kilo（细粒度权限）、Google ADK（Tool Confirmation） | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[agent-loop.md §1](./agent-loop.md#_1-任务状态机)                                         |
+| Skills / Markdown 指令包                          | Claude Code、Gemini extensions、Goose recipes、Factory Custom Droids                           | [tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用)                                                                              |
 | 多 provider 网关 + 复用订阅                       | OpenAI Agents SDK（provider-agnostic）、Goose/Zed（ACP）、Mastra（40+ 路由）                   | [model-gateway.md](./model-gateway.md)、ADR-6                                                                                        |
 | headless / CI 模式                                | Gemini CLI（`-p --output-format json`）、Continue `cn -p`、Cline headless、`droid exec`        | [architecture.md](./architecture.md) ADR-7、[roadmap.md](./roadmap.md)                                                               |
-| 协议互操作                                        | MCP（接工具）、A2A（连 agent）、ACP（挂编辑器）、AGENTS.md（读规则）                           | [tools-and-extensions.md](./tools-and-extensions.md)、[architecture.md](./architecture.md) §4                                        |
+| 协议互操作                                        | MCP（接工具）、A2A（连 agent）、ACP（挂编辑器）、AGENTS.md（读规则）                           | [tools-and-extensions.md](./tools-and-extensions.md)、[architecture.md §4](./architecture.md#_4-技术选型)                                        |
 
 ### 5.1 自主程度：把「信任」做成显式三档旋钮，而不是写死
 
@@ -1094,16 +1121,16 @@ Codex CLI 的 **suggest（只建议）/ auto-edit（可改文件、命令要审�
 
 > 举个例子（示意）：你让它「把登录页改成暗色主题」。只读档会先吐一份「要改 `Login.tsx`、`theme.css` 两个文件、动哪几行」的清单，一个字节都不落盘；自动改文件档会直接改这两个文件，但每条 git 命令、每次 `npm run` 都停下来问你；全自动档则改文件、跑测试、提交一条龙，而且只在你事先授权的沙箱目录里干，碰不到别处。
 
-> **对 mod-agent**：现有的任务模式（[overview.md](./overview.md)）与 [tools-and-extensions.md](./tools-and-extensions.md) §5 审批表应显式固化成三档（建议只读 / 改文件自动 / 命令与网络仍审批 / 全自动沙箱），并让每档映射到工具白名单与沙箱网络策略。关键是让「只读档」在代码层面就不注册写工具（Factory 与 Copilot 的做法），而不是靠 prompt 约束。对应 ADR-8（Policy 独立判定）。
+> **对 mod-agent**：现有的任务模式（[overview.md](./overview.md)）与 [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略) 审批表应显式固化成三档（建议只读 / 改文件自动 / 命令与网络仍审批 / 全自动沙箱），并让每档映射到工具白名单与沙箱网络策略。关键是让「只读档」在代码层面就不注册写工具（Factory 与 Copilot 的做法），而不是靠 prompt 约束。对应 ADR-8（Policy 独立判定）。
 
 ### 5.2 沙箱与权限：业界最狠的安全设计都在「默认拒绝」和「凭证隔离」
 
-- **Copilot 云端代理**提的 PR 永远是 draft、**触发者不能自己批准**、而且它 push 后 **GitHub Actions 默认不自动跑**——因为它可能改 `.github/workflows/` 窃取密钥。这与 [security.md](./security.md) §2 记录的 Clinejection / RoguePilot 真实事件完全同构。
+- **Copilot 云端代理**提的 PR 永远是 draft、**触发者不能自己批准**、而且它 push 后 **GitHub Actions 默认不自动跑**——因为它可能改 `.github/workflows/` 窃取密钥。这与 [security.md §2](./security.md#_2-关键实证-为什么防护必须落框架层) 记录的 Clinejection / RoguePilot 真实事件完全同构。
 - **Devin** 用云端隔离 VM + OS 级进程沙箱 + 域名级网络过滤（allow/deny list），工作区每次会话重置。
-- **Claude Code 真实漏洞**：Bash 做了沙箱但 Read 工具没做，结果能读 `/proc/self/environ` 偷 `ANTHROPIC_API_KEY`——环境变量脱敏必须覆盖所有工具路径（[security.md](./security.md) §2 已收录，Codex 等 CLI 也用同样的环境 scrub 思路）。
-- **Kilo Code** 把权限分到「改文件 / 跑白名单命令 / 浏览器 / MCP」四类各自 ask/auto，还单独有一档「重复失败死循环（doom_loop）检测」——与 [agent-loop.md](./agent-loop.md) §6 的 stuck 判定是同一个设计。
+- **Claude Code 真实漏洞**：Bash 做了沙箱但 Read 工具没做，结果能读 `/proc/self/environ` 偷 `ANTHROPIC_API_KEY`——环境变量脱敏必须覆盖所有工具路径（[security.md §2](./security.md#_2-关键实证-为什么防护必须落框架层) 已收录，Codex 等 CLI 也用同样的环境 scrub 思路）。
+- **Kilo Code** 把权限分到「改文件 / 跑白名单命令 / 浏览器 / MCP」四类各自 ask/auto，还单独有一档「重复失败死循环（doom_loop）检测」——与 [agent-loop.md §6](./agent-loop.md#_6-预算与循环防护) 的 stuck 判定是同一个设计。
 
-> **对 mod-agent**：这三条应直接进安全验收：① 改 CI/CD 与锁文件的动作单独高风险级（[code-editing.md](./code-editing.md) §4 已有）；② 所有工具（不止 shell）都过环境脱敏与路径边界；③ 网络默认关闭、按域名放行（[security.md](./security.md) §3、§5 已覆盖，落地时把 Devin 的「域名过滤代理」和 Copilot 的「workflow 不自动跑」当测试用例）。
+> **对 mod-agent**：这三条应直接进安全验收：① 改 CI/CD 与锁文件的动作单独高风险级（[code-editing.md §4](./code-editing.md#_4-变更规模与范围保护) 已有）；② 所有工具（不止 shell）都过环境脱敏与路径边界；③ 网络默认关闭、按域名放行（[security.md §3](./security.md#_3-沙箱基线)、[§5](./security.md#_5-网络、密钥与外部数据) 已覆盖，落地时把 Devin 的「域名过滤代理」和 Copilot 的「workflow 不自动跑」当测试用例）。
 
 ### 5.3 变更管理：每一步都落 Git，回滚要廉价
 
@@ -1115,11 +1142,11 @@ Codex CLI 的 **suggest（只建议）/ auto-edit（可改文件、命令要审�
 
 > 举个例子（示意）：AI 帮你改了四处代码。最差的情况是它一股脑改完，你回头发现第三处改错了却不知道哪次改的。Aider 那种「每改一处就自动 commit 一次」等于把活儿切成四小步贴好标签——你用 `git log` 看到「改了登录表单」「改了校验规则」，哪步不对就 `git revert` 哪步，别的改动不受牵连。
 
-> **对 mod-agent**：[code-editing.md](./code-editing.md) §3 的 worktree + shadow commit 与 [data-and-events.md](./data-and-events.md) 的 `task_checkpoints` 已覆盖第 2、3 档；MVP 可先抄 Aider 拿第 1 档（改动即 commit，零成本获得审计与回滚）。云端/团队阶段（[roadmap.md](./roadmap.md) Phase 5）应直接采用 v0 的「分支命名规则 + 禁推 main」和 Copilot 的「draft + 不自批」作为 PR 产物硬约束。
+> **对 mod-agent**：[code-editing.md §3](./code-editing.md#_3-工作区隔离与用户变更保护) 的 worktree + shadow commit 与 [data-and-events.md](./data-and-events.md) 的 `task_checkpoints` 已覆盖第 2、3 档；MVP 可先抄 Aider 拿第 1 档（改动即 commit，零成本获得审计与回滚）。云端/团队阶段（[roadmap.md](./roadmap.md) Phase 5）应直接采用 v0 的「分支命名规则 + 禁推 main」和 Copilot 的「draft + 不自批」作为 PR 产物硬约束。
 
 ### 5.4 代码库理解：不要让 agent 开放式乱翻，要「喂得准」
 
-- **Aider 的 Repo Map** 用 tree-sitter 抽出「哪些文件里有哪些符号」的地图（默认约 1k token）——这正是 [context-engineering.md](./context-engineering.md) §3 的方案。
+- **Aider 的 Repo Map** 用 tree-sitter 抽出「哪些文件里有哪些符号」的地图（默认约 1k token）——这正是 [context-engineering.md §3](./context-engineering.md#_3-索引结构与刷新) 的方案。
 - **OpenCode / Crush / Qwen Code 都内置了 LSP**：把编辑器语言服务器的定义/引用/诊断直接喂给模型，比纯文本 grep 更准。
 - **AutoCodeRover 在 AST 上按「类/方法」做结构感知检索**，有测试时还做统计故障定位；**Agentless 强制分层定位（文件 → 类/函数 → 编辑点）**，把开放式探索变成确定性流水线。
 - **Moatless 的信条是「工具优先于推理」**：与其让模型凭空想，不如造好检索工具把对的上下文塞进 prompt。
@@ -1128,29 +1155,29 @@ Codex CLI 的 **suggest（只建议）/ auto-edit（可改文件、命令要审�
 
 ### 5.5 状态与事件：长任务的底气来自「事件溯源 + 检查点 + 可恢复」
 
-- **OpenHands 的 EventStream** 把所有 action/observation 记成 append-only 事件，可 replay/condense/audit——与 [data-and-events.md](./data-and-events.md) §1、ADR-2 完全一致。
+- **OpenHands 的 EventStream** 把所有 action/observation 记成 append-only 事件，可 replay/condense/audit——与 [data-and-events.md §1](./data-and-events.md#_1-eventstream-事件模型)、ADR-2 完全一致。
 - **LangGraph** 把「持久化执行（durable execution）+ checkpointer」做成框架地基，失败后从断点续跑；**Mastra** 的 HITL 挂起/恢复完全依赖 storage 记住执行状态；**OpenAI Agents SDK** 用 Session 自动管历史、用 Tracing 内建调试。
 - **Gemini CLI** 有会话 checkpointing，**Crush/Qwen 的 `serve` 模式**让 agent 变成可被多端连接的常驻后端，天然支持断线恢复。
 
 > 举个例子（示意）：一个要跑二十分钟的长任务——改五个文件、跑两轮测试、中间还停下来问你「这个文件要不要也改」。做到第 7 步时电脑死机了。有检查点/事件日志的做法是：重启后它能从第 8 步接着跑，而不是从第一步重来一遍；你也能翻事件日志问它「刚才测试为什么红了」。
 
-> **对 mod-agent**：[agent-loop.md](./agent-loop.md) §5 的 Pause/Resume 语义与 data-and-events 的 SQLite 检查点就是这一层；实现时可以拿 LangGraph 的 checkpointer 语义做对照测试（恢复后不重复发起外部副作用、审批与参数 hash 绑定），但按 ADR-1/ADR-2，状态机与事件日志必须留在自己手里，不把业务状态交给框架。
+> **对 mod-agent**：[agent-loop.md §5](./agent-loop.md#_5-停止与恢复语义) 的 Pause/Resume 语义与 data-and-events 的 SQLite 检查点就是这一层；实现时可以拿 LangGraph 的 checkpointer 语义做对照测试（恢复后不重复发起外部副作用、审批与参数 hash 绑定），但按 ADR-1/ADR-2，状态机与事件日志必须留在自己手里，不把业务状态交给框架。
 
 ### 5.6 子代理：值得做，但必须「独立上下文 + 只读默认 + 只回摘要」
 
 Claude Code 的 **Task 子代理**、Roo 的 **Boomerang**（派活-回收）、Cursor 的 **Project 协调 agent**、Zed 的 **Parallel Agents**（每线程独立上下文）、Goose 的一次性 subagent、OpenAI Agents SDK 的 **handoff**、Google ADK 的 **Task API**、Factory 的 **Missions（多 Droid 并行）**——所有成熟产品都有子代理，但用法高度一致：
 
-- 子代理跑**独立上下文窗口**，脏活累活在里面做，只回 1–2k token 摘要（正是 [verification-and-multiagent.md](./verification-and-multiagent.md) §5.3 的约定）；
+- 子代理跑**独立上下文窗口**，脏活累活在里面做，只回 1–2k token 摘要（正是 [verification-and-multiagent.md §5.4](./verification-and-multiagent.md#_5-4-交接与隔离) 的约定）；
 - 分析型子代理（Roo 的 Architect、OpenCode 的 plan、Copilot 的 Plan agent）**默认只读 + 工具白名单**；
 - 并行写文件用独立 worktree 隔离（Cursor 云端 agent、Kilo Cloud Agent、Zed 都这样）。
 
-> **对 mod-agent**：这与 ADR-1（单主循环 + 受控派生）一致。反面教材同样要记：MetaGPT 的多角色 SOP 与 AutoGen 的自由对话组群在实证里约 44% 的失败源于跨 agent 不一致（[research.md](./research.md) §4–5）。所以 MVP 坚持单 agent，子代理只在 [verification-and-multiagent.md](./verification-and-multiagent.md) §5.2 列的四个只读分析角色上开放，且并行写必须 worktree 隔离。
+> **对 mod-agent**：这与 ADR-1（单主循环 + 受控派生）一致。反面教材同样要记：MetaGPT 的多角色 SOP 与 AutoGen 的自由对话组群在实证里约 44% 的失败源于跨 agent 不一致（[research.md §4](./research.md#_4-核心架构范式)–[§5](./research.md#_5-典型失败模式)）。所以 MVP 坚持单 agent，子代理只在 [verification-and-multiagent.md §5.3](./verification-and-multiagent.md#_5-3-何时引入子-agent) 列的四个只读分析角色上开放，且并行写必须 worktree 隔离。
 
 ### 5.7 Skills / 扩展：用「Markdown + 目录约定」降低扩展门槛
 
 Claude Code 的 Skills（`.claude/skills/<name>/SKILL.md`）+ 斜杠命令 + hooks、Gemini 的 extensions（`gemini extensions install`）、Goose 的 recipes（研究→计划→实现的可导入配方）、Windsurf 的 Workflows（把重复轨迹存成模板）、Factory 的 Custom Droids（`.factory/droids/` 下 YAML frontmatter 的 Markdown 定义子代理）——共同规律是：**扩展包就是一个带规范 frontmatter 的文件夹，用 Markdown 写流程，不需要写代码**。
 
-> **对 mod-agent**：[tools-and-extensions.md](./tools-and-extensions.md) §6 的 `.agent/skills/<name>/SKILL.md` 结构已经踩在这条线上。补强两点：① 给 Skill 加类似 Factory Droid 的「工具权限声明」frontmatter（Skill 文本建议权限，Policy 强制——§6 已明确「安全约束不能只写在 Skill 文本里」）；② 像 Windsurf Workflows 一样支持「把一次成功的实际操作轨迹沉淀成 Skill」，这是技能库低成本扩张的来源。
+> **对 mod-agent**：[tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用) 的 `.agent/skills/<name>/SKILL.md` 结构已经踩在这条线上。补强两点：① 给 Skill 加类似 Factory Droid 的「工具权限声明」frontmatter（Skill 文本建议权限，Policy 强制——[tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用) 已明确「安全约束不能只写在 Skill 文本里」）；② 像 Windsurf Workflows 一样支持「把一次成功的实际操作轨迹沉淀成 Skill」，这是技能库低成本扩张的来源。
 
 ### 5.8 模型接入：BYOK 是开源门票，模型网关还要管「订阅复用」与「可观测」
 
@@ -1171,13 +1198,13 @@ Gemini CLI 的 `gemini -p "..." --output-format json/stream-json`、Continue 的
 - **ACP**（Zed 主推）让编辑器把 Claude Code/Codex/Gemini/Cline 等 CLI agent 当外部后端挂入。
 - **AGENTS.md**（Linux 基金会 AAIF 托管的开放约定）是「给 agent 看的 README」，规则就近覆盖、支持嵌套，已被 Cursor、Codex、Gemini CLI、Copilot、Aider、Zed 等共同支持。
 
-> **对 mod-agent**：① MCP 作为外部工具唯一标准（[tools-and-extensions.md](./tools-and-extensions.md) 已定）；② 项目记忆文件直接采用 **AGENTS.md 命名与就近覆盖规则**（而非自造 `.modagent.md`），让用户跨工具复用（[data-and-events.md](./data-and-events.md) §4 已是这个方向，可显式声明兼容 AGENTS.md 与 CLAUDE.md）；③ A2A/ACP 不进 MVP，但 Model Gateway 与事件流设计应保持「未来可被 Zed/别的 agent 经 ACP 调用、可经 A2A 互派任务」的边界清晰。
+> **对 mod-agent**：① MCP 作为外部工具唯一标准（[tools-and-extensions.md](./tools-and-extensions.md) 已定）；② 项目记忆文件直接采用 **AGENTS.md 命名与就近覆盖规则**（而非自造 `.modagent.md`），让用户跨工具复用（[data-and-events.md §4](./data-and-events.md#_4-长期记忆) 已是这个方向，可显式声明兼容 AGENTS.md 与 CLAUDE.md）；③ A2A/ACP 不进 MVP，但 Model Gateway 与事件流设计应保持「未来可被 Zed/别的 agent 经 ACP 调用、可经 A2A 互派任务」的边界清晰。
 
 ### 5.11 流水线派的启示：不是所有任务都需要 agent 循环
 
 **Agentless** 用「分层定位 → 多候选补丁采样 → 测试重排选最优」的固定流水线，以约 $0.34–0.70/issue 的成本达到与重型 agent 相当的 SWE-bench 成绩；**AutoCodeRover** 的结构检索 + 两阶段生成同样便宜可靠；**smol developer** 的 `plan → 列文件 → 逐文件生成` 只有几百行。它们证明：**对边界清晰、有测试信号的任务，确定性流水线比自由 ReAct 更可控、更便宜**。
 
-> **对 mod-agent**：[agent-loop.md](./agent-loop.md) 的主循环里可以把确定性环节固化成子流程（验证流水线 [verification-and-multiagent.md](./verification-and-multiagent.md) §1 已经是流水线思想）；多候选补丁 + 测试重排值得作为「修复阶段」的一个可选策略（同一 bug 生成 2–3 个补丁，按测试结果选），而不是一条贪心路径走到底。
+> **对 mod-agent**：[agent-loop.md](./agent-loop.md) 的主循环里可以把确定性环节固化成子流程（验证流水线 [verification-and-multiagent.md §1](./verification-and-multiagent.md#_1-验证流水线) 已经是流水线思想）；多候选补丁 + 测试重排值得作为「修复阶段」的一个可选策略（同一 bug 生成 2–3 个补丁，按测试结果选），而不是一条贪心路径走到底。
 
 ### 5.12 选型与合规教训：活跃度与许可证是硬约束
 
@@ -1188,8 +1215,22 @@ Gemini CLI 的 `gemini -p "..." --output-format json/stream-json`、Continue 的
 - **AutoCodeRover 是 Sonar 源码可用许可（非商业竞争性用途）、Crush 是 FSL-1.1-MIT（限期后转 MIT）、Claude Code 是自定义源码许可、Mastra 是双许可**——「源码可见」不等于「OSI 开源」，合规上必须逐项目核对 LICENSE；
 - **OpenCode 迁到 anomalyco、Goose 交给 Linux 基金会 AAIF、OpenHands 改名迁组织、MetaGPT/AutoCodeRover/gpt-engineer 都换过 GitHub slug**——引用仓库地址时用会自动跳转的规范 URL，并定期复核。
 
-> **对 mod-agent**：这是 [references.md](./references.md) 的维护纪律，也是 [roadmap.md](./roadmap.md) 选型阶段的检查项：每个依赖记录「许可证 / 最近提交 / 归档状态 / 替代方案」，锁文件固定版本（[architecture.md](./architecture.md) §模块边界已要求 SDK 版本锁死与契约测试）。
+> **对 mod-agent**：这是 [references.md](./references.md) 的维护纪律，也是 [roadmap.md](./roadmap.md) 选型阶段的检查项：每个依赖记录「许可证 / 最近提交 / 归档状态 / 替代方案」，锁文件固定版本（[architecture.md §5](./architecture.md#_5-建议代码仓库结构)已要求 SDK 版本锁死与契约测试）。
+
+### 5.13 2026-10 追加：两条推翻旧认知的实证
+
+图鉴主体于 2026-08 定稿，之后出现了两条**足以改变设计取舍**的新证据，单独记在这里。
+
+**① 沙箱结实 ≠ agent 出不来。** Pillar Security 在 Cursor / Codex CLI / Gemini CLI / Antigravity 四款上复现 7 个绕过：agent 全程遵守规则地待在沙箱里，只是**写了一个文件**，沙箱外某个受信任程序（Python 扩展、Git 集成、VS Code 任务、hook 引擎）稍后读/执行它，逃逸自行完成。四种失败模式：denylist 跟不上操作系统、工作区配置其实就是可执行代码、「安全」命令白名单只信命令名不信参数、特权本地守护进程在沙箱外。
+
+- **对 mod-agent**：这条直接支撑 [security.md §3.2](./security.md#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证)——沙箱的边界要按「agent 写出去的文件会被谁读」来划，而不是按「agent 进程能碰什么」来划。命令白名单必须连参数一起判。
+
+**② 多 Agent 从「别做」变成「这样做」。** Cognition 2025-06 主张默认排除多 agent，十个月后给出反转后的形态：**多个 agent 贡献判断，但写入保持单线程**。实测其审查 agent 在自家 coding agent 写的 PR 上平均抓到 2 个 bug（约 58% 严重级），且**编码方与审查方不共享上下文时效果最好**。
+
+- **对 mod-agent**：直接落到 [verification-and-multiagent.md §5.7](./verification-and-multiagent.md#_5-7-2026-年的反转-多-agent-从「别做」到「这样做」)——`Patch Reviewer` 子代理默认**不给它编码过程的上下文**，只给任务与验收标准。
+
+> 两条合起来说的是同一件事：**边界要画在「信息流」上，而不是画在「进程」上**。沙箱那条说「写出去的文件是边界的一部分」，多 agent 那条说「共享的上下文是边界的一部分」。
 
 ---
 
-> 本图鉴的所有项目链接与许可证均于 2026-08 逐个打开核对；star 数为核对日的动态约数，仅作量级参考。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。
+> 本图鉴的所有项目链接与许可证均于 2026-08 逐个打开核对；star 数为核对日的动态约数，仅作量级参考。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。**[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-2026-10-追加-两条推翻旧认知的实证) 的内容为 2026-10 追加或更新。**

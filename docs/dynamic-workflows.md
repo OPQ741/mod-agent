@@ -24,7 +24,7 @@ Dynamic Workflows 的解法是换一个协调器：**把那个「当协调器的
 | 适用规模 | 几个到十几个子 agent | 几十到几百个 |
 | 灵活性 | 高，可边干边调整 | 分支固定，需先写脚本 |
 
-关键判断：**Workflow 不是另一套多 Agent 底座，而是复用已有的子 agent 原语**。一个子 agent 怎么派生、异步任务怎么用 `<task-notification>` 通知回来、并行写文件怎么用 worktree 隔离——这些原封不动复用 [verification-and-multiagent.md §5](./verification-and-multiagent.md) 的实现；Workflow 只在上面加了一层「确定性脚本 + 并发/预算/续跑」的壳。
+关键判断：**Workflow 不是另一套多 Agent 底座，而是复用已有的子 agent 原语**。一个子 agent 怎么派生、异步任务怎么用 `<task-notification>` 通知回来、并行写文件怎么用 worktree 隔离——这些原封不动复用 [verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略) 的实现；Workflow 只在上面加了一层「确定性脚本 + 并发/预算/续跑」的壳。
 
 ## 2. 一段 Workflow 脚本长什么样
 
@@ -56,7 +56,7 @@ export const meta = {
 
 脚本是纯 JS（不是 TS——写类型注解会解析失败），而且：
 
-- **禁用 `Date.now()`、`Math.random()`、不带参的 `new Date()`**——它们会让「断点续跑」（见 §6）算出不同结果；
+- **禁用 `Date.now()`、`Math.random()`、不带参的 `new Date()`**——它们会让「断点续跑」（见 [§6](#_6-隔离与断点续跑)）算出不同结果；
 - 这几条限制透出 Workflow 的定位：**脚本要可重放，不许有不确定性**。
 
 一段真正的 workflow——审查一批改动文件、每条发现随即对抗式复核：
@@ -106,6 +106,24 @@ flowchart LR
 
 它还给了一个快速判据：如果你写的是「并发跑一批 → 把结果 flatten/map/filter 一下 → 再并发跑一批」，那中间那步**根本不需要 barrier**，把它塞进 pipeline 的一个 stage 就行。
 
+**算一笔时间账，差别就很具体了（示意）**：3 个 item，每个要走 3 个 stage，各 stage 耗时如下。
+
+| item | stage1 | stage2 | stage3 |
+| --- | --- | --- | --- |
+| A | 1 min | 1 min | 1 min |
+| B | **3 min** | 1 min | 1 min |
+| C | 1 min | 1 min | 1 min |
+
+- **用 barrier（parallel）**：stage1 要等最慢的 B（3 min），stage2 再等全员（1 min），stage3 再等（1 min）→ **总计 5 min**。A 和 C 在 stage1 结束后干等了 2 分钟。
+- **用 pipeline**：A 走完自己的链 3 min，C 也是 3 min，B 是 5 min，各自独立 → **总耗时 ≈ 最慢那条链 = 5 min**。
+
+嗯？这个例子里两者一样？——**因为它正好是个反例**：只有当「每个 stage 内部耗时差异大」时，barrier 的浪费才明显。把 B 的 stage1 改成 9 min：
+
+- barrier：9 + 1 + 1 = **11 min**（A、C 各干等 8 分钟）
+- pipeline：**仍是最慢那条链 = 11 min**，但 A 在 3 min 时就全部完成了——**它的结果早 8 分钟可用**。
+
+所以对「结果要逐个消费」的场景（找到一个就验证一个），pipeline 的优势不在总时长，而在**首个结果的到达时间**和**中间不被拖住**。这就是为什么规则说「拿不准就 pipeline」。
+
 > 一个把编程模型做成工具、还在工具描述里教模型「别乱设 barrier、拿不准就 pipeline」的系统，其实是在替模型提前堵掉一类经典并发反模式。
 
 错误语义也值得记：`parallel` 里某个任务抛错，那一格变成 `null`（用结果前先 `.filter(Boolean)` 滤掉）；`pipeline` 里某个 stage 抛错，那个 item 就落下、跳过它剩下的 stage。**失败被隔离成单点，不会把整批带崩**。
@@ -154,7 +172,7 @@ while (budget.total && budget.remaining() > 50_000) {
 
 每次 run 有个 id（形如 `wf_000d0acb-383`），脚本每个 `agent()` 都往 journal 里记两条——一条 `started`、一条 `result`——都带一个 `v2:<哈希>` 的 key，那个 key 就是这次调用（prompt 加 opts）的内容哈希。
 
-带 `resumeFromRunId` 重跑时，**最长的一段「key 没变」的 `agent()` 前缀直接命中 journal 里上次存的 result，从第一个哈希变了的调用起才真重跑**。所以一个 100 个 agent 的迁移跑到第 60 个断了，接着跑不会重做前 59 个。这也解释了 §2.1 为什么禁 `Date.now()` / `Math.random()`——脚本必须可重放，缓存命中才对得上。
+带 `resumeFromRunId` 重跑时，**最长的一段「key 没变」的 `agent()` 前缀直接命中 journal 里上次存的 result，从第一个哈希变了的调用起才真重跑**。所以一个 100 个 agent 的迁移跑到第 60 个断了，接着跑不会重做前 59 个。这也解释了 [§2.1](#_2-1-三条为「可重放」而设的限制) 为什么禁 `Date.now()` / `Math.random()`——脚本必须可重放，缓存命中才对得上。
 
 落盘布局（真实运行可见）：
 
@@ -207,7 +225,7 @@ flowchart LR
 
 Workflow 是 [roadmap.md](./roadmap.md) 的 Phase 6（多 Agent 后期）能力，**前置依赖未满足前不要做**：
 
-- 前置：子 agent 派生与权限继承（[verification-and-multiagent.md §5](./verification-and-multiagent.md)）、worktree 隔离、后台任务与 task-notification（[background-fleet.md](./background-fleet.md)）、token 预算（[observability-evaluation.md](./observability-evaluation.md)）；
+- 前置：子 agent 派生与权限继承（[verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略)）、worktree 隔离、后台任务与 task-notification（[background-fleet.md](./background-fleet.md)）、token 预算（[observability-evaluation.md](./observability-evaluation.md)）；
 - 没有这些底座，Workflow 只是「一段会失控的 fan-out 脚本」。
 
 ### 9.1 最小版本

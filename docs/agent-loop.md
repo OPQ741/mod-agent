@@ -198,7 +198,7 @@ flowchart TD
 
 ### 2.4 流式窗口里提前执行工具
 
-一次模型响应通常有 5–30 秒的流式生成窗口。运行时不必等整段响应结束才执行工具：当某个 `tool_use` 的参数 JSON 在流中拼完整（Anthropic 的 `content_block_stop` 事件）时，若该工具是**只读、并发安全**且权限已放行，就立刻启动执行，把工具耗时「藏进」模型继续生成后续内容的窗口里；多个只读工具自然并行。写操作和命令执行不在此列，必须等响应完整、权限确认后再跑。具体事件与双后端差异见 [tools-and-extensions.md §并行执行](./tools-and-extensions.md) 与 [model-gateway.md](./model-gateway.md)。
+一次模型响应通常有 5–30 秒的流式生成窗口。运行时不必等整段响应结束才执行工具：当某个 `tool_use` 的参数 JSON 在流中拼完整（Anthropic 的 `content_block_stop` 事件）时，若该工具是**只读、并发安全**且权限已放行，就立刻启动执行，把工具耗时「藏进」模型继续生成后续内容的窗口里；多个只读工具自然并行。写操作和命令执行不在此列，必须等响应完整、权限确认后再跑。具体事件与双后端差异见 [tools-and-extensions.md §2.4](./tools-and-extensions.md#_2-4-并行工具执行) 与 [model-gateway.md](./model-gateway.md)。
 
 ## 3. 分层循环
 
@@ -298,7 +298,7 @@ sequenceDiagram
 
 举个例子（示意）：模型连着 4 轮跑同一条 `npm test`，退出码都是 1，报错行几乎没变——这就是「同一命令连续重复且无状态变化」。系统不再让模型继续瞎试，而是把这几轮失败压成一段诊断（「报错集中在 token 过期，可能不是测试本身的问题」）重新规划，而不是放任它在原地空转烧 token。
 
-> 术语备注：**检查点（checkpoint）** = 每轮工具执行后把「当前干到哪、改了哪些文件、还剩多少预算」落一次盘；**Observation（观测）** = 工具跑完回给模型的那段裁剪过的输出；**ACI** = 给模型看的「操作界面」的设计规范（详见 [context-engineering.md](./context-engineering.md) §1.1）；**compaction（压缩）** = 上下文快满时把长历史总结成摘要。
+> 术语备注：**检查点（checkpoint）** = 每轮工具执行后把「当前干到哪、改了哪些文件、还剩多少预算」落一次盘；**Observation（观测）** = 工具跑完回给模型的那段裁剪过的输出；**ACI** = 给模型看的「操作界面」的设计规范（详见 [context-engineering.md §1.1](./context-engineering.md#_1-1-接口即能力-aci-工具界面设计与-prompt-同等重要)）；**compaction（压缩）** = 上下文快满时把长历史总结成摘要。
 
 ### 6.1 三层 Guardrail（输入 / 输出 / 工具）（OpenAI Agents SDK 实证）
 

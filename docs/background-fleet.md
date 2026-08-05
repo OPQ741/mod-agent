@@ -91,6 +91,28 @@ flowchart TB
 4. 内存吃紧时，退休占内存又不紧要的 worker，给要紧的腾地方；
 5. 刚接手发现一堆没主的进程（上一个 daemon 没干净退），用 `_adopt` / `_orphan_reap` / `_roster_orphan_adopted` 认领回来，而不是放任它们变成僵尸。
 
+把这一生按时间画出来，能看清「监管器在哪些点上插了手」：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Spawned: "_worker_spawn<br/>登进 roster 花名册"
+    Spawned --> Running: 正常执行
+    Running --> Vanished: "进程莫名没了"
+    Running --> Stalled: "卡住不动"
+    Running --> Retired: "内存吃紧 · 优先级低"
+    Vanished --> Confirm: "先确认真死<br/>不是网络抖一下"
+    Stalled --> Confirm
+    Confirm --> Spawned: "确认真死 → _respawn"
+    Confirm --> Running: "误判 → _respawn_unconfirmed_bail"
+    Retired --> [*]
+    Running --> [*]: 正常退出 "_exit"
+    [*] --> Adopted: "上一个 daemon 留下没主的进程"
+    Adopted --> Running: "_adopt / _roster_orphan_adopted"
+    Adopted --> [*]: "_orphan_reap 回收"
+```
+
+这张图在说什么：有两个点最值得抄。一是 **`Vanished`/`Stalled` 之后不直接重生，而是先插入一个确认步骤**——否则网络抖一下就会让同一个活起两份。二是 **孤儿进程不是放任变僵尸，而是先认领、认领不了才回收**。
+
 这就是监管器该有的样子：**记账、查活、崩了补、挤了退、没主的收编**。
 
 ## 5. 按需起、闲了退、可一键关
@@ -119,7 +141,7 @@ flowchart TB
 
 这把「异步」从建议钉成纪律：**派出去就该松手，等通知，而不是守着反复查**。
 
-> 注意后台其实是两层：一层是你手动 `/bg` 出去、由 §4 那套 daemon 照看的**脱终端会话**；另一层是主会话在会话内派出、默认后台、完工用 task-notification 叫你回来的**子 agent**。后一层由源码坐实，前一层只有 strings；子 agent 到底是不是由那台 daemon 监管，现有证据打不通这道边界——不把它当实锤。
+> 注意后台其实是两层：一层是你手动 `/bg` 出去、由 [§4](#_4-表面之下-一台本地进程舰队监管器) 那套 daemon 照看的**脱终端会话**；另一层是主会话在会话内派出、默认后台、完工用 task-notification 叫你回来的**子 agent**。后一层由源码坐实，前一层只有 strings；子 agent 到底是不是由那台 daemon 监管，现有证据打不通这道边界——不把它当实锤。
 
 ## 7. 干完活自己收尾：commit / push / draft PR
 
@@ -130,14 +152,14 @@ flowchart TB
 - 红线同时钉死：**Never push to main/master, force-push, or merge**——绝不直推主干、绝不 force-push、绝不 merge；
 - 退路：万一没能隔离出 worktree（EnterWorktree 失败，或当前目录本来就是用户自己的 checkout），收尾换一种更保守的走法。
 
-这与 Auto Mode 的 Git 规则同向（[autonomy.md §3](./autonomy.md)）：推到自己的功能分支放行，直推默认分支和改写历史拦下。**commit 和开 PR 属于「替你把活收好」（可自动），push 到主干、merge 属于「替你拍板发布」（必须留给人）**。
+这与 Auto Mode 的 Git 规则同向（[autonomy.md §3](./autonomy.md#_3-动作自动批准-auto-mode)）：推到自己的功能分支放行，直推默认分支和改写历史拦下。**commit 和开 PR 属于「替你把活收好」（可自动），push 到主干、merge 属于「替你拍板发布」（必须留给人）**。
 
 ## 8. 对 mod-agent 的落地
 
 后台能力是 [roadmap.md](./roadmap.md) 里相对靠后的能力，且**两层的实现难度差别很大**：
 
-- **会话内子 agent 后台**（§6）相对简单，是 Phase 6 多 Agent 的一部分——子 agent 派生 + 一个异步队列 + task-notification 事件即可；
-- **脱终端 daemon 监管**（§4、§5）最重——它本质是一台进程主管，跨平台（Windows 服务 / macOS launchd）、有健康检查/重生/孤儿收养，建议放到 Phase 7 或更后，且要先确认真有「关掉终端还在跑」的需求。
+- **会话内子 agent 后台**（[§6](#_6-同一片版图-子-agent-默认后台)）相对简单，是 Phase 6 多 Agent 的一部分——子 agent 派生 + 一个异步队列 + task-notification 事件即可；
+- **脱终端 daemon 监管**（[§4](#_4-表面之下-一台本地进程舰队监管器)、[§5](#_5-按需起、闲了退、可一键关)）最重——它本质是一台进程主管，跨平台（Windows 服务 / macOS launchd）、有健康检查/重生/孤儿收养，建议放到 Phase 7 或更后，且要先确认真有「关掉终端还在跑」的需求。
 
 ### 8.1 最小版本
 
@@ -150,7 +172,7 @@ flowchart TB
 
 - 真有「任务要跑超过你愿意开着终端的时间」，且你无法用一个常驻服务器/CI 跑它；
 - 只是「不想等结果」——会话内后台子 agent + 通知就够，不必脱离；
-- 能在 CI / 云端跑的长任务，优先放 CI（[security.md §3](./security.md) 的 bare 模式），比在本机维护 daemon 更省心。
+- 能在 CI / 云端跑的长任务，优先放 CI（[security.md §3](./security.md#_3-沙箱基线) 的 bare 模式），比在本机维护 daemon 更省心。
 
 ## 9. 设计决策（ADR）
 

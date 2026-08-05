@@ -63,24 +63,82 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 5. **协议层基本定型**：MCP 管「agent 接工具」、A2A 管「agent 连 agent」、ACP 管「编辑器挂 CLI agent」、AGENTS.md 管「agent 读项目规则」，四者互补。
 6. **活跃度与许可证是硬约束**：2026 年 Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 转维护模式、Amazon Q CLI 停更；Crush（FSL）、Claude Code（自定义源码许可）、AutoCodeRover（Sonar 源码可用）、Zed（GPL-3.0）都不是标准宽松许可——选型时必须逐项目核对 LICENSE 与最近提交（见 [references.md](./references.md)）。
 
-## 3. 真实能力水平（2025–2026）
+## 3. 真实能力水平（2025–2026，2026-10 核实）
 
-SWE-bench Verified 分数演进（注意：不同 harness 不可横向等号归因于模型）：
+### 3.1 SWE-bench Verified：先看「谁跑的」，再看分数
 
-| 时间 | 系统 | 分数 |
+同一套 harness 才能横向比；跨 harness 只能看时间线演进。下面两张表分开列，就是因为这个。
+
+**表 A · 官方统一 harness 榜**（swebench.com，全部用 mini-SWE-agent 跑，2026-02 更新）——这张表内部可比：
+
+| 模型 | % Resolved | 平均成本/题 |
 | --- | --- | --- |
-| 2025-02 | Claude 3.7 Sonnet + extended thinking | 62.3%（自定义 scaffold 70.3%） |
-| 2025-05 | Claude Opus 4 / Sonnet 4 | ~72.5% |
-| 2025-09 | Claude Sonnet 4.5 | 77.2% |
-| 2025-12 | Claude 4.5 Opus（live-SWE-agent） | 79.2%（avg cost \$0.86/题） |
+| Claude 4.5 Opus（high reasoning） | 76.80% | \$0.75 |
+| Gemini 3 Flash（high reasoning） | 75.80% | \$0.36 |
+| MiniMax M2.5（high reasoning） | 75.80% | **\$0.07** |
+| Claude Opus 4.6 | 75.60% | \$0.55 |
+| GPT-5-2 Codex / GLM-5 | 72.80% | \$0.45 / \$0.53 |
+| Claude 4.5 Sonnet | 71.40% | \$0.66 |
+| Kimi K2.5 | 70.80% | **\$0.15** |
+| DeepSeek V3.2 | 70.00% | \$0.45 |
+| GPT-5 Mini | 56.20% | \$0.05 |
 
-**口径警告**：分数分属不同 harness（裸模型 / Claude Code / Devin / live-SWE-agent），只能看时间线上的能力演进，不能归因于模型本身。
+**表 B · 厂商自报 / 第三方独立复跑**（harness 各不相同）——只能看趋势：
 
-这些数字到底在说什么（数字本身不改动）：62.3% → 72.5% → 77.2% → 79.2%，意思是「修 GitHub issue 这类任务，一年间成功率从六成出头涨到近八成」——确实变强了，但离「十修九稳」还有距离。括号里的 70.3%、\$0.86/题是「加了脚手架 / 每题成本」，再次提醒：这是系统分，不是模型裸分。
+| 时间 | 系统 | 分数 | 口径 |
+| --- | --- | --- | --- |
+| 2025-02 | Claude 3.7 Sonnet + extended thinking | 62.3% | 自定义 scaffold 70.3% |
+| 2025-05 | Claude Opus 4 / Sonnet 4 | ~72.5% | 自报 |
+| 2025-09 | Claude Sonnet 4.5 | 77.2% | 自报 |
+| 2025-12 | Claude 4.5 Opus（live-SWE-agent） | 79.2% | 自报，\$0.86/题 |
+| 2026-05 | Claude Opus 4.8 | 88.6% | 自报 |
+| 2026-07 | Claude Opus 5 | 96.0% | 自报（5 次平均） |
+| 2026-09 | Claude Opus 5 | **97.00% ±0.76** | **Vals.ai 独立复跑**（bash-only harness） |
 
-其他事实：
+前面那些数字到底在说什么：62.3% → 77.2% → 88.6% → 96%，意思是「修 GitHub issue 这类任务，一年半里成功率从六成出头涨到接近满分」。确实变强了，但**这个涨幅本身要打折看**，原因见下。
 
-- Terminal-Bench（运维/终端任务）顶尖模型约 43%（Claude 4 时代）→ 64.8%（Opus 5.5，4.0），仍明显低于 SWE-bench 的 70%+——运维级任务至今比修 issue 更难；
+**饱和与污染警告（必读）**：第三方核查（benchlm，2026-10-09）指出：收录的 82 个模型里 **76 个是厂商自报、0 个来自榜主或独立运行**；前三名差距不到 1.0 分，顶部严重聚集 —— 这是**饱和**信号。榜主后续审计也发现，高分段仍残留有缺陷或欠规范的测试题。所以接近顶部的分数，读出「谁更强」的能力已经很弱了。
+
+```mermaid
+flowchart LR
+    A["看到 96% 这种分数"] --> B{"谁跑的?"}
+    B -->|"厂商自报<br/>不同 harness"| C["只能看时间线趋势<br/>不可横向排名"]
+    B -->|"统一 harness<br/>如 mini-SWE-agent"| D["内部可比<br/>表 A 属于这类"]
+    B -->|"第三方独立复跑<br/>如 Vals.ai"| E["最可信<br/>但仍要看任务集"]
+    C --> F["再问:饱和了吗?<br/>饱和后分数差距失去意义"]
+    D --> F
+    E --> F
+```
+
+这张图在说什么：看到 benchmark 分数，第一反应不该是「谁高谁强」，而是「这分是怎么跑出来的」。跑的人不同，分数连在一起的资格都没有。
+
+### 3.2 Terminal-Bench：运维级任务仍然是另一条更难的曲线
+
+- **当前版本已是 Terminal-Bench 4.0**，2.x 的分数与 4.0 **不可直接比较**（任务集与资源都换了）；
+- 2.0 榜（tbench.ai）顶部是 agent 脚手架而非裸模型：GPT-5.5 + NexAU-AHE 84.7% ±2.1，LemonHarness 84.5%，GPT-5.5 + Codex CLI 82.2%；
+- 裸模型直接跑：GPT-5.5 约 73%，Claude Opus 4.7 约 68.5% —— 明显低于 SWE-bench 的 80%+，**运维级任务至今比修 issue 更难**；
+- **脚手架效应**：同一模型换 harness 差异巨大，例如 Gemini 2.5 Pro 用 Terminus 2 比用 OpenHands 高约 17 个百分点。这再次说明「系统分 ≠ 模型裸分」；
+- **难度断层**：Easy 任务前沿模型平均约 65%，Hard 任务平均约 16%，**49 个百分点的差距对所有模型一致** —— 说明卡住大家的是同一类瓶颈，不是某家模型不行。
+
+### 3.3 成本：agent 的钱主要烧在「重发的上下文」上
+
+| 场景 | 单任务成本（Sonnet 4.6 量级，2026-03 价） |
+| --- | --- |
+| 单文件编辑 | ~\$0.031 |
+| Bug 排查 | ~\$0.089 |
+| PR 代码审查 | ~\$0.062 |
+| 多文件重构 | ~\$0.17 |
+| 端到端新功能 | ~\$0.53 |
+
+其他可引用数字：
+
+- Aider Polyglot（225 题 / 6 语言）：单任务 \$0.028（Gemini 2.5 Pro）～ \$0.129（GPT-5 high reasoning）；GPT-5 跑完全集 \$29.08；
+- Claude Code 企业部署：约 **\$13/开发者/活跃日**，90% 用户低于 \$30/天；
+- 智能路由相对「一律上最强模型」平均省 **82–84%**；
+- **结构事实**：agent 每一步都要把整段对话和代码重发一遍，实测典型编码 agent 调用发 15k–42k 输入 token、只回几百输出 token —— 所以对 agent 来说**输入价格远比输出价格重要**，且长任务占成本约 80%。
+
+### 3.4 其他事实
+
 - 33k 条 agent PR 实证（MSR 2026）：文档/CI/构建类合并率最高，性能优化与 bug 修复最差；未合并主因是缺评审、重复 PR、未过 CI、越界功能——agent 最大的失败不是代码写错，而是社会-技术层失配；
 - HumanEval 已饱和且易过拟合，只作烟雾测试；LiveCodeBench 防污染竞赛题 frontier pass@1 约 35–58%。
 

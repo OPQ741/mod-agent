@@ -4,6 +4,31 @@
 
 > 这篇是「施工排期表」。顺序有讲究：先让一个任务能安全跑通（Phase 1–2），再谈变聪明（Phase 3–4）、再谈团队协作（Phase 5），最后才考虑多 agent（Phase 6）——地基没打牢前不盖二楼。
 
+排期的形状比条目本身重要：三个阶段层，每层都建立在下一层真的跑通之上。
+
+```mermaid
+flowchart TB
+    subgraph F["第一层：能跑通（地基）"]
+        P0["Phase 0 基线与技术验证"] --> P1["Phase 1 纵向 MVP 闭环"]
+        P1 --> P2["Phase 2 可靠性补齐"]
+    end
+    subgraph SM["第二层：变聪明"]
+        P3["Phase 3 代码理解增强"] --> P4["Phase 4 Skills / MCP / 浏览器验证"]
+    end
+    subgraph AD["第三层：扩规模（可选）"]
+        P5["Phase 5 团队与企业能力"] --> P6["Phase 6 选择性多 Agent"]
+        P6 --> P7["Phase 7 自治与续跑"]
+        P7 --> P8["Phase 8 工作流 / 团队 / 后台舰队"]
+    end
+    P2 --> P3
+    P4 --> P5
+    style F fill:#d4edda
+    style SM fill:#e7f1ff
+    style AD fill:#fff3cd
+```
+
+这张图在说什么：**绿色那一层做不完，就别碰黄色那一层**。多 agent（Phase 6）排得这么后不是因为它不重要，而是因为它的正确性依赖前面所有的可观测性、权限与验证能力——没有这些，多 agent 只是把失败放大。
+
 ## 1. 开发路线
 
 ### Phase 0 · 基线与技术验证
@@ -18,17 +43,17 @@
 
 ### Phase 2 · 可靠性补齐
 
-实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；**流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md)）**。
+实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；**流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）**。
 验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪；压缩只在 turn boundary 触发、不破坏工具调用配对；缓存命中率可观测。
 
 ### Phase 3 · 代码理解增强
 
-实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索；**长期记忆的四类型分类、语义召回（sideQuery）与异步预取（[context-engineering.md §5.4](./context-engineering.md#54-长期记忆记什么怎么召回)）**。
+实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索；**长期记忆的四类型分类、语义召回（sideQuery）与异步预取（[context-engineering.md §5.4](./context-engineering.md#_5-4-长期记忆-记什么、怎么召回)）**。
 验收：相比只用 `rg` 的基线，目标文件召回率、上下文相关性或成功率有可测提升；索引失效不导致错误结论；记忆召回零额外等待、命中条目相关且可判定时效。
 
 ### Phase 4 · Skills、MCP 与浏览器验证
 
-实现：Skill 加载/版本、**inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md)）**、MCP Client（**stdio 握手、三段式命名、懒加载与失败隔离**）、外部文档/代码托管集成、Playwright 页面验证与截图产物。
+实现：Skill 加载/版本、**inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md#_6-2-触发路径与执行模式-inline-fork)）**、MCP Client（**按 2026-07-28 无状态规范实现**：stdio / Streamable HTTP、三段式命名、懒加载与失败隔离、列表缓存、MRTR 交互、错误码 `-32602`，见 [tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)）、外部文档/代码托管集成、Playwright 页面验证与截图产物。
 验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；单个 MCP server 挂起不影响其余工具；浏览器结果可复现并归档。
 
 ### Phase 5 · 团队与企业能力
@@ -38,7 +63,7 @@
 
 ### Phase 6 · 选择性多 Agent
 
-基于评测决定是否引入只读分析、测试分析、diff Review 子 Agent；上线前验证相较单 Agent 基线的效果、成本与延迟收益。子 Agent 用同一 Agent 类配置化实现，落实四层工具过滤（只读、禁递归、权限继承、白名单）、独立上下文与输出捕获（见 [verification-and-multiagent.md §5.4](./verification-and-multiagent.md#54-子-agent-的实现模式一个-agent-类配置不同)）。
+基于评测决定是否引入只读分析、测试分析、diff Review 子 Agent；上线前验证相较单 Agent 基线的效果、成本与延迟收益。子 Agent 用同一 Agent 类配置化实现，落实四层工具过滤（只读、禁递归、权限继承、白名单）、独立上下文与输出捕获（见 [verification-and-multiagent.md §5.5](./verification-and-multiagent.md#_5-5-子-agent-的实现模式-一个-agent-类-配置不同)）。
 
 ### Phase 7 · 自治与续跑
 
@@ -67,7 +92,7 @@ flowchart LR
     P7 --> P8["Phase 8<br/>工作流 / 团队 / 后台舰队"]
 ```
 
-这张图在说什么：箭头只往右走、不允许跳级——每个阶段都有文末 §3 那套可勾选的验收清单，过不了就不进下一阶段。
+这张图在说什么：箭头只往右走、不允许跳级——每个阶段都有文末 [§3](#_3-mvp-验收清单) 那套可勾选的验收清单，过不了就不进下一阶段。
 
 ### 1.1 各阶段的业界对照（2026-08 核实）
 

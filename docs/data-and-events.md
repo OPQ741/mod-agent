@@ -38,6 +38,34 @@ interface TaskEvent<T = unknown> {
 
 事件类型：`task.status_changed`、`task.plan_ready`、`agent.message_delta`、`tool.started`、`tool.progress`、`tool.completed`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`。
 
+**一次真实任务在流水账上长什么样**（这几行合起来就是「当时到底发生了什么」的全部证据）：
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant RT as Runtime
+    participant ST as EventStream
+    U->>RT: "修一下登录页偶发报错"
+    RT->>ST: task.status_changed(created)
+    RT->>ST: tool.started(repo.search_text)
+    ST-->>RT: tool.completed(命中 3 个文件)
+    RT->>ST: tool.started(repo.read_file)
+    ST-->>RT: tool.completed(auth.ts)
+    RT->>ST: task.plan_ready
+    RT->>ST: approval.required(edit, hash=a1b2)
+    U-->>RT: 批准
+    RT->>ST: approval.decided(allow, hash=a1b2)
+    RT->>ST: file.changed(auth.ts)
+    RT->>ST: checkpoint.created
+    RT->>ST: validation.started(npm test)
+    ST-->>RT: validation.completed(exit=1)
+    RT->>ST: tool.completed(带失败日志)
+    RT->>ST: validation.completed(exit=0)
+    RT->>ST: task.completed
+```
+
+这张图在说什么：**没有任何一步是「改一行状态字段」就完事的**，每一步都追加一条新记录。所以崩溃后能重放到任意一点；审计时能回答「第 7 步到底是谁批准的、批准的是什么参数」——`approval.decided` 里那个 `hash=a1b2` 就是干这个用的（见 [§3](#_3-数据一致性规则)）。
+
 > 不把每个 token 都永久写库：流式发送文本增量，但只持久化重要生命周期事件、完成消息与必要审计内容。
 > 举个例子（示意）：agent 边想边往外蹦字，这些中间增量在屏幕上流式显示，但不会逐字写进数据库；真正落库的是「任务开始了」「工具跑完了」「审批点了同意」这种关键节点。
 
@@ -133,9 +161,9 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 - AGENTS.md 是**开放格式**（无必填字段、普通 Markdown），已被 6 万+ 开源项目采用，现由 Linux 基金会旗下 Agentic AI Foundation（AAIF）托管；
 - 主流工具已原生兼容：GitHub Copilot coding agent、Devin、Factory、Cursor、Codex、Gemini CLI、Windsurf、Zed、Warp、VS Code 等；
 - 官方明确「Rather than introducing another proprietary file, we chose a name and format that could work for anyone」——跟着标准走，用户跨工具复用同一份项目规则；
-- 加载语义：**离被编辑文件最近的 AGENTS.md 优先**；用户当场聊天指令优先级最高；支持 monorepo 嵌套（详见 [context-engineering.md](./context-engineering.md) §2.1）。
+- 加载语义：**离被编辑文件最近的 AGENTS.md 优先**；用户当场聊天指令优先级最高；支持 monorepo 嵌套（详见 [context-engineering.md §2.1](./context-engineering.md#_2-1-规则文件的加载顺序与优先级)）。
 > 举个例子（示意）：仓库根放一份全局 `AGENTS.md`（如「用 pnpm 不用 npm」），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
 
 **兼容读取策略（Devin 实证，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：Devin 提供 `read_config_from` 开关，可选择性导入 `AGENTS.md`（含 `AGENTS.local.md`、历史名 `AGENT.md`、`.windsurfrules`）以及 Cursor / Windsurf / Claude / OpenCode / Zed 等竞品的规则文件。mod-agent 启动时同样以开关方式兼容读取 `AGENTS.md` + 已知竞品规则文件，逐项可关。
 
-**记忆目录结构（Claude Code 实证，出处：https://code.claude.com/docs/en/memory ）**：记忆分两层——一份索引常驻、每个记忆一个独立文件按需读；索引有硬上限（前 200 行 / 25KB 先到为准），主题文件写回时自动加 `modified: ISO8601` 时间戳（详见 [context-engineering.md](./context-engineering.md) §5）。
+**记忆目录结构（Claude Code 实证，出处：https://code.claude.com/docs/en/memory ）**：记忆分两层——一份索引常驻、每个记忆一个独立文件按需读；索引有硬上限（前 200 行 / 25KB 先到为准），主题文件写回时自动加 `modified: ISO8601` 时间戳（详见 [context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）。

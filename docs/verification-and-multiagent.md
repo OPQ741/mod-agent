@@ -61,8 +61,8 @@ interface ValidationReport {
 
 AGENTS.md 规范 FAQ 明确（出处：https://agents.md ）：**在 AGENTS.md 里列出的测试命令，agent 会自动尝试执行，并在任务结束前修复失败**（"The agent will attempt to execute relevant programmatic checks and fix failures before finishing the task"）。对 mod-agent：
 
-- §2 项目命令发现以 `package.json` 等为准之外，**AGENTS.md / CLAUDE.md 中显式列出的 build / test 命令同样进入候选**，且执行前过 Policy；
-- 「修到绿」是任务收尾的默认义务，不是可选项——与 §1 验证流水线、Repair Loop 衔接。
+- [§2](#_2-项目命令发现) 项目命令发现以 `package.json` 等为准之外，**AGENTS.md / CLAUDE.md 中显式列出的 build / test 命令同样进入候选**，且执行前过 Policy；
+- 「修到绿」是任务收尾的默认义务，不是可选项——与 [§1](#_1-验证流水线) 验证流水线、Repair Loop 衔接。
 
 ## 2. 项目命令发现
 
@@ -122,7 +122,7 @@ flowchart TD
 
 | 模式 | 结构 | 谁来调度 | 成员通信 | mod-agent 对应 |
 | --- | --- | --- | --- | --- |
-| **Subagent（子代理）** | 主 Agent 派独立上下文的子 Agent，干完回传结果 | 主 Agent 在推理里临场派 | 子 Agent 是叶子，彼此不通气 | §5.4–5.6（首期做这个） |
+| **Subagent（子代理）** | 主 Agent 派独立上下文的子 Agent，干完回传结果 | 主 Agent 在推理里临场派 | 子 Agent 是叶子，彼此不通气 | [§5.4](#_5-4-交接与隔离)–[§5.6](#_5-6-业界实证-子代理与并行的强制机制)（首期做这个） |
 | **Coordinator（协调器）** | 主 Agent 变成**纯协调器**，自己不执行、只分派 worker 并汇总 | 主 Agent 只编排不干活 | worker 只对协调器回传 | 大规模拆分时（见 [dynamic-workflows.md](./dynamic-workflows.md)） |
 | **Swarm（蜂群）** | 一组对等 Agent，通过共享终端（tmux/iTerm2）**点对点**协作 | 无单一中心，Agent 互相直连 | 成员之间可直接互发 | 演化为 [agent-teams.md](./agent-teams.md) |
 
@@ -130,7 +130,7 @@ flowchart TD
 
 - **Subagent 是基础模式**：Coordinator 只是把「主 Agent 不再亲自执行」这条规则化，底下仍是子 Agent；Swarm 把「叶子能互发」放开——这一放开就从「正确性问题」变成「安全问题」，需要一整套跨会话授权规则（见 [agent-teams.md](./agent-teams.md)）；
 - **确定性脚本是第四种、但不在模型驱动范畴**：当编排能预先写死、且规模大到模型临场调度不可靠时，用 [dynamic-workflows.md](./dynamic-workflows.md) 的脚本替代「当协调器的模型」；
-- **选型顺序**：单 Agent（§5.1）→ Subagent（本节）→ Coordinator/Workflow（大规模）→ Swarm/Teams（对等协作）。能停在左边就别往右边走。
+- **选型顺序**：单 Agent（[§5.1](#_5-1-首期单-agent)）→ Subagent（本节）→ Coordinator/Workflow（大规模）→ Swarm/Teams（对等协作）。能停在左边就别往右边走。
 
 ### 5.3 何时引入子 Agent
 
@@ -177,7 +177,7 @@ new Agent({
 ```
 
 - **内置三类角色 + 自定义**：`explore`（只读探索，工具最少、最省 token，仅输出观察不做结论）、`plan`（规划，只读 + 计划工具）、`general`（通用，工具最全）；用户也可在 `.agents/<name>.md`（或 `.mod-agent/agents/`）写自定义角色文件，结构与 `SKILL.md` 类似——YAML frontmatter（名称 / 描述 / 允许工具）+ 正文（角色与职责）；
-- **输出捕获，不回流父会话**：子 Agent 内部的模型对话、工具调用、流式输出原本会写入会话存储 / 打到 TUI；在 `isSubAgent` 下这些都被**重定向到一个 `outputBuffer`**——不保存进父会话历史、不打印到主界面。子 Agent 跑完只把 buffer 里的最终结果作为 `Task` 工具结果返回给父代理，父代理的上下文因此只增加一条摘要（对齐 §5.4 的「只回 1–2k token」）；
+- **输出捕获，不回流父会话**：子 Agent 内部的模型对话、工具调用、流式输出原本会写入会话存储 / 打到 TUI；在 `isSubAgent` 下这些都被**重定向到一个 `outputBuffer`**——不保存进父会话历史、不打印到主界面。子 Agent 跑完只把 buffer 里的最终结果作为 `Task` 工具结果返回给父代理，父代理的上下文因此只增加一条摘要（对齐 [§5.4](#_5-4-交接与隔离) 的「只回 1–2k token」）；
 - **token 汇总**：子 Agent 的 token 用量与成本计入父代理的账单，不另开账户；
 - 这样主 Agent 和子 Agent 共享同一套循环、工具执行、权限、压缩逻辑，维护成本最低。
 
@@ -185,7 +185,7 @@ new Agent({
 
 1. **只读类型过滤**：explore / plan 类角色先移除所有写文件、命令执行、网络类工具（物理拿不到，而非提示词叮嘱）；
 2. **移除子代理派生工具**：默认不挂载 `Task`（派生子代理）工具，**禁止递归创建子代理**，防止无限扇出；确需「子代理再派子代理」的能力必须显式开启；
-3. **权限模式强制继承**：父代理处于 `plan` 或 `auto` 等模式时，子代理**必须继承同一模式**，不能提权（见 [autonomy.md §3.5](./autonomy.md#35-权限必须传播给子代理)）；
+3. **权限模式强制继承**：父代理处于 `plan` 或 `auto` 等模式时，子代理**必须继承同一模式**，不能提权（见 [autonomy.md §3.5](./autonomy.md#_3-5-权限必须传播给子代理)）；
 4. **角色白名单**：自定义角色文件 frontmatter 的 `allowed-tools` 再做一次白名单收窄。
 
 这四层是**确定性的**——工具不在集合里，模型无论如何都拿不到手；系统提示词里的角色约束只是补充。它解决了一个真实的安全漏洞：若不强制继承权限，模型可以在主对话每步都要确认的情况下，把敏感操作派给一个「全自动」的子代理去绕过审批。
@@ -199,7 +199,7 @@ new Agent({
 
 ### 5.6 业界实证：子代理与并行的强制机制
 
-**Plan 只读靠「不注册写工具」，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal——"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：§5.3 的分析型子代理（Repository Analyst / Patch Reviewer）应在**代码层**就不注册写工具，而不是靠 prompt 叮嘱。
+**Plan 只读靠「不注册写工具」，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal——"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：[§5.3](#_5-3-何时引入子-agent) 的分析型子代理（Repository Analyst / Patch Reviewer）应在**代码层**就不注册写工具，而不是靠 prompt 叮嘱。
 
 **子代理 = 独立上下文窗口 + 同工具集 + 只回传结果（Zed `spawn_agent` 实证，出处：https://zed.dev/docs/ai/tools ）**：派一个带独立上下文窗口的子代理执行委托任务（并行调研 / 自包含小任务），探索过程留在自己窗口，仅把结果交回父代理；父代理继续原工作，子代理完成后再评审其结论——两边上下文都聚焦单一任务。
 
@@ -212,3 +212,57 @@ new Agent({
 5. 任务结束：人工评审 diff，经正常 git 流程合并；线程归档时保存并清理 worktree，恢复线程时自动重建。
 
 **多 agent 编排的门槛（Factory Droid `--mission` 实证，出处：https://docs.factory.ai/droid-cli/cli-reference.md ）**：并行 / mission 模式要求自治等级先达到 `--auto high`（只读 → 安全改 → 本地开发 → 可 push 逐级解锁后才允许并行自治），因为并行 agent 要能自己提交 / push。对 mod-agent：多 worker 并行是**权限上界**，不是默认能力。
+
+### 5.7 2026 年的反转：多 Agent 从「别做」到「这样做」
+
+这一节记录一次**立场反转**，因为它是目前关于多 Agent 最有价值的公开实证。
+
+**原来的立场（2025-06，Cognition / Walden Yan《Don't Build Multi-Agents》，出处：https://cognition-labs.com/blog/dont-build-multi-agents ）**：
+
+- 两条原则：**共享上下文**（且要共享完整 agent trace，而不是一条消息摘要）、**行动承载隐式决策**（冲突的决策带来坏结果）；
+- 经典反例：「做一个 Flappy Bird 克隆」拆给两个子 agent——一个做出了超级马里奥风格的背景，另一个做出了不像游戏素材的小鸟，协调者最后拿到的是两次误解的拼接体；
+- 结论：2025 年跑多个 agent 协作只会产生脆弱系统，**默认应排除一切违反这两条原则的架构**；推荐单线程线性 agent，超长任务再用一个专用压缩模型。
+
+**十个月后的反转**（更窄但更硬的形态）：**「multiple agents contribute intelligence to a task while writes stay single-threaded」**——多个 agent 可以读、可以推理、可以建议，**但只有一个线程能写**。
+
+```mermaid
+flowchart TB
+    subgraph RO["只读层：可以很多"]
+        R1["审查 agent"]
+        R2["调研 agent"]
+        R3["诊断 agent"]
+    end
+    subgraph WO["写入层：只能一个"]
+        W["主 agent 单线程写"]
+    end
+    R1 -->|判断| W
+    R2 -->|判断| W
+    R3 -->|判断| W
+    W --> V["确定性验证<br/>测试 / lint / build"]
+    style WO fill:#d4edda
+    style RO fill:#e7f1ff
+```
+
+这张图在说什么：绿色那一层只能有一个。多个 agent 并存的价值在于**贡献判断**，不在于**分头动手**。谁写一个没定清楚，多 agent 就退化成协调灾难。
+
+三条实测结论，每一条都反直觉：
+
+1. **代码审查 agent 在自己人写的 PR 上平均抓到 2 个 bug，其中约 58% 是严重级**；
+2. **编码 agent 与审查 agent 事先不共享上下文时，审查效果最好。** 理由是审查者被迫从实现反推，而注意力在长上下文里会退化。这条对人类社会是「职场自杀建议」，对 agent 却是正确架构；
+3. **快慢模型配对失败的原因不是成本，是能力天花板**：「质量天花板由初级模型决定，而初级模型不够强」——弱模型**不知道自己什么时候已经超出能力范围**。两个前沿模型之间，委派变成**能力路由器**而非难度升级器。
+
+Anthropic 从另一侧给了同样的边界：多数编码任务里真正可并行的部分比研究少，agent「还不擅长实时协调与委派」。另外要认清一件事：**野外大多数自称「多 agent」的系统其实是只读子 agent，更像工具调用，而非真正的多 agent 协作**（[§5.2](#_5-2-三种编排模式-先看清再选) 的 Subagent 正是这个形态）。
+
+**对 mod-agent 的落地**：
+
+- [§5.2](#_5-2-三种编排模式-先看清再选) 的选型顺序（单 Agent → Subagent → Coordinator → Swarm）保持不变，**但「写」必须在任何一层都保持单线程**。多个 worker 分头写文件只在 worktree 隔离 + 最终一致性检查（[§5.4](#_5-4-交接与隔离)）下才允许；
+- `Patch Reviewer` 子代理（[§5.3](#_5-3-何时引入子-agent)）应**默认不给它编码过程的上下文**——这与 [§5.4](#_5-4-交接与隔离)「交接必须传递任务目标、相关证据」并不矛盾：交接的是**任务与验收标准**，不是「作者的实现思路」。让审查者自己推，才能抓到作者自己看不见的问题；
+- 别指望用便宜模型干贵的活来降本（[research.md §3.3](./research.md#_3-3-成本-agent-的钱主要烧在「重发的上下文」上) 成本数据），弱模型不会主动告诉你它不行。
+
+**上多 Agent 之前的三个必答问题**（任一答不出，就不是多 agent，而是把一处模糊并行化了）：
+
+| # | 问题 | 答不上来的后果 |
+| --- | --- | --- |
+| 1 | 能否把这个角色的 brief 写得足够精确，使其产出**无需重放整段对话**就能被检验？ | 你没有「角色」，只有一团并行化的模糊 |
+| 2 | **谁写？** 是否保持写单线程且显式？ | 隐式决策冲突，产出拼不起来 |
+| 3 | **什么叫完成？** 能否写成非人也能检查的形式？ | 这不是一个可自主的步骤，只是看着像 |
