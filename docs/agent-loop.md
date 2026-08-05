@@ -157,7 +157,7 @@ flowchart TD
 
 ### 2.1 「继续还是停」不止一条判断
 
-最小实现里，循环的判断只有一条：模型这一轮返回了工具调用就继续，否则结束。生产级运行时要把「为什么要再转一圈」分得更细。逆向 Claude Code 的运行时可以看到，它把继续循环的原因分成约七类（参考 [claude-code-from-scratch · Agent Loop](https://diwang.info/claude-code-from-scratch/#/docs/01-agent-loop)）：
+最小实现里，循环的判断只有一条：模型这一轮返回了工具调用就继续，否则结束。生产级运行时要把"为什么要再转一圈"分得更细。逆向 Claude Code 的运行时可以看到，它把继续循环的原因分成约七类（参考 [claude-code-from-scratch · Agent Loop](https://diwang.info/claude-code-from-scratch/#/docs/01-agent-loop)）：
 
 | #   | 继续原因       | 触发情形                              | 处理                               |
 | --- | -------------- | ------------------------------------- | ---------------------------------- |
@@ -216,7 +216,7 @@ flowchart TD
 - **Windsurf 的后台规划 agent**（出处：https://docs.windsurf.com/windsurf/cascade/cascade ）：一个专职规划 agent 在后台持续修订长期计划，当前模型只按计划做短动作，执行中发现新信息自动回写计划，并维护一份可人工查看 / 修改的 Todo 列表。计划不是开跑前写死的；
 - **Factory `--use-spec` / Replit Plan mode**（出处：https://docs.factory.ai/droid-cli/cli-reference.md 、https://docs.replit.com/replitai/agent ）：复杂任务先进 spec / 任务清单模式产出计划供人确认，再进入执行。
 
-对 mod-agent，建议按任务规模分级：小任务直接执行；中任务 plan → edit；大任务走「后台规划 agent + 可人工编辑的计划产物 + 动态 replan」的结构，规划产物随上下文推进动态调整。
+对 mod-agent，建议按任务规模分级：小任务直接执行；中任务 plan → edit；大任务走"后台规划 agent + 可人工编辑的计划产物 + 动态 replan"的结构，规划产物随上下文推进动态调整。
 
 ### 3.2 Plan Mode 的落地：只读契约 + 计划文件 + 审批四选项
 
@@ -266,7 +266,7 @@ sequenceDiagram
     CLI->>User: Diff 与交付报告
 ```
 
-有三处容易出问题：一是 Planner 出计划前先取 repo map / AGENTS.md，保证 `filesLikelyAffected` 有依据；二是每次工具调用都走「工具层 → 沙箱 → 裁剪 observation → 回灌」，observation 经 ACI 裁剪，而不是把原始输出塞回模型；三是每轮都重新申请上下文装配（含压缩），这是长任务不跑偏的关键。
+有三处容易出问题：一是 Planner 出计划前先取 repo map / AGENTS.md，保证 `filesLikelyAffected` 有依据；二是每次工具调用都走"工具层 → 沙箱 → 裁剪 observation → 回灌"，observation 经 ACI 裁剪，而不是把原始输出塞回模型；三是每轮都重新申请上下文装配（含压缩），这是长任务不跑偏的关键。
 
 ## 5. 停止与恢复语义
 

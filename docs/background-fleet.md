@@ -12,7 +12,7 @@
 - **`/bg`** 把当前会话从终端上摘下来、丢到后台常驻，终端立刻腾出来；
 - **`claude agents`** 把多个后台会话汇成一张表，当一支舰队照看。
 
-三样叠起来，才凑齐「无人值守」的全部含义：既不用你守着看，也不用你守着连。
+三样叠起来，才凑齐"无人值守"的全部含义：既不用你守着看，也不用你守着连。
 
 ## 1. 脱终端：第三根轴
 
@@ -32,17 +32,17 @@
 
 ## 3. claude agents：一张表管所有后台会话
 
-- `/bg` 解决「一个会话怎么活下去」；`claude agents` 解决「好几个会话怎么一起看」。
+- `/bg` 解决"一个会话怎么活下去"；`claude agents` 解决"好几个会话怎么一起看"。
 
-`claude agents` 是一个正经的 Commander 子命令（描述：「Manage background agents」），带一小组动作：
+`claude agents` 是一个正经的 Commander 子命令（描述："Manage background agents"），带一小组动作：
 
 | 命令                 | 干什么                                                   |
 | -------------------- | -------------------------------------------------------- |
-| `claude agents`      | 列出所有后台会话，每行带**状态色**——扫一眼知道哪个在等你 |
+| `claude agents`      | 列出所有后台会话，每行带**状态色**，扫一眼知道哪个在等你 |
 | `claude attach <id>` | 在当前终端把某一个打开接管                               |
 | `claude logs <id>`   | 翻它最近的输出                                           |
 
-那张表的关键是**状态色**：把「哪个会话需要你介入」压缩成一列一眼扫过的信号，不必挨个 attach 进去看。列表里可直接**空格回一句、回车进去接管**。
+那张表的关键是**状态色**：把"哪个会话需要你介入"压缩成一列一眼扫过的信号，不必挨个 attach 进去看。列表里可直接**空格回一句、回车进去接管**。
 
 ### 3.1 一条会咬人的规则：attach 与 resume 互斥
 
@@ -52,9 +52,9 @@
 
 ## 4. 表面之下：一台本地进程舰队监管器
 
-撑起「关了终端也不掉、崩了还能回来」的，是二进制字符串里那近 80 个 `tengu_bg_*` 事件名拼出来的一台监管器。
+撑起"关了终端也不掉、崩了还能回来"的，是二进制字符串里那近 80 个 `tengu_bg_*` 事件名拼出来的一台监管器。
 
-> 证据口径要先讲明：这些事件名是二进制里逐字读到的，实打实；但每个事件在什么条件下发、彼此怎么串成状态机，没有对应源码可查（快照里 `grep -rlF 'tengu_bg_'` 命中 0 个文件），只能从事件名加周边压缩代码往里推。下面「它在干什么」，名字是硬的、逻辑是推的。
+> 证据口径要先讲明：这些事件名是二进制里逐字读到的，实打实；但每个事件在什么条件下发、彼此怎么串成状态机，没有对应源码可查（快照里 `grep -rlF 'tengu_bg_'` 命中 0 个文件），只能从事件名加周边压缩代码往里推。下面"它在干什么"，名字是硬的、逻辑是推的。
 
 把事件按名字聚一下，浮出五六个子系统，各管一摊，像一台小号进程主管（量级接近 systemd / pm2 的一个子集）：
 
@@ -91,7 +91,7 @@ flowchart TB
 4. 内存吃紧时，退休占内存又不紧要的 worker，给要紧的腾地方；
 5. 刚接手发现一堆没主的进程（上一个 daemon 没干净退），用 `_adopt` / `_orphan_reap` / `_roster_orphan_adopted` 认领回来，而不是放任它们变成僵尸。
 
-把这一生按时间画出来，能看清「监管器在哪些点上插了手」：
+把这一生按时间画出来，能看清"监管器在哪些点上插了手"：
 
 ```mermaid
 stateDiagram-v2
@@ -119,16 +119,16 @@ stateDiagram-v2
 
 这台监管器不是开机常驻、一直吃内存的守护进程。它的定位是 on-demand：
 
-- 没有活吊着时，它说自己「nothing holding this daemon open」，随即 idle-exit 退掉；下一次 `claude agents` 或 `claude --bg` 再拉起新的；
-- **让位规则**：「an on-demand daemon never displaces a running one」。已经在正经看着一批会话的 daemon 有优先权，刚按需起来的不许把它挤掉，只有 transient（临时）才允许被顶掉；避免两台监管器打架、把账记乱。
+- 没有活吊着时，它说自己"nothing holding this daemon open"，随即 idle-exit 退掉；下一次 `claude agents` 或 `claude --bg` 再拉起新的；
+- **让位规则**："an on-demand daemon never displaces a running one"。已经在正经看着一批会话的 daemon 有优先权，刚按需起来的不许把它挤掉，只有 transient（临时）才允许被顶掉；避免两台监管器打架、把账记乱。
 
-总闸也留了：设置里有一条「Disable agent view（`claude agents`、`--bg`、`/background`、on-demand daemon 一起关）」，等价于 `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`，通常在托管设置里下发。对不希望员工机器上冒出后台常驻进程的组织，这是一条能从上面统一关死的路。
+总闸也留了：设置里有一条"Disable agent view（`claude agents`、`--bg`、`/background`、on-demand daemon 一起关）"，等价于 `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`，通常在托管设置里下发。对不希望员工机器上冒出后台常驻进程的组织，这是一条能从上面统一关死的路。
 
 ## 6. 同一片版图：子 agent 默认后台
 
 `/bg` 出去的是整会话；而在一个会话内部，主会话派出去的子 agent 默认也跑在后台。这层底座在快照源码里就能逐行读：
 
-- Agent 工具描述：「Subagents run in the background by default，跑完会通知你」；schema 里 `run_in_background` 默认就是 true；只有往下走之前非拿到结果不可时，才传 `run_in_background: false` 让它同步跑；
+- Agent 工具描述："Subagents run in the background by default，跑完会通知你"；schema 里 `run_in_background` 默认就是 true；只有往下走之前非拿到结果不可时，才传 `run_in_background: false` 让它同步跑；
 - 同一份 `run_in_background` 出现在 Agent、Bash、PowerShell 等多个工具里；schema 还带 `isolation: 'worktree'` 管文件系统隔离。
 
 ### 6.1 完工用 task-notification 回来，不是塞回当前那句话
@@ -148,7 +148,7 @@ stateDiagram-v2
 一个能脱终端、几小时无人值守的后台任务，还差最后一环：活干完了得替你把结果落下来，而不是把一堆改动晾在那儿等你回来手动收。收尾指令的行为要点：
 
 - 改完代码就 commit，push 那个分支，然后开一个 draft PR（`gh pr create --draft`），别停下来问；
-- 不许用「say the word and I'll open the PR」这种话把活撂在没提交的状态里结束；
+- 不许用"say the word and I'll open the PR"这种话把活撂在没提交的状态里结束；
 - 红线同时钉死：**Never push to main/master, force-push, or merge**。绝不直推主干、绝不 force-push、绝不 merge；
 - 退路：万一没能隔离出 worktree（EnterWorktree 失败，或当前目录本来就是用户自己的 checkout），收尾换一种更保守的走法。
 
@@ -178,12 +178,12 @@ stateDiagram-v2
 
 | 决策           | 选择                                       | 理由 / 对立面                                                     |
 | -------------- | ------------------------------------------ | ----------------------------------------------------------------- |
-| 后台会话怎么活 | 脱离终端进程组 + 独立状态                  | 对立面：绑终端——关终端就没，长任务不成立                          |
-| 监管器形态     | on-demand，闲了 idle-exit                  | 对立面：开机常驻——白吃内存；让位规则防多 daemon 打架              |
-| Worker 崩溃    | 先确认真死再 respawn                       | 对立面：立刻重生——网络抖动会起两份；`_unconfirmed_bail` 防重复    |
-| 没主进程       | adopt + orphan reap + roster 登记          | 对立面：放任变僵尸——上个 daemon 没退干净就丢进程                  |
-| 会话内子 agent | 默认后台，task-notification 回来           | 对立面：同步阻塞——主会话干等；通知不伪装成用户消息；禁 sleep-poll |
-| 后台收尾       | commit + push 功能分支 + draft PR          | 对立面：晾着等用户——脱终端就没闭环；硬禁主干/force-push/merge     |
+| 后台会话怎么活 | 脱离终端进程组 + 独立状态                  | 对立面：绑终端，关终端就没，长任务不成立                          |
+| 监管器形态     | on-demand，闲了 idle-exit                  | 对立面：开机常驻，白吃内存；让位规则防多 daemon 打架              |
+| Worker 崩溃    | 先确认真死再 respawn                       | 对立面：立刻重生，网络抖动会起两份；`_unconfirmed_bail` 防重复    |
+| 没主进程       | adopt + orphan reap + roster 登记          | 对立面：放任变僵尸，上个 daemon 没退干净就丢进程                  |
+| 会话内子 agent | 默认后台，task-notification 回来           | 对立面：同步阻塞，主会话干等；通知不伪装成用户消息；禁 sleep-poll |
+| 后台收尾       | commit + push 功能分支 + draft PR          | 对立面：晾着等用户，脱终端就没闭环；硬禁主干/force-push/merge     |
 | 总开关         | `CLAUDE_CODE_DISABLE_AGENT_VIEW` 整体关    | 组织要能统一禁止后台常驻进程                                      |
 | mod-agent 顺序 | 先会话内后台，再 /bg 脱离，daemon 监管最后 | 脱终端/跨平台最重；收尾不依赖 daemon，随后台一起做                |
 

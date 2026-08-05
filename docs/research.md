@@ -1,6 +1,6 @@
 # Research · 领域调研综述
 
-> 这篇说明「为什么这样设计」：什么是 AI Coding Agent、主流产品、真实能力边界、核心范式与失败模式。
+> 这篇说明"为什么这样设计"：什么是 AI Coding Agent、主流产品、真实能力边界、核心范式与失败模式。
 
 > 这篇是后面每个设计选择的决策依据：为什么这样拍板，对应哪条业界数据或失败案例，都记在这里。读的时候重点盯数字旁边那行口径警告，分数好不好看，首先取决于它是在什么条件下跑出来的。
 
@@ -56,11 +56,11 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 
 ### 2.2 从 45 个项目里得到的分类结论
 
-1. **CLI agent 已收敛出一套「事实标准」组合**：项目记忆文件（`AGENTS.md` / `CLAUDE.md` / `GEMINI.md`）+ 显式自主程度旋钮（只读 / 可改文件 / 全自动）+ 每步落 Git + 网络默认关闭的沙箱 + headless JSON 输出 + MCP 接工具。
+1. **CLI agent 已收敛出一套"事实标准"组合**：项目记忆文件（`AGENTS.md` / `CLAUDE.md` / `GEMINI.md`）+ 显式自主程度旋钮（只读 / 可改文件 / 全自动）+ 每步落 Git + 网络默认关闭的沙箱 + headless JSON 输出 + MCP 接工具。
 2. **开源路线几乎全部 BYOK（自带 Key）、模型无关**：Aider、Cline、Kilo、OpenCode、Goose、Crush、Pydantic AI、Mastra 等都不绑定单一模型；Goose/Zed 还能经 ACP 复用用户已有的 Claude/ChatGPT 订阅。
-3. **变更安全是分层的三件套**：Aider 式「改动即 commit」→ Cline/Kilo 式「每步 checkpoint / Shadow Git」→ 云端式「自动分支 + draft PR + 永不推 main + 发起者不可自批 + Actions 默认不跑」。
+3. **变更安全是分层的三件套**：Aider 式"改动即 commit"→ Cline/Kilo 式"每步 checkpoint / Shadow Git"→ 云端式"自动分支 + draft PR + 永不推 main + 发起者不可自批 + Actions 默认不跑"。
 4. **学术侧给出两个相反但都成立的答案**：重型 agent 派（OpenHands、SWE-agent）靠 ACI 与事件流堆能力；流水线派（Agentless、AutoCodeRover）证明边界清晰、有测试信号的任务，确定性流水线更便宜更可控。
-5. **协议层基本定型**：MCP 管「agent 接工具」、A2A 管「agent 连 agent」、ACP 管「编辑器挂 CLI agent」、AGENTS.md 管「agent 读项目规则」，四者互补。
+5. **协议层基本定型**：MCP 管"agent 接工具"、A2A 管"agent 连 agent"、ACP 管"编辑器挂 CLI agent"、AGENTS.md 管"agent 读项目规则"，四者互补。
 6. **活跃度与许可证是硬约束**：2026 年 Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 转维护模式、Amazon Q CLI 停更；Crush（FSL）、Claude Code（自定义源码许可）、AutoCodeRover（Sonar 源码可用）、Zed（GPL-3.0）都不是标准宽松许可，选型时必须逐项目核对 LICENSE 与最近提交（见 [references.md](./references.md)）。
 
 ## 3. 真实能力水平（2025–2026，2026-08 核实）

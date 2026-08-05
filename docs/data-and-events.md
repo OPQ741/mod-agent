@@ -6,7 +6,7 @@
 
 ## 1. EventStream 事件模型
 
-可以这样理解：EventStream（事件流）像一本只能往后翻页、写上去就不能改的流水账。所有状态 = 按时间排序的不可变事件序列（action + observation，即「动作」和「观察结果」），可 replay（重放）、condense（压缩）、audit（审计）。
+可以这样理解：EventStream（事件流）像一本只能往后翻页、写上去就不能改的流水账。所有状态 = 按时间排序的不可变事件序列（action + observation，即"动作"和"观察结果"），可 replay（重放）、condense（压缩）、audit（审计）。
 
 ```mermaid
 flowchart LR
@@ -69,7 +69,7 @@ sequenceDiagram
 > 不把每个 token 都永久写库：流式发送文本增量，但只持久化重要生命周期事件、完成消息与必要审计内容。
 > 比如，agent 边想边往外蹦字，这些中间增量在屏幕上流式显示，但不会逐字写进数据库；真正落库的是任务开始了、工具跑完了、审批点了同意这种关键节点。
 
-下面这张时序图画了「一次工具调用从发起到落库」会产生哪些事件：
+下面这张时序图画了"一次工具调用从发起到落库"会产生哪些事件：
 
 ```mermaid
 sequenceDiagram
@@ -96,7 +96,7 @@ sequenceDiagram
 OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https://github.com/OpenHands/software-agent-sdk ）。对外只暴露 `send_message` / `run`，内部把每一步产出为**不可变事件**（agent 动作 / 工具结果 / 状态更新），连同 conversation / workspace 一起被 SDK 拥有。对 mod-agent 的启示：
 
 - 会话模型对齐：一个 `Conversation` 绑定一个 `workspace`，事件是 SDK 显式拥有的一等概念（"This repository owns agents, tools, conversations, workspaces, events, the REST/WebSocket API…"）；
-- 工作区抽象为「本机目录」与「临时容器」两档（对应 [architecture.md](./architecture.md) 沙箱 / 运行时抽象）；
+- 工作区抽象为"本机目录"与"临时容器"两档（对应 [architecture.md](./architecture.md) 沙箱 / 运行时抽象）；
 - 未核实项：OpenHands 具体事件枚举类型名（agent / observation / state 的确切命名清单）未在抓取到的页面逐条列示，本设计文档按自身事件类型表（见上）实现即可。
 
 ### 1.2 会话记录：用 parentUuid 串成一条链表（真实 Claude Code 证据）
@@ -141,13 +141,13 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 ## 3. 数据一致性规则
 
 - 每次状态转换带 `state_version` 乐观锁，防两个执行方同时推进任务；
-  > 通俗地说：乐观锁 = 「我基于版本 5 改的，如果改之前版本已经变成 6 了，说明别人动过，我这次不算数」。
+  > 通俗地说：乐观锁 = "我基于版本 5 改的，如果改之前版本已经变成 6 了，说明别人动过，我这次不算数"。
 - 每任务任一时刻只有一个有效执行租约，租约可续期、过期回收；
 - 工具调用开始与结果分别持久化；结果未知的非幂等调用进入 `outcome_unknown`，而非自动标失败后重试；
   > 比如，agent 已经发出创建 PR 的请求，但网络断了，不知道服务端到底建没建。这时不能盲目重试，万一第一次其实成功了，重试就建出两个 PR。正确做法是记成结果未知，等人或去查一下再决定。
 - 事件按 `seq` 发送，断线后可从序号补拉；
 - 审批只生效一次并与 `parameter_hash` 绑定，防审批后模型偷偷改操作参数；
-- 每次状态转换在同一事务里「更新状态 + 追加事件」；
+- 每次状态转换在同一事务里"更新状态 + 追加事件"；
 - 保存期限、源码 / 日志脱敏、租户隔离与删除策略在部署前定稿。
 
 ## 4. 长期记忆
@@ -163,7 +163,7 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 - 官方明确 "Rather than introducing another proprietary file, we chose a name and format that could work for anyone"：跟着标准走，用户跨工具复用同一份项目规则；
 - 加载语义：离被编辑文件最近的 AGENTS.md 优先，用户当场聊天指令优先级最高，支持 monorepo 嵌套（详见 [context-engineering.md §2.1](./context-engineering.md#_2-1-规则文件的加载顺序与优先级)）。
 
-> 比如，仓库根放一份全局 `AGENTS.md`（如「用 pnpm 不用 npm」），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
+> 比如，仓库根放一份全局 `AGENTS.md`（如"用 pnpm 不用 npm"），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
 
 **兼容读取策略（Devin 实证，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：Devin 提供 `read_config_from` 开关，可选择性导入 `AGENTS.md`（含 `AGENTS.local.md`、历史名 `AGENT.md`、`.windsurfrules`）以及 Cursor / Windsurf / Claude / OpenCode / Zed 等竞品的规则文件。mod-agent 启动时同样以开关方式兼容读取 `AGENTS.md` + 已知竞品规则文件，逐项可关。
 

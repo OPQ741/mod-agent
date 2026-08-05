@@ -84,7 +84,7 @@ flowchart TD
     Q5 --> Q6["⑥ 上下文与检索：它怎么读懂大项目"]
     Q6 --> Q7["⑦ 编辑与变更：改完怎么落、怎么回滚"]
     Q7 --> Q8["⑧ 工具与扩展：能接 MCP、能挂别人吗"]
-    Q8 --> Q9["⑨ 权限·审批·沙箱：怎么防闯祸"]
+    Q8 --> Q9["⑨ 权限·审批·沙箱：怎么防风险"]
     Q9 --> Q10["⑩ 值得借鉴：mod-agent 该抄哪一刀"]
     Q10 --> Q11["⑪ 官方链接：自己去核实的入口"]
 ```
@@ -169,7 +169,7 @@ flowchart TD
 | Aider                  | 终端 CLI（偏 REPL 对话）           | 开源                    | Apache-2.0                             | 任意 LLM（BYOK，多 provider，含本地模型）              | 老牌「结对编程」工具，每改一次自动 git commit     |
 | OpenCode               | 终端 TUI（另有桌面/IDE）           | 开源                    | MIT                                    | 任意 provider（Claude/GPT/Gemini 等，多模型可切）      | 社区高 star 的「终端原生」代理，LSP + 多会话      |
 | Goose                  | CLI + 桌面 App + API               | 开源                    | Apache-2.0                             | 15+ provider，可借 ACP 复用 Claude/ChatGPT/Gemini 订阅 | Block（现 Linux 基金会 AAIF）出品，通用型本地代理 |
-| Crush                  | 终端 CLI / TUI                     | 源码可见                | FSL-1.1-MIT（Fair Source，满期转 MIT） | 任意 provider，多模型会话中可切换                      | Charm 出品，颜值高、生态广、LSP + MCP 强          |
+| Crush                  | 终端 CLI / TUI                     | 源码可见                | FSL-1.1-MIT（Fair Source，满期转 MIT） | 任意 provider，多模型会话中可切换                      | Charm 出品，体验好、生态广、LSP + MCP 强          |
 | Qwen Code              | 终端 CLI / TUI（另有桌面/Web/SDK） | 开源                    | Apache-2.0                             | 阿里 Qwen 系列为主，兼容 OpenAI/Anthropic/Gemini 协议  | 阿里通义出品，基于 Gemini CLI 分叉后独立发展      |
 | Amazon Q Developer CLI | 终端 CLI                           | 开源                    | Apache-2.0 / MIT 双许可                | 绑定 AWS 自研（已停更，转向闭源 Kiro CLI）             | AWS 官方终端代理，深度绑定 AWS 服务               |
 | Continue（CLI 形态）   | CLI `cn`：TUI + headless           | 开源                    | Apache-2.0                             | 任意 provider（IDE 插件起家）                          | 知名 IDE 插件团队出的终端代理，仓库已只读归档     |
@@ -1223,7 +1223,7 @@ Agentless 用分层定位 → 多候选补丁采样 → 测试重排选最优的
 
 ① 沙箱结实 ≠ agent 出不来。Pillar Security 在 Cursor / Codex CLI / Gemini CLI / Antigravity 四款上复现 7 个绕过：agent 全程遵守规则待在沙箱里，只是写了一个文件，沙箱外某个受信任程序（Python 扩展、Git 集成、VS Code 任务、hook 引擎）稍后读/执行它，逃逸自行完成。四种失败模式：denylist 跟不上操作系统、工作区配置其实就是可执行代码、"安全"命令白名单只信命令名不信参数、特权本地守护进程在沙箱外。
 
-- **对 mod-agent**：这条直接支撑 [security.md §3.2](./security.md#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证)：沙箱的边界要按"agent 写出去的文件会被谁读"来划，而不是按"agent 进程能碰什么"来划。命令白名单必须连参数一起判。
+- **对 mod-agent**：这条直接支撑 [security.md §3.2](./security.md#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证)：沙箱的边界要按「agent 写出去的文件会被谁读」来划，而不是按「agent 进程能碰什么」来划。命令白名单必须连参数一起判。
 
 ② 多 Agent 从"别做"变成"这样做"。Cognition 2025-06 主张默认排除多 agent，十个月后给出反转后的形态：多个 agent 贡献判断，但写入保持单线程。实测其审查 agent 在自家 coding agent 写的 PR 上平均抓到 2 个 bug（约 58% 严重级），且编码方与审查方不共享上下文时效果最好。
 

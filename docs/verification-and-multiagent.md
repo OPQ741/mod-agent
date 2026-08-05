@@ -199,7 +199,7 @@ new Agent({
 
 ### 5.6 业界实证：子代理与并行的强制机制
 
-**Plan 只读靠不注册写工具，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal，"cannot modify any files or execute commands. This constraint is intentional." 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：[§5.3](#_5-3-何时引入子-agent) 的分析型子代理（Repository Analyst / Patch Reviewer）应在代码层就不注册写工具，而不是靠 prompt 叮嘱。
+**Plan 只读靠不注册写工具，而不是系统提示约束（Cline 实证，出处：https://docs.cline.bot/core-workflows/plan-and-act ）**：Plan 模式下 agent 只挂载 read / search / discuss 类工具，不挂载 write_file / edit / terminal，「cannot modify any files or execute commands. This constraint is intentional.」 切回 Act 模式时对话上下文完整继承，不用重述。对 mod-agent：[§5.3](#_5-3-何时引入子-agent) 的分析型子代理（Repository Analyst / Patch Reviewer）应在代码层就不注册写工具，而不是靠 prompt 叮嘱。
 
 **子代理 = 独立上下文窗口 + 同工具集 + 只回传结果（Zed `spawn_agent` 实证，出处：https://zed.dev/docs/ai/tools ）**：派一个带独立上下文窗口的子代理执行委托任务（并行调研 / 自包含小任务），探索过程留在自己窗口，仅把结果交回父代理；父代理继续原工作，子代理完成后再评审其结论，两边上下文都聚焦单一任务。
 
@@ -256,7 +256,7 @@ Anthropic 从另一侧给了同样的边界：多数编码任务里真正可并�
 对 mod-agent 的落地：
 
 - [§5.2](#_5-2-三种编排模式-先看清再选) 的选型顺序（单 Agent → Subagent → Coordinator → Swarm）保持不变，**但写必须在任何一层都保持单线程**。多个 worker 分头写文件只在 worktree 隔离 + 最终一致性检查（[§5.4](#_5-4-交接与隔离)）下才允许；
-- `Patch Reviewer` 子代理（[§5.3](#_5-3-何时引入子-agent)）应默认不给它编码过程的上下文，这与 [§5.4](#_5-4-交接与隔离)的"交接必须传递任务目标、相关证据"并不矛盾：交接的是任务与验收标准，不是作者的实现思路。让审查者自己推，才能抓到作者自己看不见的问题；
+- `Patch Reviewer` 子代理（[§5.3](#_5-3-何时引入子-agent)）应默认不给它编码过程的上下文，这与 [§5.4](#_5-4-交接与隔离)的「交接必须传递任务目标、相关证据」并不矛盾：交接的是任务与验收标准，不是作者的实现思路。让审查者自己推，才能抓到作者自己看不见的问题；
 - 别指望用便宜模型干贵的活来降本（[research.md §3.3](./research.md#_3-3-成本-agent-的钱主要烧在「重发的上下文」上) 成本数据），弱模型不会主动告诉你它不行。
 
 上多 Agent 之前的三个必答问题（任一答不出，就不是多 agent，而是把一处模糊并行化了）：

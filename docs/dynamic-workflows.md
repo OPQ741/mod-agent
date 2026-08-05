@@ -1,14 +1,14 @@
 # Dynamic Workflows · 用确定性脚本编排 Agent 舰队
 
-> 当「模型边想边调度」撑不起几百个并行子任务时，把编排权交给一段确定性脚本：fan-out 多少、怎么串、何时收敛，全写死在控制流里。
+> 当"模型边想边调度"撑不起几百个并行子任务时，把编排权交给一段确定性脚本：fan-out 多少、怎么串、何时收敛，全写死在控制流里。
 
 [verification-and-multiagent.md](./verification-and-multiagent.md) 讲的多 Agent，不管是主 Agent 派子 Agent、协调器分派 worker，还是 Swarm 点对点，有一个共同前提：谁来派、何时派、何时收，都是模型在推理里临场决定的。这种模型驱动编排对常见任务够用，但碰到真正的大活，比如把一个改动铺到几十个文件、审一整条依赖链、对一大批候选逐一核实，它有三个硬伤：
 
-- 模型每轮都要重新决定「现在派谁」，几百个任务时既慢又容易漏；
+- 模型每轮都要重新决定"现在派谁"，几百个任务时既慢又容易漏；
 - 并发上限、token 预算、断点续跑这些**可靠性约束**靠提示词叮嘱，模型可能不遵守；
 - 编排过程本身不可复现，同一段输入，两次跑可能铺开不同的舰队。
 
-Dynamic Workflows 的解法是换一个协调器：**把那个「当协调器的模型」换成一段确定性的 JS 脚本**。脚本一次性铺开几十到几百个子 agent，由运行时按并发上限成批执行、按 token 预算刹车、中断后可从断点续跑。触发词是 `ultracode`。
+Dynamic Workflows 的解法是换一个协调器：**把那个"当协调器的模型"换成一段确定性的 JS 脚本**。脚本一次性铺开几十到几百个子 agent，由运行时按并发上限成批执行、按 token 预算刹车、中断后可从断点续跑。触发词是 `ultracode`。
 
 > 与 [autonomy.md](./autonomy.md) 的关系：`/loop` 是时间轴上的串行续跑，同一个主模型隔一段时间回来再干一轮；Workflow 是空间轴上的并行 fan-out，一段脚本此刻就规划出几十上百个 agent。两者共享同一套哲学，上层用脚本/提示词表达要干什么，下层运行时兜底怎么调度、怎么保住状态，只是落在不同的轴上，不是一回事。
 
@@ -79,7 +79,7 @@ const results = await pipeline(
 
 ### 2.2 派生出去的子 agent 是「叶子 worker」
 
-一次 workflow 派出去的子 agent 是一个独立的客户端请求，系统提示头一句是「You are a subagent spawned by a workflow orchestration script」，并特意交代：你的最终文本会被原样当成字符串返回给调用脚本，那是返回值，不是给人看的消息。
+一次 workflow 派出去的子 agent 是一个独立的客户端请求，系统提示头一句是"You are a subagent spawned by a workflow orchestration script"，并特意交代：你的最终文本会被原样当成字符串返回给调用脚本，那是返回值，不是给人看的消息。
 
 它还是个叶子 worker：主模型手里那几个能再往下编排、排程的工具（`Agent`、`Workflow`、`ScheduleWakeup`、`TaskOutput`）都从子 agent 的工具集里摘掉了（实测子 agent 76 个工具、主模型 80 个，差的正是这 4 个）。所以它只能干活，不能再 fan-out。对主模型来说，整个 Workflow 调用是个后台任务：一调就立刻返回一个 task id，跑完再用 `<task-notification>` 通知回来（机制见 [background-fleet.md](./background-fleet.md)）。
 
@@ -139,7 +139,7 @@ flowchart LR
 多个 agent 串成流水线，前一个的输出要能喂给后一个；纯文本不好办，还得解析。Workflow 的做法是给 `agent()` 一个 `schema`（一份 JSON Schema）：
 
 - 带上 schema，运行时就往这个子 agent 的工具集里塞一个叫 `StructuredOutput` 的工具，把这份 schema 作为该工具的 `input_schema`；
-- 工具描述写着「You MUST call this tool exactly once at the end」，子 agent 干完活必须调它一次；
+- 工具描述写着"You MUST call this tool exactly once at the end"，子 agent 干完活必须调它一次；
 - 参数当场按 schema 校验（`required`、`additionalProperties: false` 都生效），`agent()` 于是拿到一个校验过的对象，不用再解析。
 
 校验发生在工具调用那一层：形状不对会先 nudge、再重试；但子 agent 到末尾还是不调用、或超过结构化输出重试上限，这次 `agent()` 就失败。它若在 `parallel`/`pipeline` 的 slot 里，失败被隔离成 null；直接 `await agent(...)` 则抛错。
@@ -200,7 +200,7 @@ Workflow 真正有意思的地方，不只是并行快，而是它把一套追�
 | **视角分散的复核**      | 一条发现能从多个角度出问题时，给每个复核者一个不同镜头（正确性/安全/性能/可复现），而不是派 N 个一样的 | 单一视角的盲区                       |
 | **Judge panel**         | 从不同切入点独立生成 N 个方案，并行打分，从赢家里综合、再嫁接亚军的好点子                              | 单方案次优                           |
 | **Loop-until-dry**      | 对不知道有多少的发现（bug、边角情况），一直派 finder，直到连续 K 轮没有新东西才停                      | 「跑 N 轮」漏掉长尾                  |
-| **Completeness critic** | 最后派一个 agent 专门问「还缺什么——哪种搜法没跑、哪条断言没验、哪份材料没读」                          | 收尾遗漏                             |
+| **Completeness critic** | 最后派一个 agent 专门问「还缺什么，哪种搜法没跑、哪条断言没验、哪份材料没读」                          | 收尾遗漏                             |
 
 这些范式合起来是一个朴素主张：多个 agent 的价值不在于快，而在于用结构化的冗余，把单个 agent 容易疏漏这件事系统地纠回来。
 
@@ -232,7 +232,7 @@ flowchart LR
 Workflow 是 [roadmap.md](./roadmap.md) 的 Phase 6（多 Agent 后期）能力，**前置依赖未满足前不要做**：
 
 - 前置：子 agent 派生与权限继承（[verification-and-multiagent.md §5](./verification-and-multiagent.md#_5-多-agent-策略)）、worktree 隔离、后台任务与 task-notification（[background-fleet.md](./background-fleet.md)）、token 预算（[observability-evaluation.md](./observability-evaluation.md)）；
-- 没有这些底座，Workflow 只是「一段会失控的 fan-out 脚本」。
+- 没有这些底座，Workflow 只是"一段会失控的 fan-out 脚本"。
 
 ### 9.1 最小版本
 
@@ -241,8 +241,8 @@ mod-agent 不必一上来就实现全套。最小可用版本砍到：
 1. 一个 `runWorkflow(script, opts)` 运行器：解析 `meta` + 实现 `agent()` / `pipeline()` / `parallel()` 三个 hook（`phase`/`log`/`budget` 可后补）；
 2. 一道并发上限（先用固定值，如 `min(8, CPU-2)`），总 agent 上限可直接用常量（如 100）；
 3. 子 agent 复用现有 Agent 类，强制叶子（摘派生工具）；
-4. 结构化返回先不做 schema 注入，退化为「在提示词里要求返回 JSON + 运行时 `JSON.parse` 校验」，失败隔离成 null；
-5. 续跑先不做 journal，等真正出现「长跑中断」的场景再补。
+4. 结构化返回先不做 schema 注入，退化为"在提示词里要求返回 JSON + 运行时 `JSON.parse` 校验"，失败隔离成 null；
+5. 续跑先不做 journal，等真正出现"长跑中断"的场景再补。
 
 ### 9.2 什么时候才值得写脚本
 
@@ -254,12 +254,12 @@ mod-agent 不必一上来就实现全套。最小可用版本砍到：
 
 | 决策               | 选择                                     | 理由 / 对立面                                                                      |
 | ------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| 编排决策谁来做     | 确定性 JS 脚本，而非模型临场             | 模型驱动不可复现、并发预算靠叮嘱不可靠；对立面：继续用协调器模型——规模一大就慢且漏 |
+| 编排决策谁来做     | 确定性 JS 脚本，而非模型临场             | 模型驱动不可复现、并发预算靠叮嘱不可靠；对立面：继续用协调器模型，规模一大就慢且漏 |
 | 默认并发原语       | pipeline（无 barrier）                   | pipeline 墙钟≈最慢单项链；barrier 浪费快任务空闲；只有需要全量结果才用 parallel    |
-| 失败处理           | 隔离成 null/跳过 item，不带崩整批        | 对立面：一个失败整批中止——大规模运行太脆弱                                         |
-| 阶段间数据         | StructuredOutput + schema 校验           | 对立面：纯文本 + 正则解析——脆弱；校验放工具层，形状不对重试                        |
-| 并行写隔离         | 按需 worktree，只在冲突时开              | 对立面：每个 agent 都开——贵且费磁盘                                                |
-| 断点续跑           | journal 内容哈希前缀命中                 | 对立面：中断重跑——大运行太贵；禁不确定性 API 保证可重放                            |
+| 失败处理           | 隔离成 null/跳过 item，不带崩整批        | 对立面：一个失败整批中止，大规模运行太脆弱                                         |
+| 阶段间数据         | StructuredOutput + schema 校验           | 对立面：纯文本 + 正则解析，脆弱；校验放工具层，形状不对重试                        |
+| 并行写隔离         | 按需 worktree，只在冲突时开              | 对立面：每个 agent 都开，贵且费磁盘                                                |
+| 断点续跑           | journal 内容哈希前缀命中                 | 对立面：中断重跑，大运行太贵；禁不确定性 API 保证可重放                            |
 | mod-agent 实现时机 | Phase 6，最小版只做 3 个 hook + 1 道并发 | 前置底座（子 agent/worktree/后台/预算）未就绪前不做                                |
 
 > Dynamic Workflow 的本质不是让 agent 更多，而是把编排这件事从模型的临场判断变成确定性脚本 + 运行时强制的可靠性约束。模型负责在脚本里写清楚要什么，运行时负责并发、预算、隔离、续跑这些它必须做到、而模型可能忘掉的事。

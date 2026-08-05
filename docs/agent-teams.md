@@ -8,7 +8,7 @@
 - 但除它之外的成员不再是叶子，他们能用一个叫 **`SendMessage`** 的工具互相直接说话，共享一份任务列表和一份团队记忆；
 - 成员甚至可能分属不同会话、不同机器。
 
-把「对等」和「跨会话」叠在一起，就有了一个主从编排里从不出现的问题：**一条消息从另一个会话进来，长得跟你的用户敲进来的一模一样，该把它当用户指令，还是当平级同事的请求？** 用户能授权你做危险的事，一个平级同事不能。这一篇后半程的所有安全设计，都在回答这一个问题。
+把"对等"和"跨会话"叠在一起，就有了一个主从编排里从不出现的问题：**一条消息从另一个会话进来，长得跟你的用户敲进来的一模一样，该把它当用户指令，还是当平级同事的请求？** 用户能授权你做危险的事，一个平级同事不能。这一篇后半程的所有安全设计，都在回答这一个问题。
 
 > 与 [dynamic-workflows.md](./dynamic-workflows.md) 的边界：workflow 是一段脚本自上而下编排一批叶子 worker，worker 之间不通气、只对脚本负责，风险是脚本会不会用错 worker，属正确性问题；teams 是一个 lead 带着几个 teammate，成员之间还能横向互发，风险是一个会话能不能替另一个越权，属安全问题。
 
@@ -68,7 +68,7 @@ flowchart TB
 | 3   | `Agent` 带 `team_name` + `name`     | 派一个 teammate，它加入团队                                      |
 | 4   | `TaskUpdate` 设 `owner`             | 把任务指派给某个空闲 teammate                                    |
 | 5   | teammate 干完 `TaskUpdate`          | 把任务标成 completed                                             |
-| 6   | 回合间自动 idle                     | 闲下来的 teammate 自动 idle 并发通知——「对 idle 的队友要有耐心」 |
+| 6   | 回合间自动 idle                     | 闲下来的 teammate 自动 idle 并发通知，「对 idle 的队友要有耐心」 |
 | 7   | `SendMessage` 发 `shutdown_request` | 优雅关队                                                         |
 
 ### 2.2 几条踩过坑的规矩
@@ -78,21 +78,21 @@ flowchart TB
 - **不打架地领活**：任务列表是共享的，一个 teammate 干完手头的，就去查 `TaskList`、按任务 ID 顺序认领还没人领的任务，卡住了通知 team lead；
 - **私聊有摘要**：队友之间可私下发消息（peer DM），但私聊摘要会进 team lead 的 idle 通知，lead 看得到他俩在协作，但读不到私聊全文。
 
-**一个完整的例子（示意）**：你说「给支付模块加退款功能，顺便把所有调用点都查一遍」。
+**一个完整的例子（示意）**：你说"给支付模块加退款功能，顺便把所有调用点都查一遍"。
 
 1. `TeamCreate` 建队 → 自动生成一份共享任务列表；
 2. `Task` 加三条任务：改退款逻辑、查调用点、补测试；
 3. `Agent` 带 `team_name` + `name="researcher"` 派一个只读成员，带 `name="implementer"` 派一个全权成员；
-4. `TaskUpdate` 把「查调用点」的 `owner` 设成 `researcher`，把「改退款逻辑」设成 `implementer`；
+4. `TaskUpdate` 把"查调用点"的 `owner` 设成 `researcher`，把"改退款逻辑"设成 `implementer`；
 5. `researcher` 干完标 completed，然后自己去查 `TaskList` 认领还没人领的补测试，不需要你再指挥一次；
-6. 中途 `implementer` 发现退款要动数据库 schema，用 `SendMessage` 发给 `researcher`：「你那边查到有别的模块也在读这张表吗？」，这就是横向互发；
+6. 中途 `implementer` 发现退款要动数据库 schema，用 `SendMessage` 发给 `researcher`："你那边查到有别的模块也在读这张表吗？"，这就是横向互发；
 7. 两个都干完、自动转 idle，你发 `SendMessage` 带 `shutdown_request` 关队。
 
 注意第 5 步，成员自己认领任务是团队模式和主从模式最实际的区别：主从模式下，子 agent 干完就退场，不会自己去领下一个活。
 
 ### 2.3 演进：从显式建队到隐式团队
 
-当前版本里，`TeamCreate` / `TeamDelete` 不再作为常规工具摆出来，取而代之的是**每个会话默认自带一支 implicit team**：Agent 工具的 `team_name` 参数被标成「Deprecated; ignored. The session has a single implicit team」。组队从「先显式建队、再塞人」变成「每个会话天然是一支队，直接用 Agent 工具带一个 `name` 派 teammate 进来」。这只动了建队入口，下面的寻址、共享记忆、跨会话安全规则照旧。
+当前版本里，`TeamCreate` / `TeamDelete` 不再作为常规工具摆出来，取而代之的是**每个会话默认自带一支 implicit team**：Agent 工具的 `team_name` 参数被标成"Deprecated; ignored. The session has a single implicit team"。组队从"先显式建队、再塞人"变成"每个会话天然是一支队，直接用 Agent 工具带一个 `name` 派 teammate 进来"。这只动了建队入口，下面的寻址、共享记忆、跨会话安全规则照旧。
 
 ## 3. SendMessage：普通输出别人看不见，必须显式发
 
@@ -135,7 +135,7 @@ flowchart TB
 
 跨会话消息被包进一个 `<cross-session-message from="...">` 标签里。要回复，把 `from` 属性的值复制过来当自己的 `to`。正因为它带着来自谁的显式标记，系统才能在它到达时告诉模型：这不是你的用户。投递方式跟用户消息一样，作为新的一轮出现，你正忙时它排队，等这一轮结束再送进来。
 
-另有一套协议式消息（`shutdown_request` / `plan_approval_request`，回一个带 `request_id` 的 `_response`）标着 legacy，把「关停我、审我的 plan」这类**必须机器可读**的事编码成结构化请求/应答。如今大部分协作走自由文本，结构化协议只留给关停（要能真终止进程）、plan 审批（要带 id 精确对应）这几件含糊不得的事。
+另有一套协议式消息（`shutdown_request` / `plan_approval_request`，回一个带 `request_id` 的 `_response`）标着 legacy，把"关停我、审我的 plan"这类**必须机器可读**的事编码成结构化请求/应答。如今大部分协作走自由文本，结构化协议只留给关停（要能真终止进程）、plan 审批（要带 id 精确对应）这几件含糊不得的事。
 
 ## 4. 别的会话不携带你的用户权威
 
@@ -183,7 +183,7 @@ flowchart LR
 
 前面的规则管消息进来后怎么评判；还有一道闸管消息出去前拦不拦。跨机发消息，也就是把 `to` 写成 `bridge:...`，在源码里被单独拎出来上了把特殊的锁：
 
-- 碰到 `bridge:` 目标，权限检查返回一个 `ask`：停下来问用户「要给 Remote Control 会话发这条消息吗？它会作为一条用户 prompt 出现在接收端的 Claude 上（可能是另一台机器），经由 Anthropic 的服务器转发」；
+- 碰到 `bridge:` 目标，权限检查返回一个 `ask`：停下来问用户"要给 Remote Control 会话发这条消息吗？它会作为一条用户 prompt 出现在接收端的 Claude 上（可能是另一台机器），经由 Anthropic 的服务器转发"；
 - 讲究的是这道闸的类别：它标为 `safetyCheck`，被摆在 `bypassPermissions`（绕过一切权限的档位）和 Auto Mode 的 allowlist、分类器之前，还带 `classifierApprovable: false`，分类器无权放行。
 
 两件事合起来的效果：哪怕用户开了 bypassPermissions 全速自治、哪怕分类器判它没问题，这条消息都不该被放行，仍要停下来向人确认。注释给的理由只有一句：**跨机的提示注入必须保持 bypass-immune**。
@@ -200,7 +200,7 @@ flowchart LR
 
 | 事件                                                     | 说明什么                                                        |
 | -------------------------------------------------------- | --------------------------------------------------------------- |
-| `_mem_sync_started` / `_sync_push` / `_sync_pull`        | 双向同步——每个 teammate 既往公共记忆推自己的，也从里拉别人的    |
+| `_mem_sync_started` / `_sync_push` / `_sync_pull`        | 双向同步，每个 teammate 既往公共记忆推自己的，也从里拉别人的    |
 | `_mem_conflict_recovered` / `_conflict_notice_delivered` | 两个会话同时改一份记忆时，不是简单覆盖，而是有解冲突 + 通知逻辑 |
 | `_mem_secret_skipped`                                    | **同步时识别出是 secret 就跳过，不往公共区推**                  |
 | `_mem_entries_capped` / `_mem_push_suppressed`           | 条目超额截断、推送抑制                                          |
@@ -251,12 +251,12 @@ mod-agent 的团队建议分两小步，别一上来就跨机：
 
 | 决策                 | 选择                                         | 理由 / 对立面                                                       |
 | -------------------- | -------------------------------------------- | ------------------------------------------------------------------- |
-| 团队底座             | Team = TaskList，复用任务系统                | 对立面：另造一套协作底座——重复且不可追溯；复用则每步自动留痕        |
+| 团队底座             | Team = TaskList，复用任务系统                | 对立面：另造一套协作底座，重复且不可追溯；复用则每步自动留痕        |
 | 建队入口             | 每会话隐式团队（演进方向）                   | 显式建队啰嗦；隐式团队用 Agent 带 name 即可；寻址/记忆/安全不受影响 |
-| 跨会话消息的权限地位 | **不携带用户权威**，当完全自治评判           | 对立面：当成用户输入——别的会话可借此越权开 SOFT BLOCK 闸            |
-| 转发被拒动作         | 直接 BLOCK（权限洗白）                       | 对立面：看接收方有没有闸——会导致「换个会话绕过」；动作按本身判      |
-| 跨机 bridge          | bypass-immune safetyCheck，必问人            | 对立面：允许 bypass/分类器放行——跨机注入会传染，爆炸半径太大        |
-| 团队记忆             | 双向同步 + 解冲突 + 跳过 secret              | 对立面：简单覆盖——丢数据、漏密钥；secret 不进公共区                 |
+| 跨会话消息的权限地位 | **不携带用户权威**，当完全自治评判           | 对立面：当成用户输入，别的会话可借此越权开 SOFT BLOCK 闸            |
+| 转发被拒动作         | 直接 BLOCK（权限洗白）                       | 对立面：看接收方有没有闸，会导致「换个会话绕过」；动作按本身判      |
+| 跨机 bridge          | bypass-immune safetyCheck，必问人            | 对立面：允许 bypass/分类器放行，跨机注入会传染，爆炸半径太大        |
+| 团队记忆             | 双向同步 + 解冲突 + 跳过 secret              | 对立面：简单覆盖，丢数据、漏密钥；secret 不进公共区                 |
 | mod-agent 顺序       | 先同进程对等，再跨会话；安全规则随通信一起上 | 跨机依赖最重；安全不能后补                                          |
 
 > Agent Teams 的核心不是让 agent 之间能说话，而是在放开横向通信的同时，守住用户权威这条信任锚点：平级会话的消息是输入、不是权威，不能授权危险动作、不能替被拒动作洗白、跨机传染必须经真人点头。通信可以对等，授权永远不能对等。
