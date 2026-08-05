@@ -74,9 +74,17 @@ Conventional Commits 是发布自动化的输入：`release-please` 会累积合
 
 仓库通过 `.gitattributes` 统一文本文件为 LF（Windows 脚本除外），请勿修改 git 的 `core.autocrlf` 设置。
 
-## GitHub Actions 供应链
+## GitHub Actions 依赖更新
 
-`.github/workflows/*.yml` 中的第三方 action 目前用 tag 引用（例如 `ossf/scorecard-action@v2.4.0`）。真正启用发布通道、把安全类 workflow 加入 required checks 之前，建议一次性把它们钉到 commit SHA（`npx pin-github-action .github/workflows/*.yml`），之后由 `dependabot.yml` 里的 `github-actions` 生态自动开 PR 更新 SHA。
+`.github/workflows/*.yml` 里的 action 用版本 tag 引用（如 `uses: actions/checkout@v4`）。tag 指向哪个版本由 `.github/dependabot.yml` 的 `github-actions` 生态自动开 PR 维护，日常升级不需要手工改。
+
+将来若要把供应链强度提上去（例如满足 OpenSSF Scorecard 的 Pinned-Dependencies 检查项），可把引用改钉到 commit SHA（`uses: actions/checkout@<40 位 sha> # v4`）。一次性用社区工具即可，不必往仓库里塞脚本：
+
+```bash
+npx --yes pin-github-action .github/workflows/*.yml
+```
+
+钉完之后同样交给 Dependabot bump SHA。是否钉 SHA 是安全强度与可读性的取舍，当前阶段保持 tag 引用。
 
 ## 分支与合并策略
 

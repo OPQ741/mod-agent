@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" font-kerning="normal">
+  <defs>
+    <radialGradient id="glow" cx="82%" cy="18%" r="70%">
+      <stop offset="0%" stop-color="#1d4ed8" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#1e3a8a" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#0b1220" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#1b2740" stroke-width="1" stroke-opacity="0.35"/>
+    </pattern>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1200" height="600" fill="#0b1220"/>
+  <rect width="1200" height="600" fill="url(#grid)"/>
+  <rect width="1200" height="600" fill="url(#glow)"/>
+
+  <!-- ===== left column ===== -->
+  <!-- logo mark (scaled from 32x32 brand glyph) -->
+  <g transform="translate(72,64) scale(2.1)">
+    <rect width="32" height="32" rx="7" fill="url(#bar)"/>
+    <path d="M8 11l5 5-5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <line x1="15" y1="21" x2="24" y2="21" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+  </g>
+
+  <text x="150" y="118" font-family="'Segoe UI', Arial, sans-serif" font-size="30" font-weight="600" fill="#c7d3ee" letter-spacing="0.5">mod-agent</text>
+
+  <!-- wordmark -->
+  <text x="72" y="286" font-family="'Segoe UI', Arial, sans-serif" font-size="92" font-weight="800" fill="#f2f6ff" letter-spacing="-1">mod-agent</text>
+
+  <!-- tagline -->
+  <text x="74" y="336" font-family="'Segoe UI', Arial, sans-serif" font-size="32" font-weight="600" fill="#60a5fa">AI Coding Agent CLI</text>
+
+  <!-- chinese subline -->
+  <text x="74" y="382" font-family="'Microsoft YaHei', 'Segoe UI', sans-serif" font-size="21" fill="#93a1c0">读代码 → 改文件 → 跑测试 → 迭代修复</text>
+
+  <!-- bottom meta -->
+  <text x="74" y="520" font-family="'Consolas', monospace" font-size="19" fill="#5b6a8c">TypeScript · Node.js · ISC License</text>
+
+  <!-- ===== right column: terminal card ===== -->
+  <g>
+    <rect x="648" y="150" width="480" height="304" rx="18" fill="#0f1a33" stroke="#26375f" stroke-width="1.5"/>
+    <!-- title bar -->
+    <rect x="648" y="150" width="480" height="48" rx="18" fill="#16223f"/>
+    <rect x="648" y="180" width="480" height="18" fill="#16223f"/>
+    <line x1="648" y1="198" x2="1128" y2="198" stroke="#26375f" stroke-width="1.5"/>
+    <circle cx="678" cy="174" r="6.5" fill="#ff5f57"/>
+    <circle cx="700" cy="174" r="6.5" fill="#febc2e"/>
+    <circle cx="722" cy="174" r="6.5" fill="#28c840"/>
+    <text x="748" y="180" font-family="'Consolas', monospace" font-size="16" fill="#7d8bb0">mod-agent — zsh</text>
+
+    <!-- prompt line -->
+    <text x="678" y="248" font-family="'Consolas', monospace" font-size="21"><tspan fill="#60a5fa">$ </tspan><tspan fill="#e6edf7">mod-agent </tspan><tspan fill="#a5d6ff">"fix the flaky test"</tspan></text>
+    <!-- steps -->
+    <text x="678" y="288" font-family="'Consolas', monospace" font-size="20" fill="#8494b8">→ read 12 files · build context</text>
+    <text x="678" y="322" font-family="'Consolas', monospace" font-size="20" fill="#8494b8">→ edit src/auth.test.ts</text>
+    <text x="678" y="356" font-family="'Consolas', monospace" font-size="20"><tspan fill="#8494b8">→ npm test  </tspan><tspan fill="#3fb950">✓ 42 passed</tspan></text>
+    <!-- cursor -->
+    <text x="678" y="398" font-family="'Consolas', monospace" font-size="21" fill="#60a5fa">&gt;_</text>
+    <rect x="712" y="382" width="12" height="20" fill="#60a5fa" opacity="0.9"/>
+  </g>
+</svg>

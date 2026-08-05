@@ -1,15 +1,21 @@
 import { defineConfig } from "vitepress"
 import { withMermaid } from "vitepress-plugin-mermaid"
 
+// GitHub 项目页部署在子路径 /mod-agent/ 下；本地 dev 服务器仍用根路径 /。
+// VitePress 会自动给 themeConfig.logo 等主题资源加 base 前缀，
+// 但 head 里的 <link> 是原样注入，需要手动拼 base。
+const base = process.env.NODE_ENV === "production" ? "/mod-agent/" : "/"
+
 export default withMermaid(
   defineConfig({
+    base,
     title: "mod-agent",
     description: "AI Coding Agent 设计文档",
     lang: "zh-CN",
     lastUpdated: true,
     head: [
       // 自定义 favicon（可选）
-      ["link", { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
+      ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],
     ],
     themeConfig: {
       logo: "/logo.svg",
