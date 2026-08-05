@@ -1,12 +1,12 @@
 # Data & Events · 事件流与持久化
 
-> **这篇讲什么**：一次任务做了什么、改了哪些文件、哪一步要审批——这些不能只放在聊天窗口的内存里，一关就没。mod-agent 把每一步都落成一条「不可改的记录」写进 SQLite，崩了能重放、出错能审计。
+> 这篇讲一次任务的过程怎么落盘。一次任务做了什么、改了哪些文件、哪一步要审批，这些不能只放在聊天窗口的内存里，一关就没。mod-agent 把每一步都落成一条不可改的记录写进 SQLite，崩了能重放、出错能审计。
 >
-> **给谁看**：设计存储层、任务状态机的人。**读完你该知道**：为什么状态要用「追加事件」而不是直接改一行数据库，以及审批为什么要和参数哈希绑死。
+> 给设计存储层、任务状态机的人看。读完你该知道两件事：状态为什么用追加事件而不是直接改一行数据库，审批为什么要和参数哈希绑死。
 
 ## 1. EventStream 事件模型
 
-先打个比方：EventStream（事件流）像一本只能往后翻页、写上去就不能改的流水账。所有状态 = 按时间排序的不可变事件序列（action + observation，即「动作」和「观察结果」），可 replay（重放）、condense（压缩）、audit（审计）。
+可以这样理解：EventStream（事件流）像一本只能往后翻页、写上去就不能改的流水账。所有状态 = 按时间排序的不可变事件序列（action + observation，即「动作」和「观察结果」），可 replay（重放）、condense（压缩）、audit（审计）。
 
 ```mermaid
 flowchart LR
@@ -38,7 +38,7 @@ interface TaskEvent<T = unknown> {
 
 事件类型：`task.status_changed`、`task.plan_ready`、`agent.message_delta`、`tool.started`、`tool.progress`、`tool.completed`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`。
 
-**一次真实任务在流水账上长什么样**（这几行合起来就是「当时到底发生了什么」的全部证据）：
+一次真实任务在流水账上长什么样（这几行合起来就是当时到底发生了什么的全部证据）：
 
 ```mermaid
 sequenceDiagram
@@ -64,10 +64,10 @@ sequenceDiagram
     RT->>ST: task.completed
 ```
 
-这张图在说什么：**没有任何一步是「改一行状态字段」就完事的**，每一步都追加一条新记录。所以崩溃后能重放到任意一点；审计时能回答「第 7 步到底是谁批准的、批准的是什么参数」——`approval.decided` 里那个 `hash=a1b2` 就是干这个用的（见 [§3](#_3-数据一致性规则)）。
+值得注意的是，没有任何一步是改一行状态字段就完事的，每一步都追加一条新记录。所以崩溃后能重放到任意一点；审计时能回答第 7 步到底是谁批准的、批准的是什么参数。`approval.decided` 里那个 `hash=a1b2` 就是干这个用的（见 [§3](#_3-数据一致性规则)）。
 
 > 不把每个 token 都永久写库：流式发送文本增量，但只持久化重要生命周期事件、完成消息与必要审计内容。
-> 举个例子（示意）：agent 边想边往外蹦字，这些中间增量在屏幕上流式显示，但不会逐字写进数据库；真正落库的是「任务开始了」「工具跑完了」「审批点了同意」这种关键节点。
+> 比如，agent 边想边往外蹦字，这些中间增量在屏幕上流式显示，但不会逐字写进数据库；真正落库的是任务开始了、工具跑完了、审批点了同意这种关键节点。
 
 下面这张时序图画了「一次工具调用从发起到落库」会产生哪些事件：
 
@@ -89,11 +89,11 @@ sequenceDiagram
     L->>DB: 追加 checkpoint.created / task.completed
 ```
 
-**这张图在说什么**：每一步动作和它的结果都落成一条新事件往后追加，从不覆盖旧记录；凡是要审批的动作，「问」和「答」各记一条，而且答的那条和当时的参数哈希绑死——防止审批通过后模型偷偷把参数换掉。
+每一步动作和它的结果都落成一条新事件往后追加，从不覆盖旧记录；凡是要审批的动作，问和答各记一条，而且答的那条和当时的参数哈希绑死，防止审批通过后模型偷偷把参数换掉。
 
 ### 1.1 事件化会话对象（OpenHands SDK 实证）
 
-OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https://github.com/OpenHands/software-agent-sdk ）——对外只暴露 `send_message` / `run`，内部把每一步产出为**不可变事件**（agent 动作 / 工具结果 / 状态更新），连同 conversation / workspace 一起被 SDK 拥有。对 mod-agent 的启示：
+OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https://github.com/OpenHands/software-agent-sdk ）。对外只暴露 `send_message` / `run`，内部把每一步产出为**不可变事件**（agent 动作 / 工具结果 / 状态更新），连同 conversation / workspace 一起被 SDK 拥有。对 mod-agent 的启示：
 
 - 会话模型对齐：一个 `Conversation` 绑定一个 `workspace`，事件是 SDK 显式拥有的一等概念（"This repository owns agents, tools, conversations, workspaces, events, the REST/WebSocket API…"）；
 - 工作区抽象为「本机目录」与「临时容器」两档（对应 [architecture.md](./architecture.md) 沙箱 / 运行时抽象）；
@@ -103,15 +103,15 @@ OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https:
 
 除了进 SQLite 的结构化表，真实 Claude Code 每次运行还往本地写一份会话 transcript（JSONL）：`~/.claude/projects/<把工作目录转义的目录名>/<会话 id>.jsonl`。它本质是一条用 `parentUuid` 串起来的链表，每写一条消息盖上 `uuid` / `parentUuid` / 时间戳 / 类型等字段。三个精妙处：
 
-- **工具结果的父指针指向发起它的那条 assistant 消息**，而不是「物理上一条」——某个工具结果能精确回溯到「哪个 assistant turn 的哪次调用请求了它」，因果是显式连边、不靠时间顺序猜；
-- **压缩边界断物理链、留逻辑链**：压缩把一段历史换成摘要时，`parentUuid` 置空（物理断开，好让 prompt 缓存稳定），但另存 `logicalParentUuid` 保住原父指针，读时再桥接——压缩不破坏追踪的逻辑连续性；
+- **工具结果的父指针指向发起它的那条 assistant 消息**，而不是物理上一条。某个工具结果能精确回溯到哪个 assistant turn 的哪次调用请求了它，因果是显式连边、不靠时间顺序猜；
+- **压缩边界断物理链、留逻辑链**：压缩把一段历史换成摘要时，`parentUuid` 置空（物理断开，好让 prompt 缓存稳定），但另存 `logicalParentUuid` 保住原父指针，读时再桥接，压缩不破坏追踪的逻辑连续性；
 - **`promptId` 只盖在用户消息行**（用户输入与工具结果回注行，这两种内部算 `user` 类型），作为定位锚点。
 
-**怎么从记录重建「一次 prompt 的多个 turn」**：沿 `parentUuid` 走连边——从任意消息回溯到根，或从起点往下顺子边展开，就能把 assistant turn、它发起的工具调用、回来的结果层层连起来。`promptId` 是定位锚点、不是分组键（只在 user 行，按它分组会漏掉不带它的 assistant 行）。对 mod-agent：
+怎么从记录重建一次 prompt 的多个 turn：沿 `parentUuid` 走连边，从任意消息回溯到根，或从起点往下顺子边展开，就能把 assistant turn、它发起的工具调用、回来的结果层层连起来。`promptId` 是定位锚点、不是分组键（只在 user 行，按它分组会漏掉不带它的 assistant 行）。对 mod-agent：
 
-- 本地 transcript 可作为 SQLite 之外的**第二份、人类可读的审计/恢复格式**（JSONL 追加写入，崩溃也不丢历史）；
+- 本地 transcript 可作为 SQLite 之外的第二份、人类可读的审计/恢复格式（JSONL 追加写入，崩溃也不丢历史）；
 - 子 agent / workflow 各写自己的文件，每条委派链的追踪分开（见 [verification-and-multiagent.md](./verification-and-multiagent.md)、[dynamic-workflows.md](./dynamic-workflows.md)）；
-- 这是「默认就在、不依赖遥测开关」的那份 trace，对没有接 OTel 后端的单机用户尤其重要。
+- 这是默认就在、不依赖遥测开关的那份 trace，对没有接 OTel 后端的单机用户尤其重要。
 
 ## 2. 持久化表（SQLite）
 
@@ -144,7 +144,7 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
   > 通俗地说：乐观锁 = 「我基于版本 5 改的，如果改之前版本已经变成 6 了，说明别人动过，我这次不算数」。
 - 每任务任一时刻只有一个有效执行租约，租约可续期、过期回收；
 - 工具调用开始与结果分别持久化；结果未知的非幂等调用进入 `outcome_unknown`，而非自动标失败后重试；
-  > 举个例子（示意）：agent 已经发出「创建 PR」的请求，但网络断了，不知道服务端到底建没建。这时不能盲目重试——万一第一次其实成功了，重试就建出两个 PR。正确做法是记成「结果未知」，等人或去查一下再决定。
+  > 比如，agent 已经发出创建 PR 的请求，但网络断了，不知道服务端到底建没建。这时不能盲目重试，万一第一次其实成功了，重试就建出两个 PR。正确做法是记成结果未知，等人或去查一下再决定。
 - 事件按 `seq` 发送，断线后可从序号补拉；
 - 审批只生效一次并与 `parameter_hash` 绑定，防审批后模型偷偷改操作参数；
 - 每次状态转换在同一事务里「更新状态 + 追加事件」；
@@ -156,15 +156,15 @@ PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模
 
 ### 4.1 为什么直接采用 AGENTS.md（开放标准实证）
 
-**决策：mod-agent 以 `AGENTS.md` 为项目指令文件第一公民，不自创私有文件**（如 `.modagent.md`）。依据（出处：https://agents.md ）：
+决策：mod-agent 以 `AGENTS.md` 为项目指令文件第一公民，不自创私有文件（如 `.modagent.md`）。依据（出处：https://agents.md ）：
 
-- AGENTS.md 是**开放格式**（无必填字段、普通 Markdown），已被 6 万+ 开源项目采用，现由 Linux 基金会旗下 Agentic AI Foundation（AAIF）托管；
+- AGENTS.md 是开放格式（无必填字段、普通 Markdown），已被 6 万+ 开源项目采用，现由 Linux 基金会旗下 Agentic AI Foundation（AAIF）托管；
 - 主流工具已原生兼容：GitHub Copilot coding agent、Devin、Factory、Cursor、Codex、Gemini CLI、Windsurf、Zed、Warp、VS Code 等；
-- 官方明确「Rather than introducing another proprietary file, we chose a name and format that could work for anyone」——跟着标准走，用户跨工具复用同一份项目规则；
-- 加载语义：**离被编辑文件最近的 AGENTS.md 优先**；用户当场聊天指令优先级最高；支持 monorepo 嵌套（详见 [context-engineering.md §2.1](./context-engineering.md#_2-1-规则文件的加载顺序与优先级)）。
+- 官方明确 "Rather than introducing another proprietary file, we chose a name and format that could work for anyone"：跟着标准走，用户跨工具复用同一份项目规则；
+- 加载语义：离被编辑文件最近的 AGENTS.md 优先，用户当场聊天指令优先级最高，支持 monorepo 嵌套（详见 [context-engineering.md §2.1](./context-engineering.md#_2-1-规则文件的加载顺序与优先级)）。
 
-> 举个例子（示意）：仓库根放一份全局 `AGENTS.md`（如「用 pnpm 不用 npm」），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
+> 比如，仓库根放一份全局 `AGENTS.md`（如「用 pnpm 不用 npm」），`frontend/` 目录再放一份专门约束前端的。agent 改 `frontend/components/X.tsx` 时，会把根目录和 `frontend/` 的两份规则都读进来，离文件更近的那份优先级更高。
 
 **兼容读取策略（Devin 实证，出处：https://docs.devin.ai/cli/reference/configuration/config-file ）**：Devin 提供 `read_config_from` 开关，可选择性导入 `AGENTS.md`（含 `AGENTS.local.md`、历史名 `AGENT.md`、`.windsurfrules`）以及 Cursor / Windsurf / Claude / OpenCode / Zed 等竞品的规则文件。mod-agent 启动时同样以开关方式兼容读取 `AGENTS.md` + 已知竞品规则文件，逐项可关。
 
-**记忆目录结构（Claude Code 实证，出处：https://code.claude.com/docs/en/memory ）**：记忆分两层——一份索引常驻、每个记忆一个独立文件按需读；索引有硬上限（前 200 行 / 25KB 先到为准），主题文件写回时自动加 `modified: ISO8601` 时间戳（详见 [context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）。
+**记忆目录结构（Claude Code 实证，出处：https://code.claude.com/docs/en/memory ）**：记忆分两层，一份索引常驻、每个记忆一个独立文件按需读；索引有硬上限（前 200 行 / 25KB 先到为准），主题文件写回时自动加 `modified: ISO8601` 时间戳（详见 [context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）。

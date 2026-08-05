@@ -1,8 +1,8 @@
 # Roadmap · 分阶段路线与验收
 
-> 核心路径：先证明「一个任务能安全、可恢复地改代码并验证」，再往外扩成长期运行、带工具生态与复杂协作的工程 Agent。
+> 核心路径：先证明一个任务能安全、可恢复地改代码并验证，再往外扩成长期运行、带工具生态与复杂协作的工程 Agent。
 
-> 这篇是「施工排期表」。顺序有讲究：先让一个任务能安全跑通（Phase 1–2），再谈变聪明（Phase 3–4）、再谈团队协作（Phase 5），最后才考虑多 agent（Phase 6）——地基没打牢前不盖二楼。
+> 这篇是施工排期表。顺序有讲究：先让一个任务能安全跑通（Phase 1–2），再谈变聪明（Phase 3–4）、再谈团队协作（Phase 5），最后才考虑多 agent（Phase 6）。地基没打牢前不盖二楼。
 
 排期的形状比条目本身重要：三个阶段层，每层都建立在下一层真的跑通之上。
 
@@ -27,7 +27,7 @@ flowchart TB
     style AD fill:#fff3cd
 ```
 
-这张图在说什么：**绿色那一层做不完，就别碰黄色那一层**。多 agent（Phase 6）排得这么后不是因为它不重要，而是因为它的正确性依赖前面所有的可观测性、权限与验证能力——没有这些，多 agent 只是把失败放大。
+绿色那一层做不完，就别碰黄色那一层。多 agent（Phase 6）排得这么后不是因为它不重要，而是因为它的正确性依赖前面所有的可观测性、权限与验证能力。没有这些，多 agent 只是把失败放大。
 
 ## 1. 开发路线
 
@@ -38,22 +38,22 @@ flowchart TB
 
 ### Phase 1 · 纵向 MVP 闭环
 
-实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告；**静态/动态系统提示词组装（见 [system-prompt.md](./system-prompt.md)）、编辑安全（read-before-edit、mtime 外部修改检测、引号容错）、工具错误作为 tool_result 回喂的自修复**。
+实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告；静态/动态系统提示词组装（见 [system-prompt.md](./system-prompt.md)）、编辑安全（read-before-edit、mtime 外部修改检测、引号容错）、工具错误作为 tool_result 回喂的自修复。
 验收：覆盖「改一个组件」「修一个 bug」「补一个测试」三类端到端任务；失败与取消可观察；用户可审 diff；工具执行有审计；未读先编辑、文件被外部改动等场景能被代码层拦下。
 
 ### Phase 2 · 可靠性补齐
 
-实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；**流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）**。
+实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）。
 验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪；压缩只在 turn boundary 触发、不破坏工具调用配对；缓存命中率可观测。
 
 ### Phase 3 · 代码理解增强
 
-实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索；**长期记忆的四类型分类、语义召回（sideQuery）与异步预取（[context-engineering.md §5.4](./context-engineering.md#_5-4-长期记忆-记什么、怎么召回)）**。
+实现：TS 符号索引、依赖关系、测试映射、影响分析、增量索引；按评测收益再补 Embedding/混合检索；长期记忆的四类型分类、语义召回（sideQuery）与异步预取（[context-engineering.md §5.4](./context-engineering.md#_5-4-长期记忆-记什么、怎么召回)）。
 验收：相比只用 `rg` 的基线，目标文件召回率、上下文相关性或成功率有可测提升；索引失效不导致错误结论；记忆召回零额外等待、命中条目相关且可判定时效。
 
 ### Phase 4 · Skills、MCP 与浏览器验证
 
-实现：Skill 加载/版本、**inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md#_6-2-触发路径与执行模式-inline-fork)）**、MCP Client（**按 2026-07-28 无状态规范实现**：stdio / Streamable HTTP、三段式命名、懒加载与失败隔离、列表缓存、MRTR 交互、错误码 `-32602`，见 [tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)）、外部文档/代码托管集成、Playwright 页面验证与截图产物。
+实现：Skill 加载/版本、inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md#_6-2-触发路径与执行模式-inline-fork)）、MCP Client（按 2026-07-28 无状态规范实现：stdio / Streamable HTTP、三段式命名、懒加载与失败隔离、列表缓存、MRTR 交互、错误码 `-32602`，见 [tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)）、外部文档/代码托管集成、Playwright 页面验证与截图产物。
 验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；单个 MCP server 挂起不影响其余工具；浏览器结果可复现并归档。
 
 ### Phase 5 · 团队与企业能力
@@ -75,7 +75,7 @@ flowchart TB
 在 Phase 6 多 Agent 与 Phase 7 自治之上，再做三类高协作能力（均为可选项，按真实需求与评测驱动）：
 
 - **Dynamic Workflows（[dynamic-workflows.md](./dynamic-workflows.md)）**：确定性 JS 脚本编排，`agent/pipeline/parallel`、StructuredOutput、三道上限（并发 `min(16,CPU-2)` / 4096 item / 1000 agent）、预算、worktree 隔离、journal 断点续跑；先做最小版（3 个 hook + 1 道并发）；
-- **Agent Teams（[agent-teams.md](./agent-teams.md)）**：对等组队、共享任务/记忆/产出、`SendMessage` 四种寻址；**安全规则随通信一起上**——跨会话消息不携带用户权威、转发被拒动作即权限洗白、跨机 bridge 为 bypass-immune 必问人、团队记忆跳过 secret；先做同进程对等，再跨会话；
+- **Agent Teams（[agent-teams.md](./agent-teams.md)）**：对等组队、共享任务/记忆/产出、`SendMessage` 四种寻址；安全规则随通信一起上：跨会话消息不携带用户权威、转发被拒动作即权限洗白、跨机 bridge 为 bypass-immune 必问人、团队记忆跳过 secret；先做同进程对等，再跨会话；
 - **Background Fleet（[background-fleet.md](./background-fleet.md)）**：会话内子 agent 后台化（Phase 6 已含）、`/bg` 脱终端、`claude agents` 表、commit/push/draft PR 收尾；daemon 健康检查/重生/孤儿收养最后做，且 on-demand 不常驻。
 
 验收：工作流失败被隔离成单点、不重做已完成前缀；团队成员间通信不产生越权、跨机消息必经真人确认、共享记忆无密钥；后台任务关掉终端仍能跑完并交付 draft PR，且不直推主干/force-push/merge。
@@ -92,7 +92,7 @@ flowchart LR
     P7 --> P8["Phase 8<br/>工作流 / 团队 / 后台舰队"]
 ```
 
-这张图在说什么：箭头只往右走、不允许跳级——每个阶段都有文末 [§3](#_3-mvp-验收清单) 那套可勾选的验收清单，过不了就不进下一阶段。
+箭头只往右走、不允许跳级。每个阶段都有文末 [§3](#_3-mvp-验收清单) 那套可勾选的验收清单，过不了就不进下一阶段。
 
 ### 1.1 各阶段的业界对照（2026-08 核实）
 
