@@ -8,7 +8,6 @@ out/
 coverage/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
-.workbuddy/dist-build/
 
 # 本地研究/辅助数据，不入库
 .research/
@@ -24,3 +23,7 @@ package-lock.json
 # 自动生成的文件
 *.min.js
 *.min.css
+
+# Prettier 无 SVG parser（显式传路径会报 No parser could be inferred），
+# docs/public 下的 SVG 图标手工维护，不纳入格式化。
+*.svg

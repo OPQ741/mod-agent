@@ -8,16 +8,20 @@ mod-agent 的目标是提供一个可读、可扩展、可审计的编程智能�
 
 ## 主要文档
 
-- 架构总览：`docs/architecture.md`
-- Agent 主循环：`docs/agent-loop.md`
-- 上下文工程：`docs/context-engineering.md`
-- 权限与自治：`docs/autonomy.md`
-- 系统提示：`docs/system-prompt.md`
-- 安全边界：`docs/security.md`
-- 工具与扩展：`docs/tools-and-extensions.md`
-- 模型网关：`docs/model-gateway.md`
-- Coding Agent 参考：`docs/coding-agents.md`
-- 完整章节索引：见 `docs/index.md`
+下列链接是可直接抓取的在线页面；仓库内源文件路径标在括号里，供已 clone 仓库的读者对照。
+
+- [文档首页](https://opq741.github.io/mod-agent/): 设计目标、一次任务的六个阶段、技术栈与阅读主线（`docs/index.md`）
+- [总体架构](https://opq741.github.io/mod-agent/architecture.html): 分层架构、架构决策记录、monorepo 结构（`docs/architecture.md`）
+- [Agent 主循环](https://opq741.github.io/mod-agent/agent-loop.html): 任务状态机、核心循环、停止 / 恢复 / 预算语义（`docs/agent-loop.md`）
+- [上下文工程](https://opq741.github.io/mod-agent/context-engineering.html): 代码库理解、分层检索、上下文压缩与注入防护（`docs/context-engineering.md`）
+- [系统提示词](https://opq741.github.io/mod-agent/system-prompt.html): 提示词分层、规则注入、缓存边界（`docs/system-prompt.md`）
+- [安全边界](https://opq741.github.io/mod-agent/security.html): 威胁模型、沙箱基线、权限判定引擎（`docs/security.md`）
+- [工具与扩展](https://opq741.github.io/mod-agent/tools-and-extensions.html): 工具契约、并行执行、MCP、人工审批（`docs/tools-and-extensions.md`）
+- [模型接入](https://opq741.github.io/mod-agent/model-gateway.html): Provider 适配、模型路由、结构化输出（`docs/model-gateway.md`）
+- [Coding Agent 图鉴](https://opq741.github.io/mod-agent/coding-agents.html): 主流产品 / 框架 / 协议的逐一对标（`docs/coding-agents.md`）
+- [路线图](https://opq741.github.io/mod-agent/roadmap.html): 分阶段计划与 MVP 验收清单（`docs/roadmap.md`）
+
+全部 21 篇章节的索引见文档首页。
 
 ## 开发命令
 

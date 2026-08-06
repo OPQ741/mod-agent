@@ -1,0 +1,22 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 32 32"
+  width="32"
+  height="32"
+  role="img"
+  aria-label="mod-agent"
+>
+  <!-- 站点 favicon：与 logo.svg 同一图形，但描边加粗到 2.6，
+       保证 16×16 渲染时「> _」两个笔画仍然分得开。
+       实心圆角底 + 白色笔画，浅色与深色浏览器标签页都可读，无需 prefers-color-scheme 变体。 -->
+  <rect width="32" height="32" rx="7" fill="#2563eb" />
+  <path
+    d="M8 11l5 5-5 5"
+    stroke="#fff"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+  <line x1="15" y1="21" x2="24" y2="21" stroke="#fff" stroke-width="2.6" stroke-linecap="round" />
+</svg>

@@ -49,7 +49,8 @@ npm run docs:build  # 构建静态产物到 docs/.vitepress/dist
 - **pre-commit**：对暂存文件运行 lint-staged
   - `*.{js,mjs,cjs,ts,mts,cts}` → `eslint --fix` + `prettier --write`
   - `*.md` → `prettier --write` + `markdownlint-cli2 --fix` + 文档链接校验
-  - `*.{json,yml,yaml,css,html,svg}` → `prettier --write`
+  - `*.{json,jsonc,yml,yaml,css,scss,html,xml}` → `prettier --write`
+  - SVG 不在格式化范围内：Prettier 没有 SVG parser，显式传路径会报 `No parser could be inferred`
 - **commit-msg**：commitlint 校验提交信息是否符合 [Conventional Commits](https://www.conventionalcommits.org/)。
 
 `--no-verify` 属于硬边界，禁止使用（见 `AGENTS.md` §5）。如果确实需要临时跳过（例如紧急回滚），在 PR 描述里显式说明原因。

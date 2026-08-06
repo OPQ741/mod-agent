@@ -14,7 +14,7 @@ export default withMermaid(
     lang: "zh-CN",
     lastUpdated: true,
     head: [
-      // 自定义 favicon（可选）
+      // 源文件在 docs/public/favicon.svg，随构建一起产出；head 里的 href 需手动拼 base。
       ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],
     ],
     themeConfig: {
