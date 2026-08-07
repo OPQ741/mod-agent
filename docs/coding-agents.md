@@ -1,6 +1,6 @@
 # Coding Agent Landscape · Coding Agent 全景图鉴（对标）
 
-> 这篇把 2026 年市面上能自己动手写代码的 AI（Coding Agent）的主流形态汇总在一起：它们长什么样、开不开源、用什么模型、怎么改代码、怎么防出错，以及哪些机制值得 mod-agent 借鉴。所有链接均于 2026-08 实际打开核对，star 数只作量级参考并标注核对日期。
+> 这篇把 2026 年市面上能自己动手写代码的 AI（Coding Agent）的主流形态汇总在一起：它们长什么样、开不开源、用什么模型、怎么改代码、怎么防出错，以及哪些机制值得 mod-agent 借鉴。所有链接与许可证均于 2026-10-14 逐个打开核对。项目体量只给规模档位（10万+ / 数万 / 数千 / 数百）不给精确 star 数，因为那是一天就能变的数字，只用来判断「有没有人在用」，不用来排序。
 
 > **没接触过这类工具的话，先看这三句**：
 >
@@ -24,6 +24,8 @@
 
 > 名词预备：**MCP** = agent 接外部工具的统一插头；**BYOK** = Bring Your Own Key，自带模型 API Key；**ACP** = Agent Client Protocol，编辑器（如 Zed）把外部 CLI agent 挂进来当后端的协议；**沙箱** = 把 agent 关进隔离环境，让它碰不到你的系统和密钥；**worktree** = Git 给同一仓库开多个互不干扰的工作目录。
 
+> 2026-10 扩容后的两点口径说明：分类框架不动（四类加一类协议），表也不重排，但 ④ 与 ⑤ 里新长出三种此前没有的形态：**CLI 转 SDK**（§4.20，SDK 不重写逻辑，只把自家 CLI 当子进程包起来）、**协议与观测语义标准**（§4.24 ACP 管编辑器↔agent，§4.25 OTel GenAI 管 trace 字段命名）、**策略与规约即代码**（§4.26，命令白名单写成可测试文件，规约三件套做成独立工具包），它们分别归进 ④ 与 ⑤。项目总数按画像条目计：Continue 的 CLI 与 IDE 两种形态算 1 个项目、占 2 条画像。
+
 ### 0.0 零基础怎么读这张图鉴（先读这节）
 
 **第一步：先搞懂所有 Coding Agent 都在跑同一个循环。** 不管是 CLI、编辑器还是云端产品，内核都是下面五步反复执行，直到任务完成或停下来问人：
@@ -38,7 +40,7 @@ flowchart LR
     E -- "过了" --> F["停下等你审<br/>或提交 PR"]
 ```
 
-先说结论：形态五花八门，循环只有一个。所谓终端类、IDE 类、云端类，差别只是这个循环跑在你电脑上、跑在编辑器里、还是跑在厂商的云服务器上，以及每步要不要问你（自主程度调到哪一档）。看懂这张循环图，后面 45 个项目都是它的变体。
+先说结论：形态五花八门，循环只有一个。所谓终端类、IDE 类、云端类，差别只是这个循环跑在你电脑上、跑在编辑器里、还是跑在厂商的云服务器上，以及每步要不要问你（自主程度调到哪一档）。看懂这张循环图，后面 63 个项目都是它的变体。
 
 **第二步：四大类（加一类协议）按运行位置划分。**
 
@@ -91,65 +93,85 @@ flowchart TD
 
 建议的读法：先看①确定兴趣，再跳到③④⑨判断能不能用、有没有安全风险，最后看⑩，这一栏直接服务于 mod-agent 的设计决策。⑤⑥⑦⑧解释它为什么这么设计，想深入某个对标时再细读。
 
-### 0.1 横向对比总表（跨全部 45 个项目）
+### 0.1 横向对比总表（跨全部 63 个项目）
 
 > MCP 列：✅=已支持；沙箱 / 审批 列只写最有代表性的设计。标 ⚠️=已停更 / 归档 / 维护模式。
 >
-> 横向比较全部 45 个项目的八个关键项。不用逐行细读：先扫 沙箱·审批 列看安全设计，再按类别挑几个眼熟的项目，深读它们的小档案。
+> 横向比较全部 63 个项目的八个关键项。不用逐行细读：先扫 沙箱·审批 列看安全设计，再按类别挑几个眼熟的项目，深读它们的小档案。
 
-| 分类   | 项目               | 形态                           | 开源 · 许可证                              | 模型 / 供应商                       | 沙箱 · 审批                                         | 子代理 / 并行                         | MCP                    | 编辑与产物方式                                     |
-| ------ | ------------------ | ------------------------------ | ------------------------------------------ | ----------------------------------- | --------------------------------------------------- | ------------------------------------- | ---------------------- | -------------------------------------------------- |
-| ① CLI  | Claude Code        | CLI/TUI + IDE 插件 + GitHub    | 源码可见（非 OSI 许可）                    | Claude 为主                         | 多档审批 + allow/deny 权限策略                      | Task 子代理                           | ✅                     | 文件读写 + diff，原生 git commit / 开 PR           |
-| ① CLI  | Codex CLI          | CLI/TUI（Rust 单二进制）       | 开源 · Apache-2.0                          | OpenAI 为主，可配                   | suggest / auto-edit / full-auto 三档 + 沙箱         | todo 多步规划                         | ✅                     | 补丁 / diff，git worktree                          |
-| ① CLI  | Gemini CLI         | CLI/TUI，支持 headless         | 开源 · Apache-2.0                          | Gemini，OAuth 免费额度              | 审批提示 + 沙箱 + 可信文件夹                        | subagents / 自定义命令                | ✅                     | 文件编辑 + shell，JSON 流式输出                    |
-| ① CLI  | Aider              | 终端 REPL（Python）            | 开源 · Apache-2.0                          | BYOK，任意模型                      | 每步确认，git 兜底                                  | 无（单会话）                          | 未内置                 | whole/diff/search-replace，**每改一次自动 commit** |
-| ① CLI  | OpenCode           | 终端 TUI（+桌面/IDE）          | 开源 · MIT                                 | 任意 provider，可复用订阅           | plan 只读 / build 全权                              | build/plan/general 子代理             | ✅                     | 文件 + diff，可开分支提 PR                         |
-| ① CLI  | Goose              | CLI + 桌面 App + API           | 开源 · Apache-2.0                          | 15+ provider，ACP 复用订阅          | 会话内审批，新版沙箱                                | subagents / recipes                   | ✅（70+ 扩展）         | 文件 + 命令，recipes 工作流                        |
-| ① CLI  | Crush              | CLI/TUI（Go）                  | 源码可见 · FSL-1.1-MIT                     | 任意 provider，会话中热切换         | 逐次审批，`--yolo` 全放                             | 多会话 / 共享 workspace               | ✅                     | 文件 + shell，LSP 语义                             |
-| ① CLI  | Qwen Code          | CLI/TUI + 桌面 + SDK           | 开源 · Apache-2.0                          | Qwen 为主，多协议兼容               | Auto 模式 / 沙箱                                    | SubAgents / Agent Teams               | ✅                     | 文件编辑 + git worktree                            |
-| ① CLI  | Amazon Q CLI ⚠️    | CLI（Rust）                    | 开源 · Apache-2.0 / MIT                    | 绑定 AWS（**已停更**，转闭源 Kiro） | 审批提示                                            | 有                                    | ✅                     | 文件 + 直接调 AWS API                              |
-| ① CLI  | Continue `cn` ⚠️   | TUI + headless                 | 开源 · Apache-2.0（**只读停更**）          | BYOK                                | 交互审批 / headless 跑到底                          | 有                                    | ✅                     | 文件编辑（与 IDE 同内核）                          |
-| ② IDE  | Cursor             | 独立 AI IDE（fork VS Code）    | 闭源商业                                   | 订阅制多模型                        | 本地命令执行；云端 agent 跑隔离 VM                  | Project 协调 + Cloud Agents 并行开 PR | ✅                     | Checkpoints 快照 + diff + PR                       |
-| ② IDE  | Windsurf           | AI IDE + JetBrains 插件        | 闭源商业（2025-07 被 Cognition 收购）      | 订阅制多模型                        | Cascade 执行 + checkpoint 回滚                      | Workflows 录制重复轨迹                | ✅ 原生                | Checkpoint + diff                                  |
-| ② IDE  | Copilot agent mode | VS Code / JetBrains 扩展       | 闭源（GitHub 订阅）                        | GitHub 选路多模型                   | Plan 全程只读，批准后才执行                         | Plan agent → 执行 agent               | ✅                     | Chat 内 diff / 修改预览                            |
-| ② IDE  | Cline              | VS Code 扩展 + SDK + CLI       | 开源 · Apache-2.0                          | BYOK 任意                           | **每步人审**，可配自动批准档                        | 单 agent 循环                         | ✅                     | 逐文件 diff + **每步 checkpoint 可撤销**           |
-| ② IDE  | Roo Code ⚠️        | VS Code 扩展                   | 开源 · Apache-2.0（**2026-05 停服归档**）  | BYOK                                | 按角色限制工具权限                                  | Boomerang 子代理派生回收              | ✅                     | diff + 检查点                                      |
-| ② IDE  | Kilo Code          | VS Code/JetBrains 扩展 + CLI   | 开源 · MIT                                 | 500+ 模型 BYOK 零加价               | 权限分级 + 成本护栏 + YOLO                          | Agent Manager 多会话 + Cloud Agent    | ✅                     | Checkpoint 哈希化，可回退任意步                    |
-| ② IDE  | Continue ⚠️        | IDE 扩展 + CLI                 | 开源 · Apache-2.0（**只读停更**）          | BYOK                                | 停更未核实                                          | 未核实                                | ✅                     | diff 预览                                          |
-| ② IDE  | Zed                | 原生 Rust 编辑器               | 开源 · GPL-3.0（部分 Apache-2.0）          | 自带 Provider / Key + ACP           | 工具权限三态：自动批准 / 拒绝 / 逐次问              | **Parallel Agents** 并行 + ACP 外挂   | ✅ 原生                | 编辑器内就地编辑                                   |
-| ② IDE  | Trae               | AI IDE（VS Code 内核）         | IDE 闭源；研究型 CLI（trae-agent）开源 MIT | 字节系为主，可接多家                | SOLO 全自动模式                                     | SOLO 多 agent 协作                    | 未核实                 | 变更管理面板                                       |
-| ② IDE  | Void ⚠️            | AI IDE（fork VS Code）         | 开源 · Apache-2.0（**已弃用归档**）        | BYOK 直连模型方                     | 早期逐步确认                                        | 无                                    | 未核实                 | checkpoint + 可视化变更                            |
-| ③ 云端 | Devin              | 云端 SaaS + 本地 CLI           | 闭源 SaaS                                  | 自研 SWE-2 / Ultra / Fusion         | 隔离 VM + OS 进程沙箱 + 域名网络过滤                | 并行多张工单，可接管                  | 集成 Slack/Linear/Jira | draft PR，内嵌 IDE 可实时接管                      |
-| ③ 云端 | Copilot 云端代理   | GitHub.com 内                  | 闭源（付费套餐）                           | 任务级可选模型                      | PR 永远 draft、发起者不可自批、Actions 默认不自动跑 | 多 session + Automations 事件触发     | ✅                     | 建分支 + draft PR                                  |
-| ③ 云端 | Replit Agent       | 云 IDE 内                      | 闭源 SaaS                                  | Lite / Economy / Power 档位         | 云容器，职责共担模型                                | 后台任务 Core 1 个 / Pro 10 个        | Connectors             | 改云项目 + checkpoint + 发布 URL                   |
-| ③ 云端 | Bolt / bolt.diy    | 浏览器内（官方 SaaS + 开源版） | 开源 MIT（WebContainer 商用另授权）        | 19+ 供应商 BYOK                     | WebContainer：浏览器 WASM 跑真 Node                 | 单会话为主                            | 浏览器终端             | 实时预览，部署到 Bolt Cloud / Vercel               |
-| ③ 云端 | v0（Vercel）       | 云端 SaaS                      | 闭源 SaaS                                  | 官方选路（未列明）                  | Vercel Sandbox 轻量 VM                              | 单 chat 对应一 Project                | 可选 MCP               | 自动分支 + 自动 commit + PR，**永不推 main**       |
-| ③ 云端 | Lovable            | 云端 SaaS + 托管后端           | 闭源 SaaS                                  | 官方未列明（未核实）                | 内置 Supabase，SOC 2 / ISO 27001                    | 未核实                                | Supabase / GitHub      | 代码随时导出 GitHub / Docker 自托管                |
-| ③ 云端 | Factory Droid      | CLI + 桌面 + 云 + CI           | 核心闭源；TS SDK 开源（许可证未核实）      | 模型无关，BYOK / 本地端点           | **默认只读，`--auto` 才动手**                       | Mission Control 多 Droid 并行         | ✅                     | `.factory/droids/` Markdown+YAML 定义子代理        |
-| ④ 学术 | SWE-agent          | Python CLI + 研究代码          | 开源 · MIT                                 | 任意 LM                             | 容器化执行（研究向）                                | 单 agent + 工具                       | 无（研究项目）         | ACI 命令式编辑，产出 patch                         |
-| ④ 学术 | OpenHands          | 平台（自托管 Agent Canvas）    | 开源 · MIT                                 | 任意 LLM（BYOM）                    | 无沙箱 / 单 Docker / 每会话一容器三模式             | 子代理 + 多会话 + ACP                 | ✅                     | **EventStream 事件溯源**，直接改工作区             |
-| ④ 学术 | Agentless          | Python 固定流水线              | 开源 · MIT                                 | OpenAI 为主                         | SWE-bench-docker 跑测试                             | 无（去 agent 化）                     | 无                     | 多候选 patch + 测试重排选最优                      |
-| ④ 学术 | Moatless Tools     | Python 包 / 实验               | 开源 · MIT                                 | LiteLLM 接任意 + Voyage 向量        | Docker 容器                                         | 单 agent                              | 无                     | search loop 中编辑文件                             |
-| ④ 学术 | AutoCodeRover      | Python（Docker/conda）         | **Sonar 源码可用许可（非商业）**           | OpenAI/Claude/Gemini 等             | Docker / conda testbed                              | 单 agent                              | 无                     | AST 结构检索 → patch JSON                          |
-| ④ 学术 | MetaGPT            | Python 库 / CLI                | 开源 · MIT                                 | 多 provider 可配                    | Dockerfile 可选                                     | 强（产品/架构/经理/工程师角色）       | 可扩展                 | 产出整套文档 + 代码仓库                            |
-| ④ 框架 | AutoGen ⚠️         | Python/.NET 框架               | 代码 MIT（**维护模式**，后继 MAF）         | 多 provider                         | 代码执行扩展需自建沙箱                              | 强（对话组群、AgentTool 嵌套）        | ✅                     | 框架层（不直接管代码）                             |
-| ④ 框架 | CrewAI             | Python 框架                    | 开源 · MIT                                 | OpenAI 默认，可本地                 | 不提供沙箱                                          | Crews 角色分工 + Flows 事件流         | ✅（含 A2A）           | 框架层                                             |
-| ④ 框架 | LangGraph          | Python/JS 低层库               | 开源 · MIT                                 | 任意（经 LangChain）                | 不提供沙箱，HITL 是一等公民                         | 子图 / 多 agent（Deep Agents）        | 经生态                 | 框架层（持久化执行可借鉴）                         |
-| ④ 框架 | OpenAI Agents SDK  | Python/TS SDK                  | 开源 · MIT                                 | OpenAI + 100+（LiteLLM）            | 自带 SandboxAgent（Unix / Docker）                  | handoff 转交 / agent-as-tool          | ✅ 原生                | SandboxAgent 查文件 / 跑命令 / 打补丁              |
-| ④ 框架 | Google ADK         | Python/Java/Go/TS              | 开源 · Apache-2.0                          | Gemini 优化、模型无关               | Tool Confirmation 显式确认                          | Task API 结构化委托 / 嵌套工作流      | ✅ 原生                | 框架层（可部署 Cloud Run / Vertex）                |
-| ④ 框架 | Pydantic AI        | Python SDK                     | 开源 · MIT                                 | 几乎所有 provider                   | Monty 沙箱解释器 + allowlist shell                  | sub-agents capability                 | ✅ 原生                | Harness Coder：工作区文件 + 仓库上下文             |
-| ④ 框架 | Mastra             | TypeScript 框架                | 双许可（核心 Apache-2.0，`ee/` 企业）      | 40+ provider                        | 不强制代码沙箱                                      | agent + workflow 图编排               | 可写/可暴露 MCP        | 框架层（HITL 挂起靠 storage）                      |
-| ④ 早期 | gpt-engineer ⚠️    | Python CLI                     | 开源 · MIT（**已归档**）                   | OpenAI / Anthropic / 本地           | Docker 可选                                         | 单 agent                              | 无                     | 一次性生成整库文件                                 |
-| ④ 早期 | smol developer     | Python 库                      | 开源 · MIT                                 | OpenAI Function Calling             | 无（执行交回人类）                                  | 无                                    | 无                     | plan → 列文件 → 逐文件生成                         |
-| ⑤ 协议 | MCP                | 开放协议规范                   | 开源 · MIT                                 | 模型无关                            | 不适用（协议层）                                    | 不适用                                | 本身就是               | 定义 tools / resources / prompts 暴露              |
-| ⑤ 协议 | A2A                | 开放协议规范                   | 开源 · Apache-2.0                          | 模型无关                            | 不适用（协议层）                                    | 本身就是 agent 互操作                 | 与 MCP 互补            | JSON-RPC 2.0：Agent Card + Task                    |
-| ⑤ 协议 | AGENTS.md          | Markdown 约定                  | 开放格式（Linux 基金会 AAIF）              | 模型无关                            | 不适用                                              | 不适用                                | 不适用                 | 仓库根目录的「agent 版 README」                    |
+| 分类          | 项目                         | 形态                                | 开源 · 许可证                                  | 模型 / 供应商                        | 沙箱 · 审批                                                  | 子代理 / 并行                           | MCP                             | 编辑与产物方式                                     |
+| ------------- | ---------------------------- | ----------------------------------- | ---------------------------------------------- | ------------------------------------ | ------------------------------------------------------------ | --------------------------------------- | ------------------------------- | -------------------------------------------------- |
+| ① CLI         | Claude Code                  | CLI/TUI + IDE 插件 + GitHub         | 源码可见（非 OSI 许可）                        | Claude 为主                          | 多档审批 + allow/deny 权限策略                               | Task 子代理                             | ✅                              | 文件读写 + diff，原生 git commit / 开 PR           |
+| ① CLI         | Codex CLI                    | CLI/TUI（Rust 单二进制）            | 开源 · Apache-2.0                              | OpenAI 为主，可配                    | suggest / auto-edit / full-auto 三档 + 沙箱                  | todo 多步规划                           | ✅                              | 补丁 / diff，git worktree                          |
+| ① CLI         | Gemini CLI                   | CLI/TUI，支持 headless              | 开源 · Apache-2.0                              | Gemini，OAuth 免费额度               | 审批提示 + 沙箱 + 可信文件夹                                 | subagents / 自定义命令                  | ✅                              | 文件编辑 + shell，JSON 流式输出                    |
+| ① CLI         | Aider                        | 终端 REPL（Python）                 | 开源 · Apache-2.0                              | BYOK，任意模型                       | 每步确认，git 兜底                                           | 无（单会话）                            | 未内置                          | whole/diff/search-replace，**每改一次自动 commit** |
+| ① CLI         | OpenCode                     | 终端 TUI（+桌面/IDE）               | 开源 · MIT                                     | 任意 provider，可复用订阅            | plan 只读 / build 全权                                       | build/plan/general 子代理               | ✅                              | 文件 + diff，可开分支提 PR                         |
+| ① CLI         | Goose                        | CLI + 桌面 App + API                | 开源 · Apache-2.0                              | 15+ provider，ACP 复用订阅           | 会话内审批，新版沙箱                                         | subagents / recipes                     | ✅（70+ 扩展）                  | 文件 + 命令，recipes 工作流                        |
+| ① CLI         | Crush                        | CLI/TUI（Go）                       | 源码可见 · FSL-1.1-MIT                         | 任意 provider，会话中热切换          | 逐次审批，`--yolo` 全放                                      | 多会话 / 共享 workspace                 | ✅                              | 文件 + shell，LSP 语义                             |
+| ① CLI         | Qwen Code                    | CLI/TUI + 桌面 + SDK                | 开源 · Apache-2.0                              | Qwen 为主，多协议兼容                | Auto 模式 / 沙箱                                             | SubAgents / Agent Teams                 | ✅                              | 文件编辑 + git worktree                            |
+| ① CLI         | Amazon Q CLI ⚠️              | CLI（Rust）                         | 开源 · Apache-2.0 / MIT                        | 绑定 AWS（**已停更**，转闭源 Kiro）  | 审批提示                                                     | 有                                      | ✅                              | 文件 + 直接调 AWS API                              |
+| ① CLI         | Continue `cn` ⚠️             | TUI + headless                      | 开源 · Apache-2.0（**只读停更**）              | BYOK                                 | 交互审批 / headless 跑到底                                   | 有                                      | ✅                              | 文件编辑（与 IDE 同内核）                          |
+| ① CLI         | Pi                           | 终端 CLI/TUI（TS）                  | 开源 · MIT                                     | 未核实                               | 未核实                                                       | Pi Durable 可恢复会话                   | ✅                              | 未核实                                             |
+| ① CLI         | Grok Build                   | 终端 CLI/TUI（Rust）                | 开源 · Apache-2.0                              | xAI 为主                             | 网络按域名白名单放行，其余未核实                             | 最多 8 个并行子 agent，各自 worktree    | 未核实                          | 每子 agent 独立 worktree                           |
+| ① CLI         | Plandex                      | 终端 CLI（Go 单二进制）             | 开源 · MIT                                     | 多家 BYOK                            | 改动先进 diff 沙箱，批准才落盘                               | 未核实                                  | 未核实                          | 累积 diff 沙箱，按文件审                           |
+| ① CLI         | Kimi Code                    | 终端 CLI（TS）                      | 开源 · MIT                                     | Kimi 为主                            | 旧版 Kaos 文件系统沙箱，新版未核实                           | 未核实                                  | 未核实（旧版走 ACP）            | 未核实                                             |
+| ① CLI         | MiniMax Code                 | 终端 TUI + exec + acp（TS）         | 开源 · MIT                                     | BYOK，MiniMax 为主                   | 带沙箱，分档未核实                                           | 子 Agent                                | 未核实                          | 未核实                                             |
+| ① CLI         | gptme                        | 终端 CLI（Python）                  | 开源 · MIT                                     | 未核实                               | 未核实                                                       | 持久自主 agent（Bob）                   | ✅                              | patch 工具做增量修改                               |
+| ① CLI         | ForgeCode                    | 终端 CLI（Rust）                    | 开源 · Apache-2.0                              | 官方称 300+ 模型                     | 未核实                                                       | 未核实                                  | 未核实                          | 计划文件带版本，六步状态机                         |
+| ② IDE         | Cursor                       | 独立 AI IDE（fork VS Code）         | 闭源商业                                       | 订阅制多模型                         | 本地命令执行；云端 agent 跑隔离 VM                           | Project 协调 + Cloud Agents 并行开 PR   | ✅                              | Checkpoints 快照 + diff + PR                       |
+| ② IDE         | Windsurf                     | AI IDE + JetBrains 插件             | 闭源商业（2025-07 被 Cognition 收购）          | 订阅制多模型                         | Cascade 执行 + checkpoint 回滚                               | Workflows 录制重复轨迹                  | ✅ 原生                         | Checkpoint + diff                                  |
+| ② IDE         | Copilot agent mode           | VS Code / JetBrains 扩展            | 闭源（GitHub 订阅）                            | GitHub 选路多模型                    | Plan 全程只读，批准后才执行                                  | Plan agent → 执行 agent                 | ✅                              | Chat 内 diff / 修改预览                            |
+| ② IDE         | Cline                        | VS Code 扩展 + SDK + CLI            | 开源 · Apache-2.0                              | BYOK 任意                            | **每步人审**，可配自动批准档                                 | 单 agent 循环                           | ✅                              | 逐文件 diff + **每步 checkpoint 可撤销**           |
+| ② IDE         | Roo Code ⚠️                  | VS Code 扩展                        | 开源 · Apache-2.0（**2026-05 停服归档**）      | BYOK                                 | 按角色限制工具权限                                           | Boomerang 子代理派生回收                | ✅                              | diff + 检查点                                      |
+| ② IDE         | Kilo Code                    | VS Code/JetBrains 扩展 + CLI        | 开源 · MIT                                     | 500+ 模型 BYOK 零加价                | 权限分级 + 成本护栏 + YOLO                                   | Agent Manager 多会话 + Cloud Agent      | ✅                              | Checkpoint 哈希化，可回退任意步                    |
+| ② IDE         | Continue ⚠️                  | IDE 扩展 + CLI                      | 开源 · Apache-2.0（**只读停更**）              | BYOK                                 | 停更未核实                                                   | 未核实                                  | ✅                              | diff 预览                                          |
+| ② IDE         | Zed                          | 原生 Rust 编辑器                    | 开源 · GPL-3.0（部分 Apache-2.0）              | 自带 Provider / Key + ACP            | 工具权限三态：自动批准 / 拒绝 / 逐次问                       | **Parallel Agents** 并行 + ACP 外挂     | ✅ 原生                         | 编辑器内就地编辑                                   |
+| ② IDE         | Trae                         | AI IDE（VS Code 内核）              | IDE 闭源；研究型 CLI（trae-agent）开源 MIT     | 字节系为主，可接多家                 | SOLO 全自动模式                                              | SOLO 多 agent 协作                      | 未核实                          | 变更管理面板                                       |
+| ② IDE         | Void ⚠️                      | AI IDE（fork VS Code）              | 开源 · Apache-2.0（**已弃用归档**）            | BYOK 直连模型方                      | 早期逐步确认                                                 | 无                                      | 未核实                          | checkpoint + 可视化变更                            |
+| ② IDE         | Google Antigravity           | 桌面 App + `agy` CLI + SDK + 云沙箱 | 闭源商业                                       | 未核实                               | 长任务下沉云沙箱，细档未核实                                 | 动态子代理 + Scheduled Tasks            | 未核实                          | 未核实                                             |
+| ② IDE         | Kiro（AWS）                  | AI IDE + CLI                        | 闭源；前身 CLI 由 Apache-2.0 转 AWS IP License | 未核实                               | 权限配置，细节未核实                                         | 未核实                                  | 未核实                          | 按 tasks.md 逐项推进                               |
+| ② IDE         | JetBrains Junie              | IDE 内 agent + CLI（EAP）           | 闭源商业                                       | 多模型，清单未核实                   | 未核实                                                       | 未核实                                  | 未核实                          | 未核实                                             |
+| ③ 云端        | Devin                        | 云端 SaaS + 本地 CLI                | 闭源 SaaS                                      | 自研 SWE-2 / Ultra / Fusion          | 隔离 VM + OS 进程沙箱 + 域名网络过滤                         | 并行多张工单，可接管                    | 集成 Slack/Linear/Jira          | draft PR，内嵌 IDE 可实时接管                      |
+| ③ 云端        | Copilot 云端代理             | GitHub.com 内                       | 闭源（付费套餐）                               | 任务级可选模型                       | PR 永远 draft、发起者不可自批、Actions 默认不自动跑          | 多 session + Automations 事件触发       | ✅                              | 建分支 + draft PR                                  |
+| ③ 云端        | Replit Agent                 | 云 IDE 内                           | 闭源 SaaS                                      | Lite / Economy / Power 档位          | 云容器，职责共担模型                                         | 后台任务 Core 1 个 / Pro 10 个          | Connectors                      | 改云项目 + checkpoint + 发布 URL                   |
+| ③ 云端        | Bolt / bolt.diy              | 浏览器内（官方 SaaS + 开源版）      | 开源 MIT（WebContainer 商用另授权）            | 19+ 供应商 BYOK                      | WebContainer：浏览器 WASM 跑真 Node                          | 单会话为主                              | 浏览器终端                      | 实时预览，部署到 Bolt Cloud / Vercel               |
+| ③ 云端        | v0（Vercel）                 | 云端 SaaS                           | 闭源 SaaS                                      | 官方选路（未列明）                   | Vercel Sandbox 轻量 VM                                       | 单 chat 对应一 Project                  | 可选 MCP                        | 自动分支 + 自动 commit + PR，**永不推 main**       |
+| ③ 云端        | Lovable                      | 云端 SaaS + 托管后端                | 闭源 SaaS                                      | 官方未列明（未核实）                 | 内置 Supabase，SOC 2 / ISO 27001                             | 未核实                                  | Supabase / GitHub               | 代码随时导出 GitHub / Docker 自托管                |
+| ③ 云端        | Factory Droid                | CLI + 桌面 + 云 + CI                | 核心闭源；TS SDK 开源（许可证未核实）          | 模型无关，BYOK / 本地端点            | **默认只读，`--auto` 才动手**                                | Mission Control 多 Droid 并行           | ✅                              | `.factory/droids/` Markdown+YAML 定义子代理        |
+| ③ 云端        | Jules（Google）              | 云端 SaaS + CLI / API               | 闭源服务                                       | Gemini 为主                          | 一任务一台云端隔离 VM                                        | 任务级并行                              | 官方 MCP server（13 工具）      | 产出 PR，不直接改源仓库                            |
+| ④ 学术        | SWE-agent                    | Python CLI + 研究代码               | 开源 · MIT                                     | 任意 LM                              | 容器化执行（研究向）                                         | 单 agent + 工具                         | 无（研究项目）                  | ACI 命令式编辑，产出 patch                         |
+| ④ 学术        | OpenHands                    | 平台（自托管 Agent Canvas）         | 开源 · MIT                                     | 任意 LLM（BYOM）                     | 无沙箱 / 单 Docker / 每会话一容器三模式                      | 子代理 + 多会话 + ACP                   | ✅                              | **EventStream 事件溯源**，直接改工作区             |
+| ④ 学术        | Agentless                    | Python 固定流水线                   | 开源 · MIT                                     | OpenAI 为主                          | SWE-bench-docker 跑测试                                      | 无（去 agent 化）                       | 无                              | 多候选 patch + 测试重排选最优                      |
+| ④ 学术        | Moatless Tools               | Python 包 / 实验                    | 开源 · MIT                                     | LiteLLM 接任意 + Voyage 向量         | Docker 容器                                                  | 单 agent                                | 无                              | search loop 中编辑文件                             |
+| ④ 学术        | AutoCodeRover                | Python（Docker/conda）              | **Sonar 源码可用许可（非商业）**               | OpenAI/Claude/Gemini 等              | Docker / conda testbed                                       | 单 agent                                | 无                              | AST 结构检索 → patch JSON                          |
+| ④ 学术        | MetaGPT                      | Python 库 / CLI                     | 开源 · MIT                                     | 多 provider 可配                     | Dockerfile 可选                                              | 强（产品/架构/经理/工程师角色）         | 可扩展                          | 产出整套文档 + 代码仓库                            |
+| ④ 框架        | AutoGen ⚠️                   | Python/.NET 框架                    | 代码 MIT（**维护模式**，后继 MAF）             | 多 provider                          | 代码执行扩展需自建沙箱                                       | 强（对话组群、AgentTool 嵌套）          | ✅                              | 框架层（不直接管代码）                             |
+| ④ 框架        | CrewAI                       | Python 框架                         | 开源 · MIT                                     | OpenAI 默认，可本地                  | 不提供沙箱                                                   | Crews 角色分工 + Flows 事件流           | ✅（含 A2A）                    | 框架层                                             |
+| ④ 框架        | LangGraph                    | Python/JS 低层库                    | 开源 · MIT                                     | 任意（经 LangChain）                 | 不提供沙箱，HITL 是一等公民                                  | 子图 / 多 agent（Deep Agents）          | 经生态                          | 框架层（持久化执行可借鉴）                         |
+| ④ 框架        | OpenAI Agents SDK            | Python/TS SDK                       | 开源 · MIT                                     | OpenAI + 100+（LiteLLM）             | 自带 SandboxAgent（Unix / Docker）                           | handoff 转交 / agent-as-tool            | ✅ 原生                         | SandboxAgent 查文件 / 跑命令 / 打补丁              |
+| ④ 框架        | Google ADK                   | Python/Java/Go/TS                   | 开源 · Apache-2.0                              | Gemini 优化、模型无关                | Tool Confirmation 显式确认                                   | Task API 结构化委托 / 嵌套工作流        | ✅ 原生                         | 框架层（可部署 Cloud Run / Vertex）                |
+| ④ 框架        | Pydantic AI                  | Python SDK                          | 开源 · MIT                                     | 几乎所有 provider                    | Monty 沙箱解释器 + allowlist shell                           | sub-agents capability                   | ✅ 原生                         | Harness Coder：工作区文件 + 仓库上下文             |
+| ④ 框架        | Mastra                       | TypeScript 框架                     | 双许可（核心 Apache-2.0，`ee/` 企业）          | 40+ provider                         | 不强制代码沙箱                                               | agent + workflow 图编排                 | 可写/可暴露 MCP                 | 框架层（HITL 挂起靠 storage）                      |
+| ④ 早期        | gpt-engineer ⚠️              | Python CLI                          | 开源 · MIT（**已归档**）                       | OpenAI / Anthropic / 本地            | Docker 可选                                                  | 单 agent                                | 无                              | 一次性生成整库文件                                 |
+| ④ 早期        | smol developer               | Python 库                           | 开源 · MIT                                     | OpenAI Function Calling              | 无（执行交回人类）                                           | 无                                      | 无                              | plan → 列文件 → 逐文件生成                         |
+| ④ SDK 引擎    | Claude Agent SDK / Codex SDK | TS SDK，包一层自家 CLI 子进程       | Anthropic 商业条款（非 OSI）/ Apache-2.0       | 各绑自家模型                         | 透传 CLI 的沙箱与审批参数                                    | 未核实                                  | 未核实                          | 由 CLI 出 diff，SDK 出事件流                       |
+| ④ 框架        | deepagents                   | Python/JS 库（跑在 LangGraph 上）   | 开源 · MIT                                     | 任意（经 LangChain）                 | 声明式 permissions，first-match-wins；可换 Sandbox 后端      | `task` 工具派生，isolated / fork 两模式 | 未核实                          | 虚拟文件系统 + write_todos 计划状态                |
+| ④ 框架        | smolagents                   | Python 库                           | 开源 · Apache-2.0                              | 未核实                               | 官方自认本地执行器非沙箱，须配 E2B / Modal / Docker / Blaxel | 未核实                                  | 未核实                          | 模型写 Python 代码片段执行                         |
+| ④ 学术        | mini-SWE-agent / Harbor      | 约 100 行 Python + 评测框架         | MIT（Harbor 未核实）                           | 任意                                 | 容器化测试环境                                               | 无                                      | 无                              | 裸 bash 命令改文件，产出 patch                     |
+| ④ 策略 · 规约 | execpolicy / Spec Kit        | Rust 策略库 + Python 规约工具包     | Apache-2.0 / MIT                               | execpolicy 不涉及模型；Spec Kit 多家 | 三态 allow / prompt / forbidden，fail-closed                 | 不适用                                  | 未核实                          | Spec Kit 出 requirements / design / tasks          |
+| ⑤ 协议        | MCP                          | 开放协议规范                        | 开源 · MIT                                     | 模型无关                             | 不适用（协议层）                                             | 不适用                                  | 本身就是                        | 定义 tools / resources / prompts 暴露              |
+| ⑤ 协议        | A2A                          | 开放协议规范                        | 开源 · Apache-2.0                              | 模型无关                             | 不适用（协议层）                                             | 本身就是 agent 互操作                   | 与 MCP 互补                     | JSON-RPC 2.0：Agent Card + Task                    |
+| ⑤ 协议        | AGENTS.md                    | Markdown 约定                       | 开放格式（Linux 基金会 AAIF）                  | 模型无关                             | 不适用                                                       | 不适用                                  | 不适用                          | 仓库根目录的「agent 版 README」                    |
+| ⑤ 协议        | ACP                          | 开放协议规范                        | 开源 · Apache-2.0                              | 模型无关                             | `session/request_permission` 是内建反向审批原语              | 不适用（协议层）                        | 与 MCP 互补（管编辑器 ↔ agent） | 不适用（协议层）                                   |
+| ⑤ 协议        | OTel GenAI 语义约定          | 开放观测规范（独立 SIG 仓库）       | 开源 · Apache-2.0                              | 模型无关                             | 不适用                                                       | 不适用                                  | 含 MCP 相关约定                 | 不适用（定义 span 与属性命名）                     |
+
+> 注：Continue 是 1 个项目、2 种形态（① 的 `cn` 与 ② 的 IDE 扩展），表里占两行，计数只算 1 个。总数 63 按画像条目口径得：全页 64 条画像，减去 Continue 重复的那 1 条。④ 与 ⑤ 里 Claude Agent SDK / Codex SDK、mini-SWE-agent / Harbor、execpolicy / Spec Kit 各是一行覆盖两个对象；§4.19 Agent Skills 属开放约定，沿用本表原有口径未单列行。
 
 ### 0.2 三个一眼看到的趋势
 
 1. **形态收敛**：无论 CLI、IDE 还是云端，核心都是自主循环 + 工具调用 + 人在关键点审批 + 产出可审查的 Git 变更，差异只在运行环境与自主程度的高低。
 2. **开源生态默认 BYOK + MCP**：开源项目几乎都不锁模型、不做模型中间商，且把 MCP 作为工具扩展的标准；商业产品则靠订阅、托管环境和协作取胜。
-3. **2026 年的洗牌信号**：Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 进入维护模式、Amazon Q CLI 转闭源。选型时要把 项目活跃度 + 许可证性质 当硬指标，不能只看 star。
+3. **2026 年的洗牌信号**：Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 进入维护模式、Amazon Q CLI 转闭源。选型时要把 项目活跃度 + 许可证性质 当硬指标，不能只看 star。2026-10 扩容这一批又补进两条同类信号：JetBrains 的 Fleet 于 2025-12-22 关停让位 Air，Kiro 把前身 CLI 的 Apache-2.0 换成 AWS IP License。
 
 ---
 
@@ -371,6 +393,122 @@ flowchart TD
   3. ⚠️ 同样是知名开源项目最终归档的信号：评估竞品活跃度时务必看 README 是否写明停更。
 - **官方链接**：GitHub: https://github.com/continuedev/continue （README 注明"no longer actively maintained, read-only"，最终 2.0.0）｜ 官方文档: https://docs.continue.dev/ （CLI 快速上手 https://docs.continue.dev/cli/quickstart ）
 
+#### 1.11 Pi（earendil-works/pi）
+
+- **一句话看懂**：刻意做小的终端 agent harness：内核只管循环和工具下发，其余能力靠扩展挂上去；它最出名的主张是「让模型写脚本来调工具」，而不是一个个发 JSON 工具调用。
+- **形态与平台**：终端 CLI（TypeScript 实现），2026-10-01 发布 1.0。与 mod-agent 同为 TS 技术栈的终端 agent。
+- **是否开源 / 许可证**：开源，MIT。体量：10万+（第三方清单记载，官方仓库页未直接显示该数字，口径按第三方记，2026-10 核实）。
+- **支持模型 / 供应商**：未核实。
+- **核心架构与运行机制**：三个机制撑起它的差异：**Codemode**（模型写一段脚本，在脚本里批量调用 MCP 工具，一次跑完再回结果）、**deferred tool loading**（工具 schema 平时不进 prompt，模型真要用才下发，官方称约省 40% prompt token）、Pi Durable（可恢复会话）。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：未核实。
+- **工具与扩展**：MCP 工具经 Codemode 间接调用；skills / extensions 体系；Pi Durable 负责会话续跑。
+- **权限 · 审批 · 沙箱**：未核实。
+- **值得借鉴的具体机制**：
+  1. deferred tool loading 是可直接移植到 mod-agent 工具注册层的一刀，正对着 [tools-and-extensions.md §2.3](./tools-and-extensions.md#_2-3-延迟加载-deferred-tools-tool-search) 与 [system-prompt.md §6](./system-prompt.md#_6-工具清单如何呈现给模型)。
+  2. Codemode 与 ADR-3（结构化专用工具为主、通用 Shell 为辅）是相反路线，但它要解决的真问题很实在：工具一多就把 prompt 撑爆，多步调用要一步步串起来。值得当反方论点留档。
+  3. Pi Durable 的会话恢复对应 [agent-loop.md §5](./agent-loop.md#_5-停止与恢复语义) 与 ADR-5。
+- **官方链接**：GitHub: https://github.com/earendil-works/pi
+
+#### 1.12 Grok Build（xai-org/grok-build）
+
+- **一句话看懂**：xAI 把自家终端 agent 开源出来的产物，开源起因是一次事故：整个仓库连 `.env` 一起被上传，属被动开源。
+- **形态与平台**：终端 CLI（Rust 实现），2026-07-15 开源。
+- **是否开源 / 许可证**：开源，Apache-2.0。体量：数万（2026-10 核实；开源后 9 天即进入该档）。
+- **支持模型 / 供应商**：xAI 自家模型为主，其它 provider 的配置细节未核实。
+- **核心架构与运行机制**：**Actor 模型 runtime**（每个 agent 是一个消息驱动的 actor）；任务按 Plan / Execute / Verify 三阶段推进；最多 8 个并行子 agent，每个各占一个 git worktree；另有 Arena mode（多个 agent 同题竞跑，横向比产出）。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：并行子 agent 各自 worktree 隔离，改动天然分岔，合并前可逐支审查。
+- **工具与扩展**：`StopCancelled` hook；web 搜索带域名白名单。
+- **权限 · 审批 · 沙箱**：网络侧按域名白名单放行；其余分档细节未核实。
+- **值得借鉴的具体机制**：
+  1. Verify 写进 runtime 而不是事后补救，与 [verification-and-multiagent.md §1](./verification-and-multiagent.md#_1-验证流水线) 同形。
+  2. 并行子 agent × 独立 worktree 是 [verification-and-multiagent.md §5.4](./verification-and-multiagent.md#_5-4-交接与隔离) 的物理隔离做法，8 这个并发上限也是一个可直接借的常量。
+  3. 这次泄露事故本身是合规与供应链教材：`.env` 进仓库就等于密钥外泄，[security.md §5](./security.md#_5-网络、密钥与外部数据) 的密钥处理与 [architecture.md §5](./architecture.md#_5-建议代码仓库结构) 的仓库结构约束都要把这条当测试用例。
+- **官方链接**：GitHub: https://github.com/xai-org/grok-build
+
+#### 1.13 Plandex（plandex-ai/plandex）
+
+- **一句话看懂**：Go 写的「计划先行」终端 agent，为大项目调的：所有改动先进一个可累积的 diff 沙箱，你分几次审，批准之前项目文件一个字节都不动。
+- **形态与平台**：终端 CLI（Go 实现，单二进制分发；官方页标注 Windows 走 WSL）；有自托管服务端与本地模式，官方云已停止接收新用户。
+- **是否开源 / 许可证**：开源，MIT。体量：未核实。
+- **支持模型 / 供应商**：Anthropic / OpenAI / Google / 开源供应商多家，BYOK。
+- **核心架构与运行机制**：一次任务 = 一个 plan；改动写进累积 diff 沙箱，可整体或按文件审查、回退；官方称默认模型包下有效上下文可到 2M token 级、单文件约 100k token；自主程度是连续旋钮，从头到尾全自动到逐步确认。
+- **上下文与代码检索**：tree-sitter 项目地图 + 全仓库索引，官方称可索引 20M+ token 的项目。
+- **编辑与变更策略**：**累积 diff 沙箱**：候选改动与项目文件物理分离，过一批落一批。
+- **工具与扩展**：内置终端与自动调试（命令跑失败会自己修），可选浏览器调试；集成 git，可生成 commit message。
+- **权限 · 审批 · 沙箱**：审批粒度由自主度档位决定；diff 沙箱本身就是变更隔离层，不依赖模型自觉。
+- **值得借鉴的具体机制**：
+  1. 「方案 → 审批 → 应用」与 mod-agent 的 [agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项) 同构，差别在于它把待审改动做成了一个可累积的 diff 容器，而不是一段计划文本。
+  2. 长上下文靠索引加分批审撑住，不靠把整仓库塞进 prompt，佐证 ADR-4（混合检索，不纯靠向量）与 [context-engineering.md §3](./context-engineering.md#_3-索引结构与刷新)。
+  3. Go 单二进制是 Node 方案（ADR-7）的反面对照：省掉运行时依赖，代价是平台矩阵更重。mod-agent 选 Node 换来的是 SDK 可嵌入与 IPC 的 JSON 协议（[architecture.md §4](./architecture.md#_4-技术选型)）。
+- **官方链接**：GitHub: https://github.com/plandex-ai/plandex ｜ 官网: https://plandex.ai ｜ 文档: https://docs.plandex.ai/
+
+#### 1.14 Kimi Code（MoonshotAI/kimi-code）
+
+- **一句话看懂**：月之暗面的终端编程代理，是上一代 `kimi-cli`（Python）的下一代 TypeScript 重写：旧仓库已归档，新仓库把模型抽象与 OS 抽象拆成了独立层。
+- **形态与平台**：终端 CLI（TypeScript），活跃开发；前身 `MoonshotAI/kimi-cli`（Python，Apache-2.0）已于 2026-09-22 归档。
+- **是否开源 / 许可证**：开源，MIT。体量：未核实。
+- **支持模型 / 供应商**：Kimi 系列为主；其它 provider 的配置细节未核实。
+- **核心架构与运行机制**：三仓分层：`kimi-code`（CLI 与交互层）+ `kosong`（模型抽象层）+ `pykaos`（OS 抽象层，文件与命令的统一入口）。旧 kimi-cli 的特征：shell 双模式、支持 ACP、Kaos 文件系统沙箱、Rust 内核 `kimi-agent-rs`。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：未核实。
+- **工具与扩展**：旧版支持 ACP，可被编辑器挂载为后端；新版细节未核实。
+- **权限 · 审批 · 沙箱**：旧版靠 Kaos 做文件系统沙箱；新版细节未核实。
+- **值得借鉴的具体机制**：
+  1. 模型抽象 / OS 抽象 / CLI 三层分离，与 mod-agent 的 Model Gateway（ADR-6，[model-gateway.md](./model-gateway.md)）+ 沙箱基线（[security.md §3](./security.md#_3-沙箱基线)）+ CLI（ADR-7）几乎一一对应，是最贴近的分层样本。
+  2. 换代时自动迁移用户的配置与会话：迁移脚本是开源 CLI 留住老用户成本最低的做法。
+  3. 旧仓归档 + 新仓接棒的仓库治理范本，与本页 §5.12 记的一批 slug 迁移问题正好互为对照。
+- **官方链接**：GitHub: https://github.com/MoonshotAI/kimi-code ｜ 旧版（已归档）: https://github.com/MoonshotAI/kimi-cli
+
+#### 1.15 MiniMax Code（MiniMax-AI/minimax-code）
+
+- **一句话看懂**：MiniMax 开源的终端编程代理，一个内核三个入口：交互 TUI、headless 的 `mcode exec`、以及作为 ACP agent 被编辑器挂载的 `mcode acp`；桌面端不开源。
+- **形态与平台**：终端 CLI（TypeScript），2026-09-18 开源（v0.4.12）。
+- **是否开源 / 许可证**：开源，MIT。体量：未核实。
+- **支持模型 / 供应商**：BYOK，MiniMax 自家模型为主，其它 provider 细节未核实。
+- **核心架构与运行机制**：三入口共享同一 agent 内核：TUI 交互、`mcode exec` 无人值守跑完吐结果、`mcode acp` 让编辑器把第三方 agent 挂进来（与 Goose / Zed 同一条路线）。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：未核实。
+- **工具与扩展**：Skills、子 Agent、ACP 入口。
+- **权限 · 审批 · 沙箱**：带沙箱；具体分档未核实。
+- **值得借鉴的具体机制**：
+  1. 中国模型厂开源 CLI 里架构清单最完整的一份，`exec` 这个 headless 入口与 ADR-7、[agent-loop.md §6.3](./agent-loop.md#_6-3-headless-事件流输出-claude-code-gemini-cli-实证) 的机器可读输出是同一套意图。
+  2. `acp` 作为一等入口再次说明 ACP 已是终端 agent 的标配接口，见本页 §4.24。
+- **官方链接**：GitHub: https://github.com/MiniMax-AI/minimax-code
+
+#### 1.16 gptme（gptme/gptme）
+
+- **一句话看懂**：2023 年就在跑的终端 agent，比大多数同类活得久，靠的是「小核心 + 外挂生态」：核心只留 shell / patch / browser 三类工具，其余全推给插件。
+- **形态与平台**：终端 CLI（Python，pip 安装），仍活跃。
+- **是否开源 / 许可证**：开源，MIT。体量：未核实。
+- **支持模型 / 供应商**：未核实。
+- **核心架构与运行机制**：最小 agent 循环 + shell / patch / browser 三类内置工具；**Lessons**：把失败与用户的纠正沉淀成可复用的经验条目，下次同类任务带上；另有可长期自跑的持久自主 agent（命名为 Bob）。
+- **上下文与代码检索**：Lessons 即外置经验存储；无自建代码索引（细节未核实）。
+- **编辑与变更策略**：patch 工具做增量修改。
+- **工具与扩展**：插件体系 + MCP + ACP。
+- **权限 · 审批 · 沙箱**：未核实。
+- **值得借鉴的具体机制**：
+  1. Lessons 是同类里少见的「把纠错当一等公民」的机制，方向与 mod-agent 的外置记忆一致（[context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)、[data-and-events.md §4](./data-and-events.md#_4-长期记忆)），差别是 gptme 记「我上次错在哪」，mod-agent 的长期记忆先记「这个项目是什么样」。
+  2. 核心越薄，跨模型时代活得越久：这是 ADR-3 工具数量克制路线的长期主义样本。
+- **官方链接**：GitHub: https://github.com/gptme/gptme
+
+#### 1.17 ForgeCode（tailcallhq/forgecode，原 antinomyhq/forge）
+
+- **一句话看懂**：Rust 写的结对编程 agent，主打两件事：模型面广（官方称 300+），以及把计划写成磁盘上带版本号的 Markdown 文件，内存里那份清单不算数。
+- **形态与平台**：终端 CLI（Rust 实现），活跃；仓库已从 `antinomyhq/forge` 迁到 `tailcallhq/forgecode`（原组织现状未核实）。
+- **是否开源 / 许可证**：开源，Apache-2.0。体量：未核实。
+- **支持模型 / 供应商**：官方称 300+ 模型，经统一 provider 层；细节未核实。
+- **核心架构与运行机制**：内置 execute-plan 技能：任务先落成计划文件 `plans/{日期}-{任务}-{版本}.md`，按六步状态机推进，每步产物写回同一个文件，版本号递增。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：计划文件即变更账本：可审计、可续跑、可回看是哪一步走偏。
+- **工具与扩展**：未核实。
+- **权限 · 审批 · 沙箱**：未核实。
+- **值得借鉴的具体机制**：
+  1. 「计划 = 磁盘上带版本的 Markdown」正是 [agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项) 选的做法：进程死了计划还在，重跑能接上次版本继续，与 ADR-5 的状态外置同一立场。
+  2. 把「执行计划」本身做成一个可复用的 Skill，与 [tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用) 的流程包思路一致。
+- **官方链接**：GitHub: https://github.com/tailcallhq/forgecode
+
 ---
 
 ## 2. IDE / 编辑器内 Coding Agent
@@ -439,7 +577,7 @@ flowchart TD
 - **形态与平台**：独立 AI IDE（fork VS Code）；另有 Cascade 登陆 JetBrains；Windows / macOS / Linux。
 - **是否开源 / 许可证**：闭源商业。以官方 blog "The Next Chapter" (2025-07-14) 为准：被 Cognition 收购，团队并入 Cognition。无编辑器本体开源仓库（旧 Codeium 组织 Exafunction 下的 neovim 等零散插件仍在）。
 - **支持模型 / 供应商**：订阅制多模型。
-- **核心架构与运行机制**：Cascade 是 agentic 助手，带 Code / Chat 双模式、工具调用、语音输入；强调"你在 flow 里，AI 跟着改"。
+- **核心架构与运行机制**：Cascade 是 agentic 助手，带 Code / Chat 双模式、工具调用、语音输入；强调"你在 flow 里，AI 跟着改"。产品侧后续变化：2026-06-02 已改名 Devin Desktop，Cascade 于 2025-09-08 移除、由 Rust 重写为 Devin Local，并引入 ACP 接纳第三方 agent。
 - **上下文与代码检索**：Memories & Rules 可定制行为；规则现改为仓库根目录 `.windsurf/rules/*.md` 文件定义，带 Activation Mode（何时生效）；另有全局 memory 文件（`~/.codeium/windsurf/memories/global_rules.md`，限 6000 字符）。
 - **编辑与变更策略**：Checkpoints（可回退到之前状态）+ 实时 linter 感知。
 - **工具与扩展**：原生 MCP（企业版需手动开启）；Workflows（把重复出现的任务轨迹自动化成模板）；增强终端。
@@ -470,7 +608,7 @@ flowchart TD
 
 - **一句话看懂**：开源圈最流行的 VS Code agent 扩展，前身叫 Claude-dev，理念是"你的 Key、你的模型、每一步都经你确认"。
 - **形态与平台**：VS Code 侧边栏扩展；同时提供 SDK、IDE 扩展、Headless CLI（CI/CD 可用）；CLI 2.0 起通过 ACP 可进 JetBrains、Zed、Neovim 等。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/cline/cline （当日约 70.3k star，7.7k fork）；创始人为 Saoud Rizwan，扩展 ID 仍带 `claude-dev`。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/cline/cline （体量：数万，2026-10 核实）；创始人为 Saoud Rizwan，扩展 ID 仍带 `claude-dev`。
 - **支持模型 / 供应商**：BYOK，自带 Anthropic / OpenAI / Google / Mistral 等 Key，或 Ollama 本地模型；不锁定厂商。
 - **核心架构与运行机制**：Plan-and-Act 两阶段：Plan 模式只推理不动文件，Act 模式才自主改文件、跑终端、操作浏览器；执行中监听 linter/编译器报错并自修（补 import、修类型）。
 - **上下文与代码检索**：读项目结构、理解文件关系做跨文件协调（索引方案细节未核实）。
@@ -488,7 +626,7 @@ flowchart TD
 
 - **一句话看懂**：从 Cline fork 出来的 AI 开发团队扩展，主打多种角色 agent；但 2026-05-15 已正式停服、仓库归档。
 - **形态与平台**：VS Code 扩展（兼容 Cursor / Windsurf 等所有 VS Code fork）。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/RooCodeInc/Roo-Code （当日约 24.3k star），仓库顶部明确标注 Public archive，并声明"The Roo Code Extension was shut down on May 15th"，引导用户转社区 fork ZooCode 或回 Cline；付费用户 billing@roocode.com。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/RooCodeInc/Roo-Code （体量：数万，2026-10 核实），仓库顶部明确标注 Public archive，并声明"The Roo Code Extension was shut down on May 15th"，引导用户转社区 fork ZooCode 或回 Cline；付费用户 billing@roocode.com。
 - **支持模型 / 供应商**：BYOK，Claude / GPT / Gemini / Ollama 本地模型均可。
 - **核心架构与运行机制**：多角色模式：Architect（规划设计，只读+仅改 md）/ Code（实现，全权文件+终端）/ Debug（诊断）/ Ask（只问答不改文件）/ Orchestrator（跨模式派发任务）；另有 Boomerang 编排：派生子 agent 做隔离子任务，结果回收。
 - **上下文与代码检索**：随角色注入不同系统提示与工具集。
@@ -505,7 +643,7 @@ flowchart TD
 
 - **一句话看懂**：Roo/Cline 谱系里仍在活跃的全能 agent 平台，500+ 模型可随时切换、零加价，还自带云端 agent。
 - **形态与平台**：VS Code 扩展、JetBrains 插件、CLI 三栖。
-- **是否开源 / 许可证**：开源，MIT。仓库 https://github.com/Kilo-Org/kilocode （当日约 27.6k star）。
+- **是否开源 / 许可证**：开源，MIT。仓库 https://github.com/Kilo-Org/kilocode （体量：数万，2026-10 核实）。
 - **支持模型 / 供应商**：500+ 模型、任务中途可切换，按模型方原价零加价；注册即用、无需先有 Key。
 - **核心架构与运行机制**：Agent Manager 管理多会话，每个会话有独立 worktree 目录下的专属终端；Cloud Agent 在远程开发环境里读写 GitHub/GitLab/Bitbucket 仓库、跑命令、可提交推送；支持远程连接（本地算力、云端窗口）。
 - **上下文与代码检索**：skill 文件夹（`kilocode/skills/`）自动可用。
@@ -523,12 +661,12 @@ flowchart TD
 
 - **一句话看懂**：最早的开源 coding agent 之一，CLI + VS Code 扩展 + JetBrains 插件三栖；现已停止维护、仓库只读。
 - **形态与平台**：VS Code 扩展、JetBrains 插件、CLI。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/continuedev/continue （当日约 36.2k star），README 顶部明确"`continuedev/continue` 仓库不再活跃维护、对所有人只读"；发布了收尾的 2.0.0（移除匿名遥测、拆出鉴权、修 bug），并建议 JetBrains 用户改用 CLI。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/continuedev/continue （体量：数万，2026-10 核实），README 顶部明确"`continuedev/continue` 仓库不再活跃维护、对所有人只读"；发布了收尾的 2.0.0（移除匿名遥测、拆出鉴权、修 bug），并建议 JetBrains 用户改用 CLI。2026-06-16 被 Cursor 母公司收编（团队并入），仓库转为只读，最终版仍是 2.0.0。
 - **支持模型 / 供应商**：BYOK，可接任意模型（历史定位即模型无关）。
 - **核心架构与运行机制**：历史上主打 chat / autocomplete / agent；2026 停更后新机制未核实。
 - **上下文与代码检索**：历史上有 codebase 索引 / @-引用（停更后细节未核实）。
 - **编辑与变更策略**：diff 预览（细节未核实）。
-- **工具与扩展**：历史上支持 MCP。
+- **工具与扩展**：历史上支持 MCP。配置格式方向：当前主推 `config.yaml`，`config.json` 已弃用但仍向后兼容加载。
 - **权限 · 审批 · 沙箱**：未核实。
 - **值得借鉴的具体机制**：作为先驱标本，它验证了开源、BYOK、模型无关这条路线；但不建议在 2026 年新项目里照搬其现状。
 - **官方链接**：GitHub: https://github.com/continuedev/continue （已只读停更） ｜ 官方文档: https://continue.dev
@@ -537,7 +675,7 @@ flowchart TD
 
 - **一句话看懂**：Atom / Tree-sitter 原班人马用 Rust 写的高性能多人协作编辑器；它的 AI 特色是自己有 agent，还能当别人 agent 的宿主。
 - **形态与平台**：独立原生编辑器（Rust，自研 GPU 渲染 GPUI）；macOS / Linux / Windows。
-- **是否开源 / 许可证**：开源，主要 GPL-3.0-or-later（标注为 Apache-2.0 的组件除外）。仓库 https://github.com/zed-industries/zed （当日约 91.7k star）；开发方 Zed Industries, Inc. 为营利公司。
+- **是否开源 / 许可证**：开源，主要 GPL-3.0-or-later（标注为 Apache-2.0 的组件除外）。仓库 https://github.com/zed-industries/zed （体量：数万，2026-10 核实）；开发方 Zed Industries, Inc. 为营利公司。
 - **支持模型 / 供应商**：自带配置各 Provider / Key；并通过 **ACP（Agent Client Protocol）** 接入外部 agent。
 - **核心架构与运行机制**：三条 agent 路径：Zed Agent（原生，带内置工具/Profile/skills/instructions/MCP）；External Agents（经 ACP 接入 Claude、Codex、OpenCode、Copilot、Cursor 等第三方 agent，各自带自己的运行时与鉴权）；Terminal Threads（在 Zed 里直接跑某个 agent CLI/TUI）。
 - **上下文与代码检索**：Agent Panel 里内置 read/search/edit 工具；Parallel Agents 从 Threads 侧栏同时跑多个 agent 线程 + 终端线程，每个线程独立上下文窗口与对话历史。
@@ -555,7 +693,7 @@ flowchart TD
 
 - **一句话看懂**：字节做的 AI 原生 IDE，VS Code 内核，主打 Chat → Builder → SOLO 从提问到交付的三段式；国内版 trae.com.cn、国际版 trae.ai。
 - **形态与平台**：独立 AI IDE（VS Code 内核）；Windows / macOS。
-- **是否开源 / 许可证**：IDE 本体闭源商业；仅其研究型 CLI agent 开源，仓库 https://github.com/bytedance/trae-agent （当日约 12.1k star，MIT），定位"面向软件工程的 LLM agent，研究友好、模块化"。IDE 本身无公开源码仓库。
+- **是否开源 / 许可证**：IDE 本体闭源商业；仅其研究型 CLI agent 开源，仓库 https://github.com/bytedance/trae-agent （体量：数万，2026-10 核实，MIT），定位"面向软件工程的 LLM agent，研究友好、模块化"。IDE 本身无公开源码仓库。
 - **支持模型 / 供应商**：以字节系模型为主；开源 CLI agent 支持 OpenAI / Anthropic / Doubao / Azure / OpenRouter / Ollama / Gemini。
 - **核心架构与运行机制**：IDE 内 Chat / Builder / SOLO 三模式：Chat（问）、Builder（搭原型/结构）、SOLO（内置专职 coding agent，理解目标→规划任务→编排工具→自主推进各阶段）；官方博客提过 Trae Agent 2.0（统一 agent 模式、工具编排、长期记忆）。
 - **上下文与代码检索**：agent 可理解需求、搜索 codebase、制定多步计划（索引细节未核实）。
@@ -572,7 +710,7 @@ flowchart TD
 
 - **一句话看懂**：YC 孵化的开源 Cursor 平替，VS Code fork，强调代码直连你选的模型方、不经中间商、数据全归你；现已弃用、仓库归档。
 - **形态与平台**：独立 AI IDE（fork VS Code）；macOS / Windows / Linux。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/voideditor/void （当日约 28.8k star），标注 Public archive，README 写明"Void is now deprecated，不再接收贡献"；2025-01 起由 MIT 切换到 Apache-2.0。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/voideditor/void （体量：数万，2026-10 核实），标注 Public archive，README 写明"Void is now deprecated，不再接收贡献"；2025-01 起由 MIT 切换到 Apache-2.0。
 - **支持模型 / 供应商**：BYOK 直连：OpenAI / Anthropic / Google / Groq / Ollama / LM Studio / 任意 OpenAI 兼容端点，消息直接发给模型方，不经 Void 后端留存数据。
 - **核心架构与运行机制**：在 codebase 上跑 AI agent、checkpoint、可视化变更。
 - **上下文与代码检索**：本地直连模式（细节未核实）。
@@ -583,6 +721,56 @@ flowchart TD
   1. 零中间商直连 Provider + 本地模型的隐私优先范式（在 Cursor/Windsurf 都走自家后端的年代很差异化）；
   2. 作为如何 fork VS Code 做 AI IDE 的代码级参考（官方 README 自述仍是 fork VS Code 的最佳参照之一，含 VOID_CODEBASE_GUIDE）。
 - **官方链接**：GitHub: https://github.com/voideditor/void （已归档弃用） ｜ 官方文档: https://voideditor.com
+
+#### 2.11 Google Antigravity
+
+- **一句话看懂**：Google 的 agent-first 开发平台：桌面端管调度与审查，CLI 管执行，云端沙箱托管长跑任务。2025-11 发布，2026-05-19 Google I/O 升到 2.0。
+- **形态与平台**：独立桌面 App + `agy` CLI（Go）+ SDK + Managed Agents 云沙箱；CLI 与 GUI 共享认证、技能与配置。
+- **是否开源 / 许可证**：闭源商业。
+- **支持模型 / 供应商**：未核实。
+- **核心架构与运行机制**：任务在 GUI 里编排、在 CLI 与云沙箱里执行；支持动态子代理与 Scheduled Tasks（按时间自己开工）。原生读 `AGENTS.md` 与 `SKILL.md`。
+- **上下文与代码检索**：以 `AGENTS.md` 作为仓库级指令来源；`SKILL.md` 作为流程包来源。
+- **编辑与变更策略**：未核实。
+- **工具与扩展**：SDK、SKILL.md 技能包、Managed Agents 云沙箱。
+- **权限 · 审批 · 沙箱**：长任务可下沉到云沙箱执行；细档未核实。
+- **值得借鉴的具体机制**：
+  1. 「CLI 是执行器、GUI 是调度与审查台」的双形态分工，正是 mod-agent 从 CLI 扩到控制台时（[roadmap.md](./roadmap.md) 后段阶段）该抄的架构：一份内核两个入口，而不是两个产品。
+  2. CLI 与 GUI 共享认证、技能与配置：配置归属必须在同一份文件里，否则两端行为分叉，这条直接约束 [data-and-events.md](./data-and-events.md) 的配置表设计。
+  3. 原生支持 AGENTS.md + SKILL.md 两个开放约定，佐证 [data-and-events.md §4.1](./data-and-events.md#_4-1-为什么直接采用-agents-md-开放标准实证) 不自造格式的判断。
+- **官方链接**：官网: https://antigravity.google
+
+#### 2.12 Kiro（AWS）
+
+- **一句话看懂**：AWS 的 spec-driven（规约驱动）agent 产品：先把需求、设计、任务写成三份 Markdown，agent 按这三份干活。前身链路是 CodeWhisperer → Amazon Q Developer CLI → 2025-11-17 更名 Kiro CLI，IDE 于 2026-05 GA。
+- **形态与平台**：独立 AI IDE + CLI；积分制计费。
+- **是否开源 / 许可证**：闭源商业。许可注意点：CLI 前身曾按 Apache-2.0 开源，转成 Kiro 后改为 AWS IP License，属许可收紧。
+- **支持模型 / 供应商**：未核实。
+- **核心架构与运行机制**：规约三件套 `requirements.md` / `design.md` / `tasks.md`；`.kiro` 目录下的 `steering/` 放项目级规范；hooks 在编辑、保存等事件上挂自动化；权限配置控制 agent 可动范围。
+- **上下文与代码检索**：steering 文档 + 规约文件即主要上下文来源。
+- **编辑与变更策略**：按 `tasks.md` 的任务清单逐项推进，勾选项就是进度账本（diff 落盘细节未核实）。
+- **工具与扩展**：hooks；MCP 支持情况未核实。
+- **权限 · 审批 · 沙箱**：有权限配置项，分档细节未核实。
+- **值得借鉴的具体机制**：
+  1. 规约驱动的最正统产品化：把 [agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项) 的「计划」拆成需求 / 设计 / 任务三份，验收标准从「改得像不像」变成「任务勾完没有」。
+  2. `steering/` 与本页 §4.18 的 AGENTS.md 是同一层的竞品：项目规范目录自成一家、不跨工具，这是 mod-agent 坚持用开放标准的理由（[data-and-events.md §4.1](./data-and-events.md#_4-1-为什么直接采用-agents-md-开放标准实证)）。
+  3. 「开源 CLI 换成专有许可」是许可证审计的活教材，与本页 §5.12 的 Amazon Q CLI 条目配成一对：依赖前除了看活跃度，还要看许可变更历史。
+- **官方链接**：官网: https://kiro.dev
+
+#### 2.13 JetBrains Junie（与 Fleet → Air）
+
+- **一句话看懂**：JetBrains 阵营的两个方向：Junie 是跨自家 IDE 的中立 coding agent（IDE 侧 + CLI），Fleet 已被砍掉、让位给新的 agentic 产品 Air。
+- **形态与平台**：IDE 内 agent + CLI（CLI 处 EAP 预览阶段）；Fleet 已于 2025-12-22 关停。
+- **是否开源 / 许可证**：闭源商业。
+- **支持模型 / 供应商**：多模型，具体清单未核实。
+- **核心架构与运行机制**：plan mode 先出方案再执行；CLI 可 headless 跑在 CI 里。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：未核实。
+- **工具与扩展**：未核实。
+- **权限 · 审批 · 沙箱**：未核实。
+- **值得借鉴的具体机制**：
+  1. 传统 IDE 阵营的 agent 化路径：不重做编辑器，把 agent 做成跨全家桶的一等公民。mod-agent 下的是反方向注：终端优先，编辑器经 ACP 外挂（见 §4.24、[architecture.md](./architecture.md) ADR-7）。
+  2. 大厂也会砍线：Fleet 从主推产品到 2025-12-22 关停。产品形态不是资产，可迁移的机制才是。这条与本页 §5.12 的结论一致。
+- **官方链接**：官网: https://www.jetbrains.com/
 
 ---
 
@@ -679,7 +867,7 @@ flowchart TD
 
 - **一句话看懂**：输入需求，它在你浏览器标签页里直接跑一个真 Node.js 环境，把全栈应用写出来、跑起来、预览、再部署，全程不需要本地环境。
 - **形态与平台**：bolt.new 是 StackBlitz 托管的闭源 SaaS；bolt.diy 是官方开源版，可自托管、自带模型 Key。运行时是 WebContainer：用 WebAssembly 在浏览器里 boot 一个真实的 npm + Vite + dev server。
-- **是否开源 / 许可证**：bolt.diy 源码 MIT（仓库现名 `stackblitz-labs/bolt.diy`，早期也挂在 stackblitz 名下）。注意：源码免费，但 WebContainer API 用于商业/营利生产环境需 StackBlitz 商业授权（原型/POC 免费）。star 量级：第三方统计约 1.94 万 star / 1.04 万 fork（2026-06，toolchew，非官方实时数字，仅作量级参考）。
+- **是否开源 / 许可证**：bolt.diy 源码 MIT（仓库现名 `stackblitz-labs/bolt.diy`，早期也挂在 stackblitz 名下）。注意：源码免费，但 WebContainer API 用于商业/营利生产环境需 StackBlitz 商业授权（原型/POC 免费）。体量：近两万（第三方统计，2026-06，仅作量级参考）。
 - **支持模型 / 供应商**：开源版自带 19+ 家 LLM 供应商（OpenAI、Anthropic、DeepSeek、Ollama 本地、Gemini、Mistral 等），自带 Key 任选。
 - **核心架构与运行机制**：agent 在浏览器内读、写、运行代码；WebContainer 提供隔离容器、文件系统直改、终端命令执行、实时预览。
 - **上下文与代码检索**：浏览器内项目文件系统；可上传/导入既有代码。
@@ -748,6 +936,23 @@ flowchart TD
   3. Custom Droids 用 Markdown+YAML 定义子代理，扩展门槛低。
 - **官方链接**：GitHub: 核心无开源仓库；开源 SDK: https://github.com/Factory-AI/droid-sdk-typescript ｜ 官方文档: https://docs.factory.com/
 
+#### 3.8 Jules（Google）
+
+- **一句话看懂**：Google 的云端异步 coding agent，一句话概括就是 issue 进、PR 出：把一个 GitHub issue 交给它，它在云端 VM 里读仓库、改代码、跑测试，回来给你一个待审的 PR。
+- **形态与平台**：云端 SaaS（labs.google/jules），2026-05-19 GA；2025-10 提供 CLI 与 API，2026-01 发布官方 MCP server。
+- **是否开源 / 许可证**：闭源服务。
+- **支持模型 / 供应商**：Gemini 系列为主，具体档位未核实。
+- **核心架构与运行机制**：任务级异步执行：一个任务对应一台云端 VM，规划—执行—测试—出 PR 一条链跑完再交人；有 per-task token 预算，免费档约 15k token/任务。
+- **上下文与代码检索**：读授权范围内的 GitHub 仓库；官方 MCP server 把任务创建与查询暴露给外部 agent。
+- **编辑与变更策略**：产物是 PR，不直接改动源仓库；改动过程在云端 VM 内完成。
+- **工具与扩展**：官方 MCP server（13 个工具）；CLI 与 API。
+- **权限 · 审批 · 沙箱**：云端隔离 VM；授权粒度未核实。
+- **值得借鉴的具体机制**：
+  1. per-task token 预算把「一个任务最多花多少」做成硬上限，与 [agent-loop.md §6](./agent-loop.md#_6-预算与循环防护) 的预算与循环防护同形，mod-agent 的任务预算字段可以直接借这个口径（[model-gateway.md §5.3](./model-gateway.md#_5-3-命中率监控) 的用量统计是它的数据来源）。
+  2. 官方 MCP server 让「工单驱动、产物是 PR」这类 agent 能被别的 agent 编排：与本页 §3.2 Copilot 云端代理同属一类，也是 mod-agent headless 输出（[agent-loop.md §6.3](./agent-loop.md#_6-3-headless-事件流输出-claude-code-gemini-cli-实证)）的对外投影方向。
+  3. 免费额度按「每任务 token 数」而非「每月请求数」计价，是定价与成本护栏的现成样本。
+- **官方链接**：产品: https://labs.google/jules
+
 ---
 
 ## 4. 开源平台、框架、学术项目与开放协议
@@ -810,7 +1015,7 @@ flowchart TD
 
 - **一句话看懂**：给它一个 GitHub issue，它拿一套精心设计的命令行工具去读代码、定位、改文件、跑测试，尝试把 bug 修掉。
 - **形态与平台**：Python 库 + CLI，由单个 YAML 配置驱动；`pip install swe-agent` 或源码运行；官方文档 swe-agent.com。
-- **是否开源 / 许可证**：是，MIT（仓库 LICENSE 核实）。star 约 20.5k（2026-08 抓取时）。
+- **是否开源 / 许可证**：是，MIT（仓库 LICENSE 核实）。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：模型无关，"your LM of choice"，示例用 GPT-4o、Claude Sonnet 等。
 - **核心架构与运行机制**：核心概念是 **ACI（Agent-Computer Interface，agent-计算机接口）**：不直接把整个文件塞给模型，而是给模型一套受限、信息密度高的终端命令（如分页浏览文件、搜索、编辑），让模型像人一样在命令行里导航。论文 arxiv 2405.15793（NeurIPS 2024）。
 - **上下文与代码检索**：靠 ACI 命令做快速导航/搜索（grep、文件树），核心是更快的导航、更有信息量的搜索界面。
@@ -824,9 +1029,9 @@ flowchart TD
 
 - **一句话看懂**：最有名的开源通用 AI 软件工程师平台：让 agent 像人类开发者一样改代码、跑命令、开浏览器、调 API。
 - **形态与平台**：开源平台，Python SDK + Agent Server（REST）+ Web/桌面前端；当前主仓库形态是自托管控制中心 Agent Canvas，`npm install -g @openhands/agent-canvas` 或 Docker 跑。
-- **是否开源 / 许可证**：是，MIT。star 约 90.8k。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**："Bring your own model"，多 provider。
-- **核心架构与运行机制**：**EventStream（事件流）架构**，把 agent 的所有动作记录成可追溯事件；配合 Docker runtime 在沙箱里执行。论文 arxiv 2407.16741。多仓库拆分：`OpenHands/software-agent-sdk`（Python SDK/Agent Server/事件/工作区）、`OpenHands/typescript-client`、`OpenHands/automation`。
+- **核心架构与运行机制**：**EventStream（事件流）架构**，把 agent 的所有动作记录成可追溯事件；配合 Docker runtime 在沙箱里执行。论文 arxiv 2407.16741。多仓库拆分：`OpenHands/software-agent-sdk`（Python SDK/Agent Server/事件/工作区）、`OpenHands/typescript-client`、`OpenHands/automation`。agent 核心已重构进独立 SDK `OpenHands/software-agent-sdk`，其中一手可见的工具名是 `terminal`、`file_editor`、`task_tracker`、`apply_patch`、`browser_use`、`delegate`、`task`、`planning_file_editor`、`ask_oracle`、`glob`、`grep`、`workflow`，condenser 组件在 `openhands-sdk` 的 `context/` 目录下；GitHub 301 重定向已由 `All-Hands-AI/OpenHands` 迁至 `OpenHands/OpenHands`。
 - **上下文与代码检索**：agent 在工作区里自主浏览/读取；事件流即其工作记忆。
 - **编辑与变更策略**：直接在挂载的工作区文件上改；可每个会话一个 Docker 容器隔离；支持 ACP（Agent-Client Protocol）接入 Claude Code/Codex/Gemini CLI 等第三方 agent。
 - **工具与扩展**：支持 MCP；可编排 Slack/GitHub/Linear 自动化。
@@ -838,21 +1043,21 @@ flowchart TD
 
 - **一句话看懂**：与主流做法相反，不用 agent 循环，用三个确定性流水线阶段就把 SWE-bench 上的 bug 修了，便宜且可复现。
 - **形态与平台**：Python 研究代码库，conda 环境 + `pip install -r requirements.txt`；配 `OPENAI_API_KEY` 后在 SWE-bench 上跑。
-- **是否开源 / 许可证**：是，MIT。star 约 2.1k。
+- **是否开源 / 许可证**：是，MIT。体量：数千（2026-10 核实）。
 - **支持模型 / 供应商**：OpenAI API 为主；News 提到接 Claude 3.5 Sonnet 提升解率。
 - **核心架构与运行机制**：三阶段：① **Localization 定位**：分层先定位到文件、再到类/函数、再到细粒度编辑点；② **Repair 修复**：对每个编辑点采样多个 diff 格式候选补丁；③ **Patch Validation 补丁验证**：挑回归测试 + 生成复现测试，按测试结果对候选补丁重排选最优。论文 "Demystifying LLM-based Software Engineering Agents" arxiv 2407.01489。
 - **上下文与代码检索**：靠 `get_repo_structure` 预处理仓库结构，分层定位而非开放式探索。
 - **编辑与变更策略**：采样 diff 补丁，用 SWE-bench-docker 跑测试重排。
 - **工具与扩展**：无 agent 工具循环；偏离线批处理。
 - **权限 · 审批 · 沙箱**：测试在 SWE-bench-docker 中跑；无人类审批。
-- **值得借鉴的具体机制**：① 去 agent 化思路：把定位/修复/验证解耦成可批处理流水线；② 多候选补丁 + 测试重排（re-ranking）；③ 极低成本（论文称平均每 issue ~$0.34）。
+- **值得借鉴的具体机制**：① 去 agent 化思路：把定位/修复/验证解耦成可批处理流水线；② 多候选补丁 + 测试重排（re-ranking）；③ 极低成本：论文摘要自报 SWE-bench Lite 32.00%、96 个正确修复、平均 \$0.70/issue，并据此称优于当时全部同类开源软件 agent。
 - **官方链接**：GitHub: https://github.com/OpenAutoCoder/Agentless ｜ 论文: https://arxiv.org/abs/2407.01489
 
 #### 4.4 Moatless Tools
 
 - **一句话看懂**：一个人 hobby 实验出来的 SWE agent，核心信念是"与其让 agent 凭空推理，不如造好工具把对的上下文塞进 prompt"。
 - **形态与平台**：Python 包（`pip install moatless`，或源码 `uv sync`），配 docker-compose 起 UI；可跑 SWE-bench 评估。
-- **是否开源 / 许可证**：是，MIT。star 约 642（体量较小）。
+- **是否开源 / 许可证**：是，MIT。体量：数百（2026-10 核实）。
 - **支持模型 / 供应商**：经 LiteLLM 接任意 provider（OpenAI/Anthropic/DeepSeek/Gemini 等），并需 Voyage AI embedding 做预嵌向量库。
 - **核心架构与运行机制**：search loop + 工具：一组动作（action）让 agent 在代码库里检索/编辑；提供多种 flow（function-calling 式、ReAct 式）。README 明确：论文 "SWE-Search（MCTS + 迭代精化）" 的实现见另一个仓库 `moatless-tree-search`。
 - **上下文与代码检索**：tree-sitter 做代码结构检索 + 预嵌向量存储，把相关上下文提供给模型。
@@ -866,7 +1071,7 @@ flowchart TD
 
 - **一句话看懂**：不按字符串搜文件，而是直接在代码的 AST（抽象语法树）里按类/方法搜，定位更准、更省。
 - **形态与平台**：Python，推荐 Docker（`docker build`）或 conda 本地；三种运行模式：GitHub issue 模式 / 本地 issue 模式 / SWE-bench 模式。
-- **是否开源 / 许可证**：是，但许可证需特别注意：Sonar Source-Available License v1.0（Sonar 源码可用许可，仅限非竞争性用途），不是标准 MIT/Apache。star 约 3.1k。
+- **是否开源 / 许可证**：是，但许可证需特别注意：Sonar Source-Available License v1.0（Sonar 源码可用许可，仅限非竞争性用途），不是标准 MIT/Apache。体量：数千（2026-10 核实）。
 - **支持模型 / 供应商**：OpenAI、Claude、Gemini、Groq、AWS Bedrock、Llama、LiteLLM 任意模型。
 - **核心架构与运行机制**：两阶段：① **Context retrieval 上下文检索**：给 LLM 一套程序结构感知的代码搜索 API（在 AST 上找方法/类，而非字符串匹配）；② **Patch generation 补丁生成**：基于检索到的上下文写补丁。论文 ISSTA 2024，arxiv 2404.05427。
 - **上下文与代码检索**：AST 程序结构感知检索；若有测试套件，可做**统计故障定位（statistical fault localization）**进一步提效。
@@ -880,7 +1085,7 @@ flowchart TD
 
 - **一句话看懂**：一句话需求进去，一个 AI 软件公司出来：产品经理、架构师、项目经理、工程师按 SOP 接力，产出用户故事/需求/数据结构/API/文档/代码。
 - **形态与平台**：Python 库 + CLI（`pip install metagpt`，需 Node/pnpm）；`metagpt "Create a 2048 game"` 直接产出仓库；也可作库 `generate_repo()`。
-- **是否开源 / 许可证**：是，MIT。star 约 70.8k。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：`api_type` 可配 openai/azure/ollama/groq 等。
 - **核心架构与运行机制**：`Code = SOP(Team)`：把软件公司的标准作业流程(SOP) 物化到一组 LLM 角色上；角色间按流程传递结构化产物（Message/产物）。论文 ICLR 2024。
 - **上下文与代码检索**：以结构化产物（文档/接口定义）作为角色间共享记忆，而非自由对话。
@@ -894,7 +1099,7 @@ flowchart TD
 
 - **一句话看懂**：微软研究院开创的多 agent 对话框架，让多个 agent 像同事一样对话/分工执行任务，现已进入维护模式。
 - **形态与平台**：Python（及 .NET）框架，`pip install autogen-agentchat autogen-ext[openai]`；另有 AutoGen Studio 无代码 GUI。
-- **是否开源 / 许可证**：代码 MIT（文档 CC-BY-4.0）。star 约 61.4k。
+- **是否开源 / 许可证**：代码 MIT（文档 CC-BY-4.0）。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：多 provider（OpenAI/AzureOpenAI 等扩展）。
 - **核心架构与运行机制**：分层设计：Core API（消息传递、事件驱动 agent、本地/分布式运行时）、AgentChat API（两 agent 对话/组群等高层模式）、Extensions API（模型客户端、代码执行等）。
 - **上下文与代码检索**：以对话消息流为核心；不专门做代码库检索。
@@ -909,7 +1114,7 @@ flowchart TD
 
 - **一句话看懂**：用角色 + 任务 + 团队(Crew) 快速搭一个自主协作的多 agent 团队，再用流程(Flow) 做精确的事件驱动控制。
 - **形态与平台**：Python 框架 + CLI（`uv tool install crewai`）；`crewai create crew` 生成 JSON-first 项目（agents/\*.jsonc + crew.jsonc），`crewai run` 跑。
-- **是否开源 / 许可证**：是，MIT。star 约 59.6k。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：默认 OpenAI，可配 Ollama 等本地模型。
 - **核心架构与运行机制**：两套互补原语：**Crews**（角色/目标/backstory/工具/任务的自主团队，支持 sequential 与 hierarchical 层级流程，自动派 manager）+ **Flows**（`@start/@listen/@router` 装饰器的事件驱动工作流，带状态、分支、路由）。
 - **上下文与代码检索**：任务间可用 `context` 引用前序任务输出；自带 memory/knowledge 抽象。
@@ -923,7 +1128,7 @@ flowchart TD
 
 - **一句话看懂**：把 agent 当成一张有状态的图/状态机来编排：节点是步骤，边是转移，天然支持持久化、人审、长任务恢复。
 - **形态与平台**：Python（及 LangGraph.js）低层编排库，`pip install langgraph`；可脱离 LangChain 单独用。
-- **是否开源 / 许可证**：是，MIT。star 约 43.2k。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：经 LangChain 集成接任意 provider。
 - **核心架构与运行机制**：图 + 有状态（stateful）执行，灵感来自 Pregel/Apache Beam、接口借鉴 NetworkX。主打 Durable execution（持久化执行，失败后从断点续跑）、checkpointer、短期工作记忆 + 长期持久记忆。
 - **上下文与代码检索**：以共享 State 为核心；不专门做代码库检索。
@@ -937,7 +1142,7 @@ flowchart TD
 
 - **一句话看懂**：OpenAI 出的轻量多 agent SDK，概念干净：agent、工具、handoff、guardrail、tracing、session，而且不绑死 OpenAI 模型。
 - **形态与平台**：Python 库（`pip install openai-agents`），另有官方 JS/TS 版（openai/openai-agents-js）。
-- **是否开源 / 许可证**：是，MIT。Python 版 star 约 30k。
+- **是否开源 / 许可证**：是，MIT。Python 版体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：provider-agnostic：支持 OpenAI Responses/Chat Completions，并经 LiteLLM/any-llm 接 100+ 模型。
 - **核心架构与运行机制**：核心概念：Agent（指令+工具+guardrail+handoff）、Handoffs（把任务交给另一个 agent）、Agents-as-tools、Guardrails（输入/输出安全校验）、Sessions（跨运行自动管理对话历史）、Tracing（内建追踪调试）。
 - **上下文与代码检索**：Session 自动管理历史；不专门做代码库检索。
@@ -951,7 +1156,7 @@ flowchart TD
 
 - **一句话看懂**：谷歌的 code-first agent 工具包：图执行引擎编排流程，Task API 让 agent 之间结构化地派发任务，主打能落地部署。
 - **形态与平台**：Python（`pip install google-adk`），并提供 Java/Kotlin/Go/TypeScript 版；CLI `adk run` / `adk web` / `adk eval` / `adk deploy`。
-- **是否开源 / 许可证**：是，Apache-2.0。star 约 21.8k。
+- **是否开源 / 许可证**：是，Apache-2.0。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：为 Gemini 优化，但模型无关、部署无关。
 - **核心架构与运行机制**：**Workflow Runtime（图执行引擎）**：路由、fan-out/fan-in、循环、重试、状态管理、动态节点、嵌套工作流；**Task API**：结构化的 agent-to-agent 委托（多轮任务模式、单轮受控输出）。
 - **上下文与代码检索**：工作流状态管理；不专门做代码库检索。
@@ -965,7 +1170,7 @@ flowchart TD
 
 - **一句话看懂**：Pydantic 团队出的类型安全 agent SDK：从工具入参到输出结构全程带类型，换模型只改一个字符串，还自带一整套 Harness 能力。
 - **形态与平台**：Python 库（`uv add pydantic-ai`）；同一 agent 定义可跑成 CLI / Web 聊天 / 实时语音 / GitHub Action / ACP 编辑器 agent。
-- **是否开源 / 许可证**：是，MIT。star 约 20.6k。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：几乎所有 provider（OpenAI/Anthropic/Google/Bedrock/Azure/Groq/Mistral/xAI/Ollama…），字符串切换；另有 Pydantic AI Gateway 统一密钥。
 - **核心架构与运行机制**：端到端类型安全（结构化输出、类型化依赖注入、类型化工具）；Capability 作为可复用组合单元（把工具/指令/hooks/模型设置打包）；Pydantic Graph 做类型化图控制流；Durable execution 接 Temporal/DBOS/Prefect 等 9 种引擎。
 - **上下文与代码检索**：Harness 提供 memory、context management、planning、RepoContext。
@@ -979,7 +1184,7 @@ flowchart TD
 
 - **一句话看懂**：TypeScript 生态里最完整的 agent 框架：agent、图工作流、HITL、MCP、可观测/评测全在一套现代 TS 栈里。
 - **形态与平台**：TypeScript 框架（`npm create mastra@latest`），可嵌 React/Next.js/Node 或独立部署；自带 Mastra Studio 调试界面。
-- **是否开源 / 许可证**：双许可：核心框架 Apache-2.0，但 `ee/` 目录（如某些 auth）为 Mastra Enterprise License（生产需企业许可，开发测试可用）。star 约 28.8k。
+- **是否开源 / 许可证**：双许可：核心框架 Apache-2.0，但 `ee/` 目录（如某些 auth）为 Mastra Enterprise License（生产需企业许可，开发测试可用）。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：统一路由接 40+ provider（OpenAI/Anthropic/Gemini/xAI 等）。
 - **核心架构与运行机制**：Agents（自主推理+工具迭代）+ Workflows（图式引擎，`.then()/.branch()/.parallel()` 控制流）。
 - **上下文与代码检索**：对话历史、retrieve（API/DB/文件）、Observational Memory。
@@ -993,7 +1198,7 @@ flowchart TD
 
 - **一句话看懂**：最早一波一句话需求→整个代码库的 codegen 实验平台，Lovable 的前身；仓库现已归档(archived)。
 - **形态与平台**：Python CLI（`pip install gpt-engineer`）；在空文件夹放一个无后缀 `prompt` 文件，`gpte <dir>` 生成代码；`-i` 增量改进已有项目。
-- **是否开源 / 许可证**：是，MIT，但 GitHub 标记为 Public archive（已归档、停止维护）。star 约 55k。当前有效 slug 为 `AntonOsika/gpt-engineer`（`gpt-engineer-org/gpt-engineer` 跳转至此）。
+- **是否开源 / 许可证**：是，MIT，但 GitHub 标记为 Public archive（已归档、停止维护）。体量：数万（2026-10 核实）。当前有效 slug 为 `AntonOsika/gpt-engineer`（`gpt-engineer-org/gpt-engineer` 跳转至此）。
 - **支持模型 / 供应商**：OpenAI/Azure OpenAI/Anthropic，可配本地开源模型（如 WizardCoder）。
 - **核心架构与运行机制**：preprompts 模板塑造 agent 身份；从 prompt 直接"坐看 AI 写并执行代码"。
 - **上下文与代码检索**：早期项目，无 AST/索引概念。
@@ -1007,7 +1212,7 @@ flowchart TD
 
 - **一句话看懂**：定位是你自己的初级开发：要么给个产品 spec 让它把整库脚手架出来，要么作为几百行的库嵌进你自己的 app。
 - **形态与平台**：Python（`pip install smol_dev` 用库模式；或 `python main.py "<需求>"`）；核心就几个函数。
-- **是否开源 / 许可证**：是，MIT。star 约 12.2k。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：基于 OpenAI Function Calling。
 - **核心架构与运行机制**：三步：`plan(prompt)` 返回编码计划字符串 → `specify_file_paths(prompt, plan)` 靠 Function Calling 保证 JSON 列出要写的文件 → `generate_code_sync(...)` 逐文件生成源码。强调 human-in-the-loop：人跑代码、把报错当 issue 贴回 prompt 迭代。
 - **上下文与代码检索**：无（spec→code 的直通生成）。
@@ -1025,7 +1230,7 @@ flowchart TD
 
 - **一句话看懂**：给 LLM 接外部工具和数据的 USB-C 接口标准：一次接入，到处能用。
 - **形态与平台**：开放协议规范（不是某个 app）；仓库含规范 + TypeScript 定义的 schema（也出 JSON Schema）+ Mintlify 文档。当前仓库 slug 为 `modelcontextprotocol/modelcontextprotocol`（由 modelcontextprotocol/specification 迁移）。
-- **是否开源 / 许可证**：是，MIT。规范仓库 star 约 9.4k。由 David Soria Parra 与 Justin Spahr-Summers 创建（Anthropic 发起）。
+- **是否开源 / 许可证**：是，MIT。规范仓库体量：数千（2026-10 核实）。由 David Soria Parra 与 Justin Spahr-Summers 创建（Anthropic 发起）。
 - **支持模型 / 供应商**：与模型无关：跑在 LLM 客户端(host) ↔ 工具/数据(server) 之间。
 - **核心架构与运行机制**：定义 Client/Host ↔ Server 通信，Server 向外暴露三类原语：Tools（可调用工具）、Resources（可读资源）、Prompts（提示模板）。解决"每个 agent 框架都要为每个工具写一遍集成"的碎片化问题。
 - **上下文与代码检索**：不适用（协议层）：它定义如何暴露，不定义如何检索。
@@ -1049,7 +1254,7 @@ flowchart TD
 
 - **一句话看懂**：让不同公司、不同框架、跑在不同服务器上的 agent 之间，像同事而不是工具那样互相发现、派发任务、协作长任务。
 - **形态与平台**：开放协议规范（GitHub a2aproject/A2A），配多语言 SDK（Python/Go/JS/Java/.NET/Rust）。由 Google 发起，现归属 Linux 基金会。
-- **是否开源 / 许可证**：是，Apache-2.0。star 约 26.1k。
+- **是否开源 / 许可证**：是，Apache-2.0。体量：数万（2026-10 核实）。
 - **支持模型 / 供应商**：与模型无关。
 - **核心架构与运行机制**：JSON-RPC 2.0 over HTTP(S)；**Agent Card（代理名片）** 让彼此发现能力与连接方式；围绕 Task（任务）做同步请求/响应、SSE 流式、异步 push 通知；支持文本/表单/媒体/文件/结构化 JSON。关键原则是 **Opacity（不透明）**：协作时不必暴露内部状态、记忆、工具实现。
 - **上下文与代码检索**：不适用（协议层）。
@@ -1090,6 +1295,104 @@ flowchart TD
 - **规范没定义的部分（移植时会出问题的地方）**：技能目录放哪、重名怎么解、遇到没见过的 frontmatter 字段怎么办。通用安装路径是项目根的 `.agents/skills/`，Claude Code 另扫 `.claude/skills/`。
 - **官方链接**：规范站: https://skill.md ｜ 规范详解: https://www.skillsboard.sh/agent-skills
 
+#### 4.20 Claude Agent SDK 与 OpenAI Codex SDK（CLI 转引擎）
+
+- **一句话看懂**：两家头部厂商把自己的 CLI 变成可嵌入引擎：SDK 不重写一套 agent 逻辑，只是把自家 CLI 包成进程外接口，同一套 tools / agent loop / context management。
+- **形态与平台**：Claude Agent SDK（npm 包 `@anthropic-ai/claude-agent-sdk`，TypeScript，要求 Node 18+）；OpenAI Codex SDK（npm 包 `@openai/codex-sdk`）。两者都是随 CLI 一起演进的官方包。
+- **是否开源 / 许可证**：Claude Agent SDK 走 Anthropic 商业条款，仓库未标 SPDX，即非 OSI 开源；Codex SDK 开源，Apache-2.0，2026-07 转稳定版。体量：未核实。
+- **支持模型 / 供应商**：各自绑自家（Claude / OpenAI），模型选择由宿主 CLI 的配置决定。
+- **核心架构与运行机制**：Claude 侧官方明写 SDK "runs the Claude Code binary"：你的进程把它当子进程起起来，拿回一条消息流；终止与预算用 result subtype 表达（`error_max_turns`、`error_max_budget_usd`），`session_id` 挂在所有 result 消息上、可 resume。OpenAI 侧同构：SDK 进程 spawn CLI、读 JSONL 事件流，支持 `outputSchema`（结构化输出）、`resumeThread`、沙箱配置透传。
+- **上下文与代码检索**：沿用 CLI 的 context management，SDK 层不重实现一遍。
+- **编辑与变更策略**：由宿主 CLI 决定，SDK 只透传沙箱与审批配置。
+- **工具与扩展**：与 CLI 共享同一套工具注册；`outputSchema` 是 SDK 侧新增的结构化出口。
+- **权限 · 审批 · 沙箱**：SDK 把 CLI 的沙箱与审批参数透传出来，判定仍在 CLI 内做，没有在 SDK 层再开一个口子。
+- **值得借鉴的具体机制**：① 「一份内核、两个出口」是 mod-agent「CLI + SDK 双出口」的现成架构范本，落点在 ADR-7 与 [architecture.md §5](./architecture.md#_5-建议代码仓库结构)：SDK 不写第二套逻辑，只做事件流的类型化包装；② 事件流是共享内核，`session_id` + result subtype 这套终止语义与 [data-and-events.md §1](./data-and-events.md#_1-eventstream-事件模型)、ADR-2 对得上，SDK 应暴露同一份事件而不是另造一套回调；③ 预算烧穿是一等终止原因（`error_max_budget_usd`）而不是调用方自己数 token，见 [agent-loop.md §6](./agent-loop.md#_6-预算与循环防护)。
+- **官方链接**：文档: https://code.claude.com/docs/en/agent-sdk/overview ｜ GitHub: https://github.com/openai/codex
+
+#### 4.21 deepagents（langchain-ai/deepagents）
+
+- **一句话看懂**：LangChain 生态里「把成熟 coding agent 那套预置好」的开源 harness：规划、虚拟文件系统、子 agent、技能四件一次给齐，底层跑在 LangGraph 上。
+- **形态与平台**：Python 库（另有 JS 版 `langchain-ai/deepagentsjs`），入口 `create_deep_agent(...)`。分层：LangGraph（运行时）→ LangChain `create_agent`（最小 harness）→ Deep Agents（预置 filesystem / subagents / context / skills 的 opinionated harness）。
+- **是否开源 / 许可证**：开源，MIT。体量：未核实。
+- **支持模型 / 供应商**：经 LangChain 集成接任意 provider。
+- **核心架构与运行机制**：规划靠 `write_todos` 工具，条目状态是 `'pending' | 'in_progress' | 'completed'`，持久化进 agent state，由 `TodoListMiddleware` 提供，v0.7 起改为 opt-in。
+- **上下文与代码检索**：一套虚拟文件系统，后端可插拔：StateBackend / FilesystemBackend / StoreBackend / 组合路由 / Sandbox 后端；内置 `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` / `execute` / `delete`。
+- **编辑与变更策略**：`edit_file` 走文件系统抽象层，落哪个后端由路由决定，再由声明式 `permissions` 卡住能碰哪些路径。
+- **工具与扩展**：子 agent 用 `task` 工具派生：`mode:"isolated"` 新建上下文，`mode:"fork"` 继承父对话；默认无状态，只回一份压缩报告。
+- **权限 · 审批 · 沙箱**：`permissions` 按 operations / paths / mode 三元组声明，first-match-wins 判定；Sandbox 后端可把执行搬到隔离环境。
+- **值得借鉴的具体机制**：① planning + 虚拟文件系统 + 子 agent 三件套是这套设计的全部主张，mod-agent 可拿它当开源参照逐条对齐 [agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)、[context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)、[verification-and-multiagent.md §5.5](./verification-and-multiagent.md#_5-5-子-agent-的实现模式-一个-agent-类-配置不同)；② first-match-wins 说明权限的判定序比规则数量更重要，对应 [security.md §4.1](./security.md#_4-1-配置优先级与权限规则合并-claude-code-settings-实证-出处-https-code-claude-com-docs-en-settings) 的规则合并顺序与 ADR-8；③ 子 agent 默认无状态、只回压缩报告，正是 ADR-1 与 [verification-and-multiagent.md §5.4](./verification-and-multiagent.md#_5-4-交接与隔离) 的约定；④ 把 todo 状态做成 agent state 的持久字段而非 prompt 里的清单，与 [data-and-events.md §2](./data-and-events.md#_2-持久化表-sqlite) 的 TaskState 同构。
+- **官方链接**：GitHub: https://github.com/langchain-ai/deepagents
+
+#### 4.22 smolagents（huggingface/smolagents）
+
+- **一句话看懂**：走另一条极端：让模型把动作写成 Python 代码片段，而不是逐个 JSON 工具调用（官方称 CodeAgent），实现约 1,000 行、任务步数少约 30%、在难基准上表现更高。
+- **形态与平台**：Python 库，Hugging Face 出品。
+- **是否开源 / 许可证**：开源，Apache-2.0。体量：未核实。
+- **支持模型 / 供应商**：未核实（HF 生态为主）。
+- **核心架构与运行机制**：CodeAgent：模型输出一段可执行 Python，一次调用里能连做几步（写循环、做分支、把中间结果当变量传给下一步）；不想要这条路时可以回退到 `ToolCallingAgent`（常规 JSON 工具调用）。
+- **上下文与代码检索**：未核实。
+- **编辑与变更策略**：未核实。
+- **工具与扩展**：工具即普通 Python 函数，模型在代码里直接组合调用。
+- **权限 · 审批 · 沙箱**：官方自认局限：`LocalPythonExecutor` "not a security sandbox"、可被绕过，必须配远程隔离执行器，官方列出的是 E2B、Modal、Docker、Blaxel。
+- **值得借鉴的具体机制**：① 这是 ADR-3（结构化专用工具为主、通用 Shell 为辅）的对立假设，值得原样留档当判据：写代码换的是更少步数与更省 token，代价是把沙箱责任从几个工具放大到整个解释器；② 官方把「本地执行器不是安全边界」写进 README，是同行坦承边界的样本，与 [security.md §2](./security.md#_2-关键实证-为什么防护必须落框架层) 的结论同调：防护必须落在框架层；③ 与本页 §1.11 Pi 的 Codemode 是同一主张的两个实现，可以对着读。
+- **官方链接**：GitHub: https://github.com/huggingface/smolagents
+
+#### 4.23 mini-SWE-agent 与 Terminal-Bench / Harbor
+
+- **一句话看懂**：评测侧的「最小 harness」运动：agent 本体约 100 行 Python、只用 bash 一个工具、连模型的 tool-calling 接口都不碰，目的就是公平比模型而不是比脚手架。
+- **形态与平台**：mini-SWE-agent（`SWE-agent/mini-swe-agent`，Python）是 SWE-agent 团队当前重心；Terminal-Bench 生态现由 `laude-institute/harbor` 承载框架，原 `terminal-bench` 仓库重定向过去，官方参照 agent 是 Terminus 2。
+- **是否开源 / 许可证**：mini-SWE-agent 开源，MIT；Harbor 许可证未核实。体量：未核实。
+- **支持模型 / 供应商**：任意（可换模型正是它的目的）。
+- **核心架构与运行机制**：不走 tool-calling，把模型输出直接当命令行喂给 bash；提示与解析都极薄。官方 README 称在 SWE-bench Verified 上 >74%，已被第三方评测（含 vals.ai）当作统一 harness 使用。
+- **上下文与代码检索**：无（裸 bash + 文件系统）。
+- **编辑与变更策略**：模型自己写命令改文件，不做结构化补丁。
+- **工具与扩展**：一个工具（bash）。
+- **权限 · 审批 · 沙箱**：跑在容器化测试环境（SWE-bench 系）；无人类审批节点。
+- **值得借鉴的具体机制**：① 最小 harness 是评测前提：脚手架不同，同一个模型的分数能差出几十个点，mod-agent 的评测必须先固定自己的脚手架再比模型（[observability-evaluation.md](./observability-evaluation.md)）；② 与 §4.22 互为对照：smolagents 让模型写代码换更少步数，mini-SWE-agent 让模型裸写命令换可比性，两边都在削结构化工具的厚度，而 ADR-3 站在另一边，这条分歧线要在选型时说清。
+- **官方链接**：GitHub: https://github.com/SWE-agent/mini-swe-agent ｜ Harbor: https://github.com/laude-institute/harbor
+
+#### 4.24 ACP（Agent Client Protocol）
+
+- **一句话看懂**：编辑器与 coding agent 之间的标准化通信协议，思路对标 LSP：编辑器不必为每个 agent 写一遍集成，agent 也不必为每个编辑器改一遍适配。
+- **形态与平台**：开放协议规范，仓库 `agentclientprotocol/agent-client-protocol`（原在 zed-industries 名下），文档站 agentclientprotocol.com；本地走 stdio 的 JSON-RPC 2.0，远程 HTTP / WebSocket 仍在完善。
+- **是否开源 / 许可证**：开源，Apache-2.0。体量：未核实。
+- **支持模型 / 供应商**：与模型无关（协议层）。
+- **核心架构与运行机制**：协议原语：`initialize` / `authenticate`；会话生命周期 `session/new` / `session/load` / `session/cancel`；`session/prompt`（以 stop reason 收尾）；`session/update`（工具调用流、plan、消息三类更新）；`session/request_permission`（agent 反向征求批准）。另有 Agent Registry（`cdn.agentclientprotocol.com/registry/v1`）做 agent 目录与分发。
+- **上下文与代码检索**：不适用（协议层）。
+- **编辑与变更策略**：不适用（由实现方决定，协议只规定如何把改动与审批请求呈现给对方）。
+- **工具与扩展**：官方声明的客户端覆盖 Zed、VS Code（ACP Client 扩展）、JetBrains、Neovim、Emacs、Obsidian、Unity、Chrome ACP、Sublime Text、Visual Studio、Qt Creator 等；agent 侧 40+，含 Gemini CLI、Cline、OpenCode、OpenHands、Goose、Kimi CLI、Qwen Code、Mistral Vibe、Cursor、GitHub Copilot（preview）、Kiro CLI。
+- **权限 · 审批 · 沙箱**：`session/request_permission` 是协议内建的反向审批原语；协议本身不规定沙箱。
+- **值得借鉴的具体机制**：① 本页此前只在 §5.10 顺带提过 ACP、没有画像，这是协议层最大的缺位：MCP 管 agent→工具，ACP 管编辑器→agent，两条正交，不能混为一谈；② `session/request_permission` 与 `session/update` 恰好是 mod-agent 审批层与事件流的对外投影，按 [architecture.md](./architecture.md) 的决策 ACP 不进 MVP，但 [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略) 的审批请求结构与 [data-and-events.md §1](./data-and-events.md#_1-eventstream-事件模型) 的事件类型应提前对齐形状，将来省一层双向映射；③ Registry 这种「中心目录 + 静态 CDN 分发」的做法，可作技能与扩展分发（[tools-and-extensions.md §6](./tools-and-extensions.md#_6-skills-·-工程流程复用)）的参照。
+- **官方链接**：文档: https://agentclientprotocol.com ｜ GitHub: https://github.com/agentclientprotocol/agent-client-protocol
+
+#### 4.25 OTel GenAI 语义约定（open-telemetry/semantic-conventions-genai）
+
+- **一句话看懂**：OpenTelemetry 给 agent 与工具调用定的可观测性命名标准：span 叫什么、属性挂哪些、token 用量记在哪个字段，全行业统一，免得各家自己造一套。
+- **形态与平台**：开放规范仓库 `open-telemetry/semantic-conventions-genai`，以独立 SIG 仓库推进（与主 semantic-conventions 分开走）。
+- **是否开源 / 许可证**：开源，Apache-2.0。体量：未核实。
+- **支持模型 / 供应商**：与模型无关。
+- **核心架构与运行机制**：定义 `invoke_agent` / `execute_tool` 两类 span 与 `gen_ai.usage.*` 等属性，并含 MCP 相关约定；各家 SDK 按同一套名字打点，观测后端就能跨厂商对齐。
+- **上下文与代码检索**：不适用（观测规范）。
+- **编辑与变更策略**：不适用。
+- **工具与扩展**：不适用。
+- **权限 · 审批 · 沙箱**：不适用。
+- **值得借鉴的具体机制**：① 这是观测章唯一可能成为事实标准的开放规范：mod-agent 的 trace 字段命名应直接对齐 `invoke_agent` / `execute_tool` / `gen_ai.usage.*`（[observability-evaluation.md](./observability-evaluation.md)），否则要么长期维护一张自己跟标准的双向映射表，要么把私有字段名变成甩不掉的对外契约；② 与 ADR-2 一致：事件日志是唯一事实源，语义约定只是给它套一层通用命名，不引入第二套账本；③ 它连 MCP 都写了约定，说明 [tools-and-extensions.md §1.1](./tools-and-extensions.md#_1-1-mcp-连接生命周期-工具发现、路由与调用) 的 MCP 调用要一并纳入 trace 口径。
+- **官方链接**：GitHub: https://github.com/open-telemetry/semantic-conventions-genai
+
+#### 4.26 execpolicy 与 Spec Kit（策略与规约即代码）
+
+- **一句话看懂**：两条同主题的公开参考实现：execpolicy 把「哪些命令能跑、哪些要问、哪些绝对不行」写成可读可测的策略；Spec Kit 把「规约」本身做成一套跨 agent 的开发工具包。
+- **形态与平台**：execpolicy 在 `openai/codex` 仓库内的 `codex-rs/execpolicy`（Rust），作为库嵌进 harness；Spec Kit 是 `github/spec-kit`（Python），GitHub 官方出品，非常活跃。
+- **是否开源 / 许可证**：execpolicy 随 codex 仓库，Apache-2.0；Spec Kit 开源，MIT。体量：未核实。
+- **支持模型 / 供应商**：execpolicy 不涉及模型；Spec Kit 适配多家 coding agent。
+- **核心架构与运行机制**：execpolicy 用 Starlark 风格的 `prefix_rule` 表达 allow / prompt / forbidden 三态命令策略，命令按分段前缀匹配，**fail-closed**：没有任何规则命中就不放行；而且规则自带 `match` / `not_match` 测试用例，策略文件本身可执行测试，已见社区实现照此重做。Spec Kit 走 requirements → design → tasks 的规约流水线。
+- **上下文与代码检索**：不适用。
+- **编辑与变更策略**：Spec Kit 的产物是规约与任务清单，落码由被适配的 agent 完成。
+- **工具与扩展**：Spec Kit 适配多家 agent；execpolicy 是策略层组件。
+- **权限 · 审批 · 沙箱**：execpolicy 就是审批层的一个实现样本：三态 + fail-closed，策略与代码分离、可独立测试。
+- **值得借鉴的具体机制**：① 它是「高风险操作的显式审批不能只靠 prompt 约束」这条硬约束的公开参考实现，直接支撑 ADR-8 与 [security.md §4](./security.md#_4-命令执行层)：命令判定必须 fail-closed，未匹配即拒绝，而不是默认放行再补日志；② 规则自带 `match` / `not_match` 用例，把权限策略变成可测试对象，mod-agent 的策略层应按 ADR-8 单独跑一组策略用例，与 [architecture.md §5](./architecture.md#_5-建议代码仓库结构) 的契约测试并列；③ 「规约即接口」正在成为独立工具品类：Spec Kit 与本页 §2.12 Kiro 的规约三件套同源，mod-agent 的计划文件（[agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）是同一趋势里的最小实现。
+- **官方链接**：GitHub: https://github.com/openai/codex ｜ https://github.com/github/spec-kit
+
 ---
 
 ## 5. 对 mod-agent 的设计启示
@@ -1101,7 +1404,7 @@ flowchart TD
 | 机制（可直接借鉴）                                | 最典型的来源                                                                                   | 对应 mod-agent 文档 / ADR                                                                                                                                                                       |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 项目记忆文件（CLAUDE.md / GEMINI.md / AGENTS.md） | Claude Code、Gemini CLI、OpenCode、AGENTS.md 标准                                              | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)–[§2](./context-engineering.md#_2-仓库启动扫描-repoprofile)、[data-and-events.md §4](./data-and-events.md#_4-长期记忆) |
-| 三档自主程度旋钮                                  | Codex CLI（suggest/auto-edit/full-auto）、OpenCode（plan/build）、Copilot（Plan/Agent/Ask）    | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[architecture.md](./architecture.md) ADR-8、[security.md §4](./security.md#_4-命令执行层)                              |
+| 三档自主程度旋钮                                  | Codex CLI（sandbox_mode × approval_policy）、OpenCode（plan/build）、Copilot（Plan/Agent/Ask） | [tools-and-extensions.md §5](./tools-and-extensions.md#_5-人工审批策略)、[architecture.md](./architecture.md) ADR-8、[security.md §4](./security.md#_4-命令执行层)                              |
 | 每次改动落 Git，可回滚                            | Aider（每改自动 commit）、Cline/Roo/Kilo（checkpoint）、v0（自动分支永不碰 main）              | [code-editing.md §3](./code-editing.md#_3-工作区隔离与用户变更保护)、[data-and-events.md §2](./data-and-events.md#_2-持久化表-sqlite)                                                           |
 | 沙箱与网络默认关闭                                | Codex/Gemini CLI、Devin（VM+域名过滤）、Copilot 云端（Actions 默认不跑）                       | [security.md §3](./security.md#_3-沙箱基线)                                                                                                                                                     |
 | Repo Map + LSP 喂符号                             | Aider（repo map）、OpenCode/Crush/Qwen（LSP）、AutoCodeRover（AST）                            | [context-engineering.md §1](./context-engineering.md#_1-不要只做向量-rag)、[§3](./context-engineering.md#_3-索引结构与刷新)、ADR-4                                                              |
@@ -1117,7 +1420,7 @@ flowchart TD
 
 ### 5.1 自主程度：把「信任」做成显式三档旋钮，而不是写死
 
-Codex CLI 的 suggest（只建议）/ auto-edit（可改文件、命令要审）/ full-auto（全自动） 是最清晰的范式；OpenCode 用 plan（只读探索）/ build（全权）两个 Tab 一键切换；GitHub Copilot 用 Plan / Agent / Ask 三模式，且 Plan 模式物理上只读，批准前一个文件都不会改；Factory Droid 更保守，不带 `--auto` 时只读出方案，拿不到写权限。
+Codex CLI 现行做法是把「能改哪」和「要不要问」拆成两个正交开关：`sandbox_mode` 管文件与网络边界（`read-only` / `workspace-write` / CLI 上 `--sandbox danger-full-access`），`approval_policy` 管何时来问你（`on-request` / `never` / 细粒度的 `granular`），早期的 suggest / auto-edit / full-auto 三合一分档在 Rust 重写后已不是现行模型。OpenCode 用 plan（只读探索）/ build（全权）两个 Tab 一键切换；GitHub Copilot 用 Plan / Agent / Ask 三模式，且 Plan 模式物理上只读，批准前一个文件都不会改；Factory Droid 更保守，不带 `--auto` 时只读出方案，拿不到写权限。
 
 > 示意场景：你让它把登录页改成暗色主题。只读档会先给出一份清单，列明要改 `Login.tsx`、`theme.css` 两个文件、动哪几行，一个字节都不落盘；自动改文件档会直接改这两个文件，但每条 git 命令、每次 `npm run` 都停下来问你；全自动档会连续完成改文件、跑测试、提交，且只在你事先授权的沙箱目录里操作，碰不到别处。
 
@@ -1202,7 +1505,7 @@ Gemini CLI 的 `gemini -p "..." --output-format json/stream-json`、Continue 的
 
 ### 5.11 流水线派的启示：不是所有任务都需要 agent 循环
 
-Agentless 用分层定位 → 多候选补丁采样 → 测试重排选最优的固定流水线，以约 $0.34–0.70/issue 的成本达到与重型 agent 相当的 SWE-bench 成绩；AutoCodeRover 的结构检索 + 两阶段生成同样便宜可靠；smol developer 的 `plan → 列文件 → 逐文件生成` 只有几百行。它们证明：对边界清晰、有测试信号的任务，确定性流水线比自由 ReAct 更可控、更便宜。
+Agentless 用分层定位 → 多候选补丁采样 → 测试重排选最优的固定流水线，以自报 \$0.70/issue 的成本在 SWE-bench Lite 上拿到 32.00%，与重型 agent 同档；AutoCodeRover 的结构检索 + 两阶段生成同样便宜可靠；smol developer 的 `plan → 列文件 → 逐文件生成` 只有几百行。它们证明：对边界清晰、有测试信号的任务，确定性流水线比自由 ReAct 更可控、更便宜。
 
 > **对 mod-agent**：[agent-loop.md](./agent-loop.md) 的主循环里可以把确定性环节固化成子流程（验证流水线 [verification-and-multiagent.md §1](./verification-and-multiagent.md#_1-验证流水线) 已经是流水线思想）；多候选补丁 + 测试重排值得作为修复阶段的一个可选策略（同一 bug 生成 2–3 个补丁，按测试结果选），而不是单条贪心路径走到底。
 
@@ -1217,7 +1520,7 @@ Agentless 用分层定位 → 多候选补丁采样 → 测试重排选最优的
 
 > **对 mod-agent**：这是 [references.md](./references.md) 的维护纪律，也是 [roadmap.md](./roadmap.md) 选型阶段的检查项：每个依赖记录许可证 / 最近提交 / 归档状态 / 替代方案，锁文件固定版本（[architecture.md §5](./architecture.md#_5-建议代码仓库结构)已要求 SDK 版本锁死与契约测试）。
 
-### 5.13 2026-08 追加：两条推翻旧认知的实证
+### 5.13 定稿之后的两条追加实证
 
 图鉴主体于 2026-08 定稿，之后出现了两条足以改变设计取舍的新证据，单独记在这里。
 
@@ -1233,4 +1536,4 @@ Agentless 用分层定位 → 多候选补丁采样 → 测试重排选最优的
 
 ---
 
-> 本图鉴的所有项目链接与许可证均于 2026-08 逐个打开核对；star 数为核对日的动态约数，仅作量级参考。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-2026-08-追加-两条推翻旧认知的实证) 的内容为 2026-08 追加或更新。
+> 本图鉴的项目链接与许可证均于 2026-10-14 逐个打开核对，规模档位同日起口径统一。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-定稿之后的两条追加实证) 是主体定稿之后追加或更新的内容，各自的追加时点标在正文里。

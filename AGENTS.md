@@ -4,7 +4,7 @@
 
 ## 1. 项目当前阶段
 
-TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于设计阶段**：仓库主体是 VitePress 文档站（`docs/`，21 篇源文档，约 6000+ 行），尚无运行时代码。修改前请先确认你面对的是「文档站阶段的仓库」还是「未来代码阶段的仓库」，两者约束不同。
+TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于设计阶段**：仓库主体是 VitePress 文档站（`docs/`，23 篇源文档，约 6800 行），尚无运行时代码。修改前请先确认你面对的是「文档站阶段的仓库」还是「未来代码阶段的仓库」，两者约束不同。
 
 ## 2. 开始任何任务前
 
@@ -37,7 +37,7 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | 改某篇文档正文                                        | `docs/<name>.md`                                                                                       | `npm run lint:links` → `npm run lint`  |
 | 加 / 删 / 重命名一篇文档                              | `docs/` 新增文件 + `docs/.vitepress/config.mts` sidebar + `docs/index.md` 导航表，三处同步             | `npm run lint:links` → `npm run lint`  |
-| 改侧栏编号 / 顺序                                     | `docs/.vitepress/config.mts`；侧栏 `text` 前缀使用连续两位数 `01`–`21`，不用 `03-1` 之类的连字符子编号 | `npm run lint:links` → `npm run lint`  |
+| 改侧栏编号 / 顺序                                     | `docs/.vitepress/config.mts`；侧栏 `text` 前缀使用连续两位数 `01`–`23`，不用 `03-1` 之类的连字符子编号 | `npm run lint:links` → `npm run lint`  |
 | 改 VitePress 站点配置（主题、导航、构建）             | `docs/.vitepress/config.mts`；主题/静态资源在 `docs/public/`                                           | `npm run docs:build`                   |
 | 修本文件里引用的命令是否还存在                        | `scripts/verify-agents-md-commands.mjs`；改 `package.json` scripts 或本文件后必跑                      | `npm run lint:agents`                  |
 | 修 ESLint / Prettier / commitlint / markdownlint 规则 | 分别对应 `eslint.config.mjs`、`.prettierrc.json`、`commitlint.config.mjs`、`.markdownlint-cli2.jsonc`  | `npm run lint`                         |

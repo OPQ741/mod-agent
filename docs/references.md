@@ -1,12 +1,12 @@
 # References · 参考来源
 
-> 供设计核验与后续深入学习。官方 SDK / API、MCP 规范与云平台策略持续演进，正式实现前应再核对所选版本，并用锁文件与契约测试锁定行为。核对日期：**2026-08（主体）+ 2026-08（补充，见 [§0](#_0-2026-08-补充核验来源)）**。
+> 供设计核验与后续深入学习。官方 SDK / API、MCP 规范与云平台策略持续演进，正式实现前应再核对所选版本，并用锁文件与契约测试锁定行为。核对日期：**2026-10-14 全量复核**（主体初核于 2026-08，[§0](#_0-2026-08-补充核验来源) 是主体定稿后同月内追加的一批来源）。
 
 > 怎么用这份清单：它不是拿来逐篇读完的书单，而是出问题时的字典。设计某一层拿不准时，按分类翻对应的官方文档；决定引入某个开源项目前，先看它后面括号里的许可证与停服 / 归档状态，代码能看不等于能放心商用。链接逐条核验：[§1](#_1-agent-运行时与范式)–[§5](#_5-安全与沙箱) 于 2026-08、[§6](#_6-评测)–[§11](#_11-云端-自治-coding-agent) 于 2026-08 逐个打开核对；正式实现前请按上面提示再核对一次版本。
 
 ## 0. 2026-08 补充核验来源
 
-这一节是 2026-08 新开的一批来源，其中有几条推翻或更新了 2026-08 时的认识，按主题列出。若与前面章节的说法冲突，以本节为准。
+这一节是 2026-08 主体定稿后、同月内新开的一批来源，其中有几条推翻或更新了主体定稿时的认识，按主题列出。若与前面章节的说法冲突，以本节为准。
 
 **基准与能力（更新了旧的分数口径）**
 
@@ -65,7 +65,7 @@
 
 - **Best practices for Claude Code**（上下文窗口是最需管理的资源；给 agent 一个它能跑的检查）
   https://www.anthropic.com/engineering/claude-code-best-practices
-- **Steering Claude Code: skills, hooks, rules, subagents**（CLAUDE.md <200 行、路径作用域规则、子 agent 嵌套 5 层）
+- **Steering Claude Code: skills, hooks, rules, subagents**（CLAUDE.md <200 行、路径作用域规则、子 agent 默认在主对话下 3 层，可经 `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` 配置）
   https://claude.com/blog/steering-claude-code-skills-hooks-rules-subagents-and-more
 - **Agent SDK：How the agent loop works**（自动压缩、compact_boundary、MCP 工具 schema 延迟加载）
   https://docs.anthropic.com/en/docs/agent-sdk/agent-loop
@@ -110,7 +110,7 @@
 - **Reflexion**：自然语言自反思
   https://arxiv.org/abs/2303.11366
 - **Agentless**：固定三阶段流水线 baseline
-  https://arxiv.org/abs/2407.1489
+  https://arxiv.org/abs/2407.01489
 
 ## 2. 模型与网关
 
@@ -174,29 +174,36 @@
 
 ---
 
-以下五个分类为 [Coding Agent 全景图鉴](./coding-agents.md) 的链接清单，2026-08-13 逐个打开核对（GitHub 仓库页 + 官方文档）。star 数为核对日动态约数，仅作量级参考；仓库 slug 若发生迁移，GitHub 旧地址会自动跳转。
+以下五个分类为 [Coding Agent 全景图鉴](./coding-agents.md) 的链接清单，2026-10-14 逐个打开核对（GitHub 仓库页 + 官方文档），主体初核于 2026-08-13。图鉴正文只给规模档位不给精确 star 数；仓库 slug 若发生迁移，GitHub 旧地址会自动跳转。
 
 ## 9. 终端 / CLI Coding Agent
 
-| 项目                   | GitHub（已核实）                                                                                         | 官方文档                                                                              |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Claude Code            | https://github.com/anthropics/claude-code （自定义源码许可，非 OSI）                                     | https://code.claude.com/docs/en/overview                                              |
-| OpenAI Codex CLI       | https://github.com/openai/codex （Apache-2.0）                                                           | https://developers.openai.com/codex                                                   |
-| Gemini CLI             | https://github.com/google-gemini/gemini-cli （Apache-2.0）                                               | https://google-gemini.github.io/gemini-cli/                                           |
-| Aider                  | https://github.com/Aider-AI/aider （Apache-2.0）                                                         | https://aider.chat/                                                                   |
-| OpenCode               | https://github.com/anomalyco/opencode （MIT；原 sst/opencode 自动跳转）                                  | https://opencode.ai/docs/                                                             |
-| Goose                  | https://github.com/aaif-goose/goose （Apache-2.0；原 block/goose 跳转，现归 Linux 基金会 AAIF）          | https://block.github.io/goose/                                                        |
-| Crush                  | https://github.com/charmbracelet/crush （FSL-1.1-MIT）                                                   | https://charm.sh/                                                                     |
-| Qwen Code              | https://github.com/QwenLM/qwen-code （Apache-2.0）                                                       | https://qwenlm.github.io/qwen-code-docs/                                              |
-| Amazon Q Developer CLI | https://github.com/aws/amazon-q-developer-cli （Apache-2.0；README 声明仅收安全补丁，转向闭源 Kiro CLI） | https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-installing.html |
-| Continue（CLI `cn`）   | https://github.com/continuedev/continue （Apache-2.0；README 声明只读停更，最终 2.0.0）                  | https://docs.continue.dev/cli/quickstart                                              |
+| 项目                   | GitHub（已核实）                                                                                             | 官方文档                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Claude Code            | https://github.com/anthropics/claude-code （自定义源码许可，非 OSI）                                         | https://code.claude.com/docs/en/overview                                              |
+| OpenAI Codex CLI       | https://github.com/openai/codex （Apache-2.0）                                                               | https://developers.openai.com/codex                                                   |
+| Gemini CLI             | https://github.com/google-gemini/gemini-cli （Apache-2.0）                                                   | https://google-gemini.github.io/gemini-cli/                                           |
+| Aider                  | https://github.com/Aider-AI/aider （Apache-2.0）                                                             | https://aider.chat/                                                                   |
+| OpenCode               | https://github.com/anomalyco/opencode （MIT；原 sst/opencode 自动跳转）                                      | https://opencode.ai/docs/                                                             |
+| Goose                  | https://github.com/aaif-goose/goose （Apache-2.0；原 block/goose 跳转，现归 Linux 基金会 AAIF）              | https://goose-docs.ai/（旧地址 https://block.github.io/goose/ 现仅做跳转）            |
+| Crush                  | https://github.com/charmbracelet/crush （FSL-1.1-MIT）                                                       | https://charm.sh/                                                                     |
+| Qwen Code              | https://github.com/QwenLM/qwen-code （Apache-2.0）                                                           | https://qwenlm.github.io/qwen-code-docs/                                              |
+| Amazon Q Developer CLI | https://github.com/aws/amazon-q-developer-cli （Apache-2.0；README 声明仅收安全补丁，转向闭源 Kiro CLI）     | https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-installing.html |
+| Continue（CLI `cn`）   | https://github.com/continuedev/continue （Apache-2.0；只读停更，最终 2.0.0，团队 2026-06-16 被 Cursor 收编） | https://docs.continue.dev/cli/quickstart                                              |
+| Pi                     | https://github.com/earendil-works/pi （MIT）                                                                 | 未核实到独立文档站，以仓库 README 为准                                                |
+| Grok Build             | https://github.com/xai-org/grok-build （Apache-2.0）                                                         | 未核实到独立文档站，以仓库 README 为准                                                |
+| Plandex                | https://github.com/plandex-ai/plandex （MIT）                                                                | https://plandex.ai                                                                    |
+| Kimi Code              | https://github.com/MoonshotAI/kimi-code （MIT；旧版 MoonshotAI/kimi-cli 已 2026-09-22 归档）                 | 未核实到独立文档站，以仓库 README 为准                                                |
+| MiniMax Code           | https://github.com/MiniMax-AI/minimax-code （MIT）                                                           | 未核实到独立文档站，以仓库 README 为准                                                |
+| gptme                  | https://github.com/gptme/gptme （MIT）                                                                       | https://gptme.org                                                                     |
+| ForgeCode              | https://github.com/tailcallhq/forgecode （Apache-2.0；原 antinomyhq/forge 迁移）                             | 未核实到独立文档站，以仓库 README 为准                                                |
 
 ## 10. IDE 内 Coding Agent
 
 | 项目                      | GitHub（已核实）                                                                           | 官方文档                                                                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | Cursor                    | 无公开仓库（闭源，Anysphere）                                                              | https://cursor.com/docs/agent ｜ 规则 https://cursor.com/docs/rules ｜ 云端 https://cursor.com/docs/cloud-agent                  |
-| Windsurf                  | 无编辑器公开仓库（2025-07 被 Cognition 收购）                                              | https://docs.windsurf.com/windsurf/cascade/cascade ｜ 收购公告 https://windsurf.com/blog/windsurfs-next-chapter                  |
+| Windsurf                  | 无编辑器公开仓库（2025-07 被 Cognition 收购，2026-06-02 改名 Devin Desktop）               | https://docs.windsurf.com/windsurf/cascade/cascade ｜ 收购公告 https://windsurf.com/blog/windsurfs-next-chapter                  |
 | GitHub Copilot agent mode | 无独立仓库                                                                                 | https://docs.github.com/en/copilot/how-tos/chat-with-copilot/chat-in-ide                                                         |
 | Cline                     | https://github.com/cline/cline （Apache-2.0）                                              | https://cline.bot                                                                                                                |
 | Roo Code                  | https://github.com/RooCodeInc/Roo-Code （Apache-2.0；**2026-05-15 停服、Public archive**） | https://roocode.com                                                                                                              |
@@ -204,6 +211,9 @@
 | Zed                       | https://github.com/zed-industries/zed （GPL-3.0）                                          | https://zed.dev/docs/ai/agent-panel ｜ 并行 https://zed.dev/docs/ai/parallel-agents ｜ 外部 agent https://zed.dev/docs/ai/agents |
 | Trae（字节）              | IDE 闭源；仅研究型 CLI 开源 https://github.com/bytedance/trae-agent （MIT）                | https://docs.trae.ai/ide/what-is-trae                                                                                            |
 | Void                      | https://github.com/voideditor/void （Apache-2.0；**已弃用归档**）                          | https://voideditor.com                                                                                                           |
+| Google Antigravity        | 无公开仓库（闭源，含 `agy` CLI 与 SDK）                                                    | https://antigravity.google                                                                                                       |
+| Kiro（AWS）               | 无公开仓库（前身 amazon-q-developer-cli 曾 Apache-2.0，转 Kiro 后改 AWS IP License）       | https://kiro.dev                                                                                                                 |
+| JetBrains Junie           | 无公开仓库（闭源；Fleet 已于 2025-12-22 关停，转 JetBrains Air）                           | https://www.jetbrains.com/                                                                                                       |
 
 ## 11. 云端 / 自治 Coding Agent
 
@@ -216,35 +226,46 @@
 | v0 (Vercel)                | 无开源仓库                                                                                  | https://v0.dev/faq                                                                                  |
 | Lovable                    | 无开源仓库                                                                                  | https://docs.lovable.dev                                                                            |
 | Factory / Droid            | 核心闭源；开源 TS SDK https://github.com/Factory-AI/droid-sdk-typescript （license 未核实） | https://docs.factory.com/                                                                           |
+| Jules (Google)             | 无开源仓库                                                                                  | https://labs.google/jules                                                                           |
 
 ## 12. 开源平台、框架与学术项目
 
-| 项目              | GitHub（已核实）                                                                                       | 官方文档 / 论文                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| SWE-agent         | https://github.com/SWE-agent/SWE-agent （MIT；官方重心转向 mini-SWE-agent）                            | https://swe-agent.com/latest/background/ ｜ https://arxiv.org/abs/2405.15793 |
-| OpenHands         | https://github.com/OpenHands/OpenHands （MIT；原 All-Hands-AI 跳转）                                   | https://docs.openhands.dev/ ｜ https://arxiv.org/abs/2407.16741              |
-| Agentless         | https://github.com/OpenAutoCoder/Agentless （MIT）                                                     | https://arxiv.org/abs/2407.01489                                             |
-| Moatless Tools    | https://github.com/aorwall/moatless-tools （MIT；论文实现见 moatless-tree-search）                     | https://github.com/aorwall/moatless-tree-search                              |
-| AutoCodeRover     | https://github.com/AutoCodeRoverSG/auto-code-rover （**Sonar Source-Available License v1.0，非商业**） | https://arxiv.org/abs/2404.05427                                             |
-| MetaGPT           | https://github.com/FoundationAgents/MetaGPT （MIT；原 geekan 跳转）                                    | https://openreview.net/forum?id=VtmBAGCN7o                                   |
-| AutoGen           | https://github.com/microsoft/autogen （MIT；**已进入维护模式**，后继 Microsoft Agent Framework）       | https://microsoft.github.io/autogen/                                         |
-| CrewAI            | https://github.com/crewAIInc/crewAI （MIT）                                                            | https://docs.crewai.com/                                                     |
-| LangGraph         | https://github.com/langchain-ai/langgraph （MIT）                                                      | https://docs.langchain.com/oss/python/langgraph/                             |
-| OpenAI Agents SDK | https://github.com/openai/openai-agents-python （MIT；JS 版 openai/openai-agents-js）                  | https://openai.github.io/openai-agents-python/                               |
-| Google ADK        | https://github.com/google/adk-python （Apache-2.0）                                                    | https://google.github.io/adk-docs/                                           |
-| Pydantic AI       | https://github.com/pydantic/pydantic-ai （MIT）                                                        | https://ai.pydantic.dev/                                                     |
-| Mastra            | https://github.com/mastra-ai/mastra （**双许可**：核心 Apache-2.0 + ee/ 企业许可）                     | https://mastra.ai                                                            |
-| gpt-engineer      | https://github.com/AntonOsika/gpt-engineer （MIT；**已 archived**）                                    | https://github.com/AntonOsika/gpt-engineer                                   |
-| smol developer    | https://github.com/smol-ai/developer （MIT）                                                           | https://github.com/smol-ai/developer                                         |
+| 项目              | GitHub（已核实）                                                                                                                                          | 官方文档 / 论文                                                               |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| SWE-agent         | https://github.com/SWE-agent/SWE-agent （MIT；官方重心转向 mini-SWE-agent）                                                                               | https://swe-agent.com/latest/background/ ｜ https://arxiv.org/abs/2405.15793  |
+| OpenHands         | https://github.com/OpenHands/OpenHands （MIT；原 All-Hands-AI 跳转）                                                                                      | https://docs.openhands.dev/ ｜ https://arxiv.org/abs/2407.16741               |
+| Agentless         | https://github.com/OpenAutoCoder/Agentless （MIT）                                                                                                        | https://arxiv.org/abs/2407.01489                                              |
+| Moatless Tools    | https://github.com/aorwall/moatless-tools （MIT；论文实现见 moatless-tree-search）                                                                        | https://github.com/aorwall/moatless-tree-search                               |
+| AutoCodeRover     | https://github.com/AutoCodeRoverSG/auto-code-rover （**Sonar Source-Available License v1.0，非商业**）                                                    | https://arxiv.org/abs/2404.05427                                              |
+| MetaGPT           | https://github.com/FoundationAgents/MetaGPT （MIT；原 geekan 跳转）                                                                                       | https://openreview.net/forum?id=VtmBAGCN7o                                    |
+| AutoGen           | https://github.com/microsoft/autogen （MIT；**已进入维护模式**，后继 Microsoft Agent Framework）                                                          | https://microsoft.github.io/autogen/                                          |
+| CrewAI            | https://github.com/crewAIInc/crewAI （MIT）                                                                                                               | https://docs.crewai.com/                                                      |
+| LangGraph         | https://github.com/langchain-ai/langgraph （MIT）                                                                                                         | https://docs.langchain.com/oss/python/langgraph/                              |
+| OpenAI Agents SDK | https://github.com/openai/openai-agents-python （MIT；JS 版 openai/openai-agents-js）                                                                     | https://openai.github.io/openai-agents-python/                                |
+| Google ADK        | https://github.com/google/adk-python （Apache-2.0）                                                                                                       | https://google.github.io/adk-docs/                                            |
+| Pydantic AI       | https://github.com/pydantic/pydantic-ai （MIT）                                                                                                           | https://ai.pydantic.dev/                                                      |
+| Mastra            | https://github.com/mastra-ai/mastra （**双许可**：核心 Apache-2.0 + ee/ 企业许可）                                                                        | https://mastra.ai                                                             |
+| gpt-engineer      | https://github.com/AntonOsika/gpt-engineer （MIT；**已 archived**）                                                                                       | https://github.com/AntonOsika/gpt-engineer                                    |
+| smol developer    | https://github.com/smol-ai/developer （MIT）                                                                                                              | https://github.com/smol-ai/developer                                          |
+| mini-SWE-agent    | https://github.com/SWE-agent/mini-swe-agent （MIT；SWE-agent 官方当前重心）                                                                               | https://github.com/SWE-agent/mini-swe-agent                                   |
+| OpenHands SDK     | https://github.com/OpenHands/software-agent-sdk （MIT；agent 核心已从主仓库重构至此，另有 typescript-client）                                             | https://docs.openhands.dev/                                                   |
+| deepagents        | https://github.com/langchain-ai/deepagents （MIT；JS 移植 langchain-ai/deepagentsjs）                                                                     | https://docs.langchain.com/oss/python/deepagents/overview                     |
+| smolagents        | https://github.com/huggingface/smolagents （Apache-2.0）                                                                                                  | https://huggingface.co/docs/smolagents                                        |
+| Claude Agent SDK  | https://github.com/anthropics/claude-agent-sdk-typescript ｜ claude-agent-sdk-python （**非开源**，Anthropic 商业条款；内部 runs the Claude Code binary） | https://code.claude.com/docs/en/agent-sdk/overview                            |
+| OpenAI Codex SDK  | https://github.com/openai/codex 内（`@openai/codex-sdk`，Apache-2.0，2026-07 转稳定版）                                                                   | SDK spawn CLI 进程读 JSONL 事件流；文档见 https://developers.openai.com/codex |
+| Terminal-Bench    | https://github.com/laude-institute/harbor （框架，含参照 agent Terminus 2；原 terminal-bench 仓库重定向）                                                 | https://www.tbench.ai/leaderboard/terminal-bench/2.0                          |
 
 ## 13. 开放协议与规范
 
-| 协议                         | 仓库 / 官网（已核实）                                                                                                         | 备注                                                                   |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| MCP (Model Context Protocol) | https://github.com/modelcontextprotocol/modelcontextprotocol （MIT；原 specification 跳转）｜ https://modelcontextprotocol.io | agent ↔ 工具/数据，tools/resources/prompts 三原语                      |
-| A2A (Agent2Agent)            | https://github.com/a2aproject/A2A （Apache-2.0）｜ https://a2a-protocol.org                                                   | agent ↔ agent，Google 发起、Linux 基金会托管                           |
-| ACP (Agent Client Protocol)  | https://zed.dev/docs/ai/agents                                                                                                | 编辑器 ↔ 外部 CLI agent（Zed 主推）                                    |
-| AGENTS.md                    | https://agents.md                                                                                                             | 给 agent 看的项目 README，Linux 基金会 AAIF 托管；仓库 slug 未单独核实 |
+| 协议                         | 仓库 / 官网（已核实）                                                                                                                 | 备注                                                                                                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| MCP (Model Context Protocol) | https://github.com/modelcontextprotocol/modelcontextprotocol （MIT；原 specification 跳转）｜ https://modelcontextprotocol.io         | agent ↔ 工具/数据，tools/resources/prompts 三原语                                                                                                                                    |
+| A2A (Agent2Agent)            | https://github.com/a2aproject/A2A （Apache-2.0）｜ https://a2a-protocol.org                                                           | agent ↔ agent，Google 发起、Linux 基金会托管                                                                                                                                         |
+| ACP (Agent Client Protocol)  | https://github.com/agentclientprotocol/agent-client-protocol （Apache-2.0；原 zed-industries 名下）｜ https://agentclientprotocol.com | 编辑器 ↔ 外部 CLI agent，Zed 发起；`session/prompt`、`session/update`、`session/request_permission` 原语，客户端覆盖 Zed / VS Code / JetBrains / Neovim / Emacs 等                   |
+| AGENTS.md                    | https://agents.md ｜ 仓库 https://github.com/agentsmd/agents.md （MIT）                                                               | 给 agent 看的项目 README，Linux 基金会 AAIF 托管。**加载顺序与就近覆盖条款以站点正文为准，仓库 README 只有最小示例**；本仓库 `AGENTS.md` §8 引用的 `openai/agents.md` 是迁移前旧归属 |
+| OTel GenAI 语义约定          | https://github.com/open-telemetry/semantic-conventions-genai （Apache-2.0）                                                           | agent / 工具调用的可观测性命名标准：`invoke_agent`、`execute_tool` span、`gen_ai.usage.*`，并含 MCP 约定                                                                             |
+| Spec Kit                     | https://github.com/github/spec-kit （MIT）                                                                                            | GitHub 官方的规约驱动开发工具包，适配多家 agent，与 Kiro 的 spec 机制同源                                                                                                            |
+| execpolicy                   | https://github.com/openai/codex 内 `codex-rs/execpolicy` （Rust，Apache-2.0）                                                         | Starlark 风格 `prefix_rule` 的 allow / prompt / forbidden 命令策略，fail-closed，规则自带 match / not_match 测试                                                                     |
 
 ## 14. 维护说明
 

@@ -61,8 +61,9 @@ flowchart LR
 | 文档                                                               | 回答的问题                                                                                |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | [overview.md](./overview.md)                                       | 目标与边界、设计原则、任务模式、MVP 做 / 不做                                             |
+| [usage.md](./usage.md)                                             | 使用者视角：命令怎么敲、四种模式怎么切、审批与回滚怎么看（设计阶段的使用体验规格）        |
 | [research.md](./research.md)                                       | 领域调研：主流产品、评测基准、架构范式、失败模式与安全实证                                |
-| [coding-agents.md](./coding-agents.md)                             | Coding Agent 全景图鉴：45 个产品 / 框架 / 协议的逐一对标画像，以及对 mod-agent 的设计启示 |
+| [coding-agents.md](./coding-agents.md)                             | Coding Agent 全景图鉴：63 个产品 / 框架 / 协议的逐一对标画像，以及对 mod-agent 的设计启示 |
 | [architecture.md](./architecture.md)                               | 总体分层架构、架构决策记录（ADR）、技术选型、monorepo 结构                                |
 | [agent-loop.md](./agent-loop.md)                                   | Agent Runtime：任务状态机、核心循环、停止/恢复/预算语义                                   |
 | [context-engineering.md](./context-engineering.md)                 | 代码库理解、分层检索、上下文装配与压缩、注入防护                                          |
@@ -79,17 +80,19 @@ flowchart LR
 | [model-gateway.md](./model-gateway.md)                             | Provider 适配、模型路由、提示词版本管理、结构化输出                                       |
 | [observability-evaluation.md](./observability-evaluation.md)       | Trace/指标/日志/成本，以及评测体系与发布门禁                                              |
 | [roadmap.md](./roadmap.md)                                         | 分阶段路线（Phase 0–6）、优先开发顺序、MVP 验收清单                                       |
+| [development-guide.md](./development-guide.md)                     | 开发者视角：模块依赖顺序、最小可跑循环、各模块自测口径、前人踩过的实现坑                  |
 | [references.md](./references.md)                                   | 参考来源汇总                                                                              |
 
 ### 从哪篇开始读
 
 不用从头读到尾，按你的身份挑入口：
 
-| 你是谁                 | 建议先读                                                                                             | 目的                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| 第一次来、只想快速了解 | [overview.md](./overview.md) → [research.md](./research.md) 前两节                                   | 5 分钟知道它做什么、不做什么       |
-| 要参与开发             | [architecture.md](./architecture.md) → [agent-loop.md](./agent-loop.md) → [roadmap.md](./roadmap.md) | 先看分层与开发顺序，再钻细节专题   |
-| 想判断设计靠不靠谱     | [research.md](./research.md) → [security.md](./security.md) → [coding-agents.md](./coding-agents.md) | 看业界事实依据、安全边界与对标图鉴 |
+| 你是谁                 | 建议先读                                                                                                           | 目的                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| 第一次来、只想快速了解 | [overview.md](./overview.md) → [research.md](./research.md) 前两节                                                 | 5 分钟知道它做什么、不做什么       |
+| 想知道将来怎么用       | [usage.md](./usage.md) → [overview.md](./overview.md)                                                              | 看命令、模式与审批交互长什么样     |
+| 要参与开发             | [architecture.md](./architecture.md) → [development-guide.md](./development-guide.md) → [roadmap.md](./roadmap.md) | 先看分层，再看怎么动手与开发顺序   |
+| 想判断设计靠不靠谱     | [research.md](./research.md) → [security.md](./security.md) → [coding-agents.md](./coding-agents.md)               | 看业界事实依据、安全边界与对标图鉴 |
 
 下图是这份文档集的阅读主线（箭头表示"先读哪篇再读哪篇"）：
 
@@ -100,7 +103,7 @@ flowchart LR
     C --> D["agent-loop.md<br/>主循环"]
     C --> E["security.md<br/>安全边界"]
     D --> F["roadmap.md<br/>怎么落地"]
-    B -. 对标 .-> G["coding-agents.md<br/>45 个产品图鉴"]
+    B -. 对标 .-> G["coding-agents.md<br/>63 个产品图鉴"]
 ```
 
 先搞清楚做什么，再谈业界怎么做、我们怎么分层；细节专题都是主干上的分支，开发路线收在 roadmap。

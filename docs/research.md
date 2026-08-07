@@ -26,24 +26,24 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 
 ### 商业产品
 
-| 产品                 | 形态                    | 核心架构                                                   | 关键理念                                            |
-| -------------------- | ----------------------- | ---------------------------------------------------------- | --------------------------------------------------- |
-| Devin (Cognition)    | 云端工作台，输出 PR     | planner + executor 分层、scratchpad 记忆                   | 人可观察可接管的完整工作台 + 测试闭环               |
-| Cursor               | AI IDE（fork VS Code）  | Tab + Agent/Composer 双梯度、codebase embedding、Plan 模式 | 索引 + `@` 取上下文 + 远程并行 git worktree         |
-| Claude Code          | CLI + IDE 扩展          | 极简 ReAct loop、subagents 独立上下文（最多嵌套 5 层）     | 简单 loop + 分层权限 + 子代理隔离 + CLAUDE.md       |
-| GitHub Copilot agent | 平台原语 issue→draft PR | 跑在 Actions VM、code search、推 draft PR                  | 产物天然是 PR、workflow 改动人审、auto-merge 交平台 |
+| 产品                 | 形态                    | 核心架构                                                         | 关键理念                                            |
+| -------------------- | ----------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
+| Devin (Cognition)    | 云端工作台，输出 PR     | 云端隔离 VM + OS 级进程沙箱 + 域名过滤代理，工作区每次会话重置   | 人可观察可接管的完整工作台 + 测试闭环               |
+| Cursor               | AI IDE（fork VS Code）  | Tab + Agent/Composer 双梯度、codebase embedding、Plan 模式       | 索引 + `@` 取上下文 + 远程并行 git worktree         |
+| Claude Code          | CLI + IDE 扩展          | 极简 ReAct loop、subagents 独立上下文（默认主对话下 3 层，可配） | 简单 loop + 分层权限 + 子代理隔离 + CLAUDE.md       |
+| GitHub Copilot agent | 平台原语 issue→draft PR | 跑在 Actions VM、code search、推 draft PR                        | 产物天然是 PR、workflow 改动人审、auto-merge 交平台 |
 
 ### 开源 / 学术
 
-| 项目                     | 定位                              | 关键理念                                                                |
-| ------------------------ | --------------------------------- | ----------------------------------------------------------------------- |
-| SWE-agent (Princeton)    | 证明瓶颈在 agent-计算机接口       | ACI 三件套：定制编辑器、分页 viewer、精简 bash；发布时 SWE-bench 12.47% |
-| OpenHands (原 OpenDevin) | 开源通用平台                      | Agent + EventStream（append-only 事件溯源）+ Docker runtime             |
-| Aider                    | 终端 pair-programming、git-native | Repo Map（tree-sitter 符号索引 ~1k token）、多编辑格式自动 commit       |
-| Cline                    | IDE 内、每步人批                  | Plan/Act 双模式、Shadow Git 每工具调用后快照任意回滚                    |
-| Agentless (UIUC)         | 反 agent 固定三阶段流水线         | 分层定位→生成 patch→多候选跑测试；SWE-bench Lite 32%、单 issue \$0.70   |
+| 项目                     | 定位                              | 关键理念                                                                  |
+| ------------------------ | --------------------------------- | ------------------------------------------------------------------------- |
+| SWE-agent (Princeton)    | 证明瓶颈在 agent-计算机接口       | ACI 三件套：定制编辑器、分页 viewer、精简 bash；论文口径 SWE-bench 12.47% |
+| OpenHands (原 OpenDevin) | 开源通用平台                      | Agent + EventStream（append-only 事件溯源）+ Docker runtime               |
+| Aider                    | 终端 pair-programming、git-native | Repo Map（tree-sitter 符号索引 ~1k token）、多编辑格式自动 commit         |
+| Cline                    | IDE 内、每步人批                  | Plan/Act 双模式、Shadow Git 每工具调用后快照任意回滚                      |
+| Agentless (UIUC)         | 反 agent 固定三阶段流水线         | 分层定位→生成 patch→多候选跑测试；SWE-bench Lite 32%、单 issue \$0.70     |
 
-> 2026 年的产品版图已经远不止这 9 个。我们对 45 个 coding agent / 框架 / 协议做了逐一对标（每个都实际打开了官方仓库与文档核实），完整画像见 [Coding Agent 全景图鉴](./coding-agents.md)，下面只给分类结论与精简对比。
+> 2026 年的产品版图已经远不止这 9 个。我们对 63 个 coding agent / 框架 / 协议做了逐一对标（每个都实际打开了官方仓库与文档核实），完整画像见 [Coding Agent 全景图鉴](./coding-agents.md)，下面只给分类结论与精简对比。
 
 ### 2.1 四大形态速览
 
@@ -54,7 +54,7 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 | **云端 / 自治 agent**      | Devin、Copilot cloud agent、Replit Agent、v0、Lovable、Factory Droid、bolt.diy                                       | 厂商云 VM / 容器 | draft PR、可访问 URL  | 云端沙箱、draft PR 护栏、自动分支、永不碰 main    |
 | **开源框架 / 学术 / 协议** | SWE-agent、OpenHands、Agentless、AutoCodeRover、MetaGPT、AutoGen、CrewAI、LangGraph、Agents SDK、MCP、A2A、AGENTS.md | 自托管           | 论文结果 / 可编排平台 | EventStream、ACI、分层定位、多 agent 教训、协议   |
 
-### 2.2 从 45 个项目里得到的分类结论
+### 2.2 从 63 个项目里得到的分类结论
 
 1. **CLI agent 已收敛出一套"事实标准"组合**：项目记忆文件（`AGENTS.md` / `CLAUDE.md` / `GEMINI.md`）+ 显式自主程度旋钮（只读 / 可改文件 / 全自动）+ 每步落 Git + 网络默认关闭的沙箱 + headless JSON 输出 + MCP 接工具。
 2. **开源路线几乎全部 BYOK（自带 Key）、模型无关**：Aider、Cline、Kilo、OpenCode、Goose、Crush、Pydantic AI、Mastra 等都不绑定单一模型；Goose/Zed 还能经 ACP 复用用户已有的 Claude/ChatGPT 订阅。
@@ -63,13 +63,13 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 5. **协议层基本定型**：MCP 管"agent 接工具"、A2A 管"agent 连 agent"、ACP 管"编辑器挂 CLI agent"、AGENTS.md 管"agent 读项目规则"，四者互补。
 6. **活跃度与许可证是硬约束**：2026 年 Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 转维护模式、Amazon Q CLI 停更；Crush（FSL）、Claude Code（自定义源码许可）、AutoCodeRover（Sonar 源码可用）、Zed（GPL-3.0）都不是标准宽松许可，选型时必须逐项目核对 LICENSE 与最近提交（见 [references.md](./references.md)）。
 
-## 3. 真实能力水平（2025–2026，2026-08 核实）
+## 3. 真实能力水平（2025–2026，2026-10 核实）
 
 ### 3.1 SWE-bench Verified：先看「谁跑的」，再看分数
 
 同一套 harness 才能横向比；跨 harness 只能看时间线演进。下面两张表分开列，就是因为这个。
 
-**表 A · 官方统一 harness 榜**（swebench.com，全部用 mini-SWE-agent 跑，2026-02 更新）。这张表内部可比：
+**表 A · 官方统一 harness 榜**（swebench.com，全部用 mini-SWE-agent 跑，2026-02 更新）。这张表内部可比。2026-10-14 回官方榜单数据复核，前三行（Gemini 3 Flash 72.7 / Claude 4.6 Opus 72.0 / Claude 4.5 Opus 70.7）与官方一致，其余行未逐格重验。
 
 | 模型                              | % Resolved | 平均成本/题     |
 | --------------------------------- | ---------- | --------------- |

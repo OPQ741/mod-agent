@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-mod-agent 的目标是提供一个可读、可扩展、可审计的编程智能体运行时：读入自然语言编程需求，自主完成「读代码 → 改文件 → 跑测试 → 迭代修复」的闭环，最终产出人可审查的 diff。设计文档以 21 篇源文档组织，覆盖架构、主循环、上下文工程、权限自治、安全边界、模型网关、工具与扩展、观测与评估、Coding Agent 参考等主题。
+mod-agent 的目标是提供一个可读、可扩展、可审计的编程智能体运行时：读入自然语言编程需求，自主完成「读代码 → 改文件 → 跑测试 → 迭代修复」的闭环，最终产出人可审查的 diff。设计文档以 23 篇源文档组织，覆盖使用说明、架构、主循环、上下文工程、权限自治、安全边界、模型网关、工具与扩展、观测与评估、开发实现指南、Coding Agent 参考等主题。
 
 ## 主要文档
 
@@ -18,10 +18,12 @@ mod-agent 的目标是提供一个可读、可扩展、可审计的编程智能�
 - [安全边界](https://opq741.github.io/mod-agent/security.html): 威胁模型、沙箱基线、权限判定引擎（`docs/security.md`）
 - [工具与扩展](https://opq741.github.io/mod-agent/tools-and-extensions.html): 工具契约、并行执行、MCP、人工审批（`docs/tools-and-extensions.md`）
 - [模型接入](https://opq741.github.io/mod-agent/model-gateway.html): Provider 适配、模型路由、结构化输出（`docs/model-gateway.md`）
+- [使用说明](https://opq741.github.io/mod-agent/usage.html): 面向使用者的命令、模式、审批与恢复交互规格（设计阶段，`docs/usage.md`）
 - [Coding Agent 图鉴](https://opq741.github.io/mod-agent/coding-agents.html): 主流产品 / 框架 / 协议的逐一对标（`docs/coding-agents.md`）
 - [路线图](https://opq741.github.io/mod-agent/roadmap.html): 分阶段计划与 MVP 验收清单（`docs/roadmap.md`）
+- [开发实现指南](https://opq741.github.io/mod-agent/development-guide.html): 模块依赖顺序、最小可跑循环、各模块自测口径与前人实现坑（`docs/development-guide.md`）
 
-全部 21 篇章节的索引见文档首页。
+全部 23 篇章节的索引见文档首页。
 
 ## 开发命令
 
