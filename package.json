@@ -42,7 +42,7 @@
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "lint:links": "node scripts/verify-doc-links.mjs",
     "lint:agents": "node scripts/verify-agents-md-commands.mjs",
-    "lint:fix": "eslint . --fix && markdownlint-cli2 --fix \"**/*.md\" && prettier . --write",
+    "lint:fix": "prettier . --write && eslint . --fix && markdownlint-cli2 --fix \"**/*.md\"",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "typecheck": "tsc --noEmit",

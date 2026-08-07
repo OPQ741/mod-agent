@@ -79,7 +79,7 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 
 ## 8. 参考
 
-- AGENTS.md 开放规范由 Agentic AI Foundation（Linux 基金会）维护，官方站点 `agents.md`，源码仓库 `openai/agents.md`。
+- AGENTS.md 开放规范由 Agentic AI Foundation（Linux 基金会）维护，官方站点 `agents.md`，源码仓库现为 `agentsmd/agents.md`（原 `openai/agents.md` 已迁移）。注意加载顺序与就近覆盖的条款只在站点正文里，仓库 README 只有最小示例。
 - 详细文档索引见 `docs/index.md`；架构见 `docs/architecture.md`；编码规范见 `CONTRIBUTING.md`（如存在）。
 - 面向 GitHub Copilot 的项目入口在 `.github/copilot-instructions.md`，只指向本文件，不重复内容。
 - 面向外部 AI 检索的项目自述在 `docs/public/llms.txt`，站点上线后可通过 `https://opq741.github.io/mod-agent/llms.txt` 访问。
