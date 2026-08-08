@@ -74,16 +74,19 @@ flowchart LR
 
 ## 2. 架构决策记录（ADR）
 
-| #     | 决策                                                        | 理由                                                                 |
-| ----- | ----------------------------------------------------------- | -------------------------------------------------------------------- |
-| ADR-1 | 单 Agent 主循环 + 受控子任务派生，不做对等 Multi-Agent 编排 | 单循环可解释、可恢复、成本可控；多 Agent 失败约 44% 源于跨文件不一致 |
-| ADR-2 | 扁平消息 / 事件日志为唯一事实源                             | 匹配 LLM 无状态回放，最大化 prompt cache 命中，简化调试与审计        |
-| ADR-3 | 结构化专用工具为主、通用 Shell 为辅                         | 结构化工具返回确定性输出；Shell 只保留给构建 / 测试 / 安装           |
-| ADR-4 | 混合检索（词法 + 符号 + 关系），不纯靠向量 RAG              | 编码任务锚定精确标识符，纯语义召回不足                               |
-| ADR-5 | 任务状态外置持久化（TaskState + Checkpoint）                | 对抗目标漂移，压缩 / 重启后不丢失原始目标与约束                      |
-| ADR-6 | LLM 网关统一封装（多模型路由 / 缓存 / 限流 / 重试）         | 隔离 provider 差异，成本与质量的关键杠杆                             |
-| ADR-7 | CLI-first（Commander + Ink + SQLite），不先做 Web 平台      | 纵向闭环最快；Web/BFF/PostgreSQL 留到团队阶段                        |
-| ADR-8 | 工具经 Zod schema 校验入参、Policy 层独立判定权限           | 权限判定不依赖模型自然语言自述，安全可独立测试                       |
+| #      | 决策                                                                                      | 理由                                                                                                                    |
+| ------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| ADR-1  | 单 Agent 主循环 + 受控子任务派生，不做对等 Multi-Agent 编排                               | 单循环可解释、可恢复、成本可控；多 Agent 失败约 44% 源于跨文件不一致                                                    |
+| ADR-2  | 扁平消息 / 事件日志为唯一事实源                                                           | 匹配 LLM 无状态回放，最大化 prompt cache 命中，简化调试与审计                                                           |
+| ADR-3  | 结构化专用工具为主、通用 Shell 为辅                                                       | 结构化工具返回确定性输出；Shell 只保留给构建 / 测试 / 安装                                                              |
+| ADR-4  | 混合检索（词法 + 符号 + 关系），不纯靠向量 RAG                                            | 编码任务锚定精确标识符，纯语义召回不足                                                                                  |
+| ADR-5  | 任务状态外置持久化（TaskState + Checkpoint）                                              | 对抗目标漂移，压缩 / 重启后不丢失原始目标与约束                                                                         |
+| ADR-6  | LLM 网关统一封装（多模型路由 / 缓存 / 限流 / 重试）                                       | 隔离 provider 差异，成本与质量的关键杠杆                                                                                |
+| ADR-7  | CLI-first（Commander + Ink + SQLite），不先做 Web 平台                                    | 纵向闭环最快；Web/BFF/PostgreSQL 留到团队阶段                                                                           |
+| ADR-8  | 工具经 Zod schema 校验入参、Policy 层独立判定权限                                         | 权限判定不依赖模型自然语言自述，安全可独立测试                                                                          |
+| ADR-9  | 分层配置合并语义按键类型区分：数组取并集、标量按最 specific 层替换                        | 与 Claude Code 一致（`permissions.allow` 数组跨层合并、`model` 标量取最高层），避免"更具体的规则赢"这类直觉写错方向     |
+| ADR-10 | CLI 与 Agent SDK 共用同一 runtime 内核，两前端只是入参/输出适配                           | 防止同一 loop 因入口不同行为漂移；SDK 用 `query()` 起子进程复用 CLI 的事件流、权限、hooks、MCP 加载                     |
+| ADR-11 | 辅助模型（advisor / evaluator / classifier）在 Model Gateway 层统一封装，不散在各模块自造 | 三种角色本质都是"独立裁判 + 主模型 prompt cache 复用"，一处封装三处受益；见 [model-gateway.md §2.3](./model-gateway.md) |
 
 上表这 8 条 ADR，挑几条用工程口吻再注解一遍（决策与理由保持原样，这里只加解释）：
 
@@ -96,12 +99,15 @@ flowchart LR
 
 ### 2.1 关键 ADR 的业界依据（2026-08 核实）
 
-| ADR                       | 业界实证来源（已 fetch）                                                                                                                                                                                                                                                             | 要点                                                                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| ADR-1 单主循环 + 受控委托 | OpenAI Agents SDK：极小原语 `Agent` + `Handoffs / Agents-as-tools`（https://openai.github.io/openai-agents-python/ ）；A2A 明确「不是子代理 / 工具调用协议」（https://a2a-protocol.org/latest/ ）                                                                                    | 委托是「主 agent 调子工具 / 把会话交给另一 agent」两个明确语义，二者不可混用；内部编排不引入 A2A，A2A 留作未来对外扩展点 |
-| ADR-2 事件日志唯一事实源  | OpenHands SDK：events 是一等公民，conversation / workspace / events 由 SDK 显式拥有（https://github.com/OpenHands/software-agent-sdk ）                                                                                                                                              | append-only 事件 + replay / audit 是开源平台验证过的做法                                                                 |
-| ADR-8 Policy 独立判定     | MCP 规范：协议不 enforce 安全，「Tools represent arbitrary code execution」，consent / 授权流必须实现者自己做（https://modelcontextprotocol.io/specification/ ）                                                                                                                     | 权限判定天然不能信任工具描述 / 模型自述，必须框架层独立                                                                  |
-| 沙箱 / 运行时抽象         | OpenAI Agents SDK SandboxAgent：manifest 声明工作区 + 沙箱后端可切换（本地 Unix / Docker）+ 会话可恢复（https://openai.github.io/openai-agents-python/ ）；OpenHands：内核（Agent Server）与界面（Canvas）分离，控制端可连多后端（https://github.com/OpenHands/software-agent-sdk ） | 单进程 CLI 也先把「执行内核」与「交互界面」用清晰边界隔开，未来加远程 agent / 云端长任务不改内核                         |
+| ADR                               | 业界实证来源（已 fetch）                                                                                                                                                                                                                                                             | 要点                                                                                                                                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ADR-1 单主循环 + 受控委托         | OpenAI Agents SDK：极小原语 `Agent` + `Handoffs / Agents-as-tools`（https://openai.github.io/openai-agents-python/ ）；A2A 明确「不是子代理 / 工具调用协议」（https://a2a-protocol.org/latest/ ）                                                                                    | 委托是「主 agent 调子工具 / 把会话交给另一 agent」两个明确语义，二者不可混用；内部编排不引入 A2A，A2A 留作未来对外扩展点                                                                               |
+| ADR-2 事件日志唯一事实源          | OpenHands SDK：events 是一等公民，conversation / workspace / events 由 SDK 显式拥有（https://github.com/OpenHands/software-agent-sdk ）                                                                                                                                              | append-only 事件 + replay / audit 是开源平台验证过的做法                                                                                                                                               |
+| ADR-8 Policy 独立判定             | MCP 规范：协议不 enforce 安全，「Tools represent arbitrary code execution」，consent / 授权流必须实现者自己做（https://modelcontextprotocol.io/specification/ ）                                                                                                                     | 权限判定天然不能信任工具描述 / 模型自述，必须框架层独立                                                                                                                                                |
+| 沙箱 / 运行时抽象                 | OpenAI Agents SDK SandboxAgent：manifest 声明工作区 + 沙箱后端可切换（本地 Unix / Docker）+ 会话可恢复（https://openai.github.io/openai-agents-python/ ）；OpenHands：内核（Agent Server）与界面（Canvas）分离，控制端可连多后端（https://github.com/OpenHands/software-agent-sdk ） | 单进程 CLI 也先把「执行内核」与「交互界面」用清晰边界隔开，未来加远程 agent / 云端长任务不改内核                                                                                                       |
+| ADR-9 分层合并语义                | Claude Code `settings-reference` 245 键：数组类（`permissions.allow`/`claudeMdExcludes`/`mcpServers`）跨层取并集，标量类（`model`/`defaultMode`）取最 specific 层，`permissions.deny` 全局优先且不可被任何 allow 翻案（https://code.claude.com/docs/en/settings ）                   | 分层配置的核心决策，不写清 = policy 合并一定写错方向；见 [security.md §4.1](./security.md#_4-1-配置优先级与权限规则合并-claude-code-settings-实证-出处-https-code-claude-com-docs-en-settings)         |
+| ADR-10 CLI 与 SDK 同内核          | Claude Code Agent SDK 通过 `query()` 起子进程复用同一 CLI 内核，hooks / MCP / skills / plugins / permission 全部按 CLI 契约加载（https://code.claude.com/docs/en/agent-sdk/overview ）                                                                                               | 同一份规则在两入口下语义一致，避免 SDK 用户与 CLI 用户行为漂移                                                                                                                                         |
+| 沙箱只覆盖 Bash，不覆盖工具执行层 | Claude Code 官方"沙箱不覆盖清单"：内置 Read/Edit/Write/WebFetch/WebSearch 走权限规则、hooks/本地 MCP/statusline 在沙箱外执行（https://code.claude.com/docs/en/sandboxing ）                                                                                                          | 沙箱覆盖率必须显式声明；mod-agent 的工具执行层必须独立受策略引擎约束，见 [security.md §3.3](./security.md#_3-3-沙箱不覆盖清单-claude-code-v2-1-300-实证-出处-https-code-claude-com-docs-en-sandboxing) |
 
 ### 4.1 协议层边界（MCP / A2A / ACP / AGENTS.md / Skills）
 
@@ -136,18 +142,19 @@ flowchart TB
 
 ## 3. 组件职责边界
 
-| 组件               | 职责                                          | 不应承担                           |
-| ------------------ | --------------------------------------------- | ---------------------------------- |
-| CLI / TUI          | 命令解析、流式渲染、Diff 展示、审批交互       | 不持有模型密钥、不直接执行任意命令 |
-| Agent Runtime      | 驱动主循环、状态转换、停止条件、预算控制      | 不把未校验的模型文本直接喂 shell   |
-| Planner            | 需求归一化、计划生成、动态重规划              | 不在阻塞性澄清未解决前进入执行     |
-| Context Builder    | 聚合规则、文件、符号、搜索结果、Git 状态      | 不把整个仓库无差别塞进上下文       |
-| Tool Registry      | 工具 Schema、风险标签、超时、幂等属性         | 不允许模型绕过 Policy 直连实现函数 |
-| Tool Policy        | 风险判定、审批分级、注入检测                  | 不依赖模型输出来决定授权           |
-| Sandbox / Worktree | 隔离工作区、命令生命周期、资源限制            | 不假设 Docker 能抵御所有宿主机风险 |
-| Validation Runner  | 类型检查 / lint / 测试 / 构建，结果归一化     | 不根据模型口头声明伪造通过结果     |
-| Persistence        | 任务、事件、检查点、审批、工具调用持久化      | 不把内存队列当唯一事实来源         |
-| Model Gateway      | Provider 适配、路由、用量统计、结构化输出校验 | 不与任务持久化耦合成一个大类       |
+| 组件               | 职责                                                                          | 不应承担                           |
+| ------------------ | ----------------------------------------------------------------------------- | ---------------------------------- |
+| CLI / TUI          | 命令解析、流式渲染、Diff 展示、审批交互                                       | 不持有模型密钥、不直接执行任意命令 |
+| Agent Runtime      | 驱动主循环、状态转换、停止条件、预算控制                                      | 不把未校验的模型文本直接喂 shell   |
+| Planner            | 需求归一化、计划生成、动态重规划                                              | 不在阻塞性澄清未解决前进入执行     |
+| Context Builder    | 聚合规则、文件、符号、搜索结果、Git 状态                                      | 不把整个仓库无差别塞进上下文       |
+| Tool Registry      | 工具 Schema、风险标签、超时、幂等属性                                         | 不允许模型绕过 Policy 直连实现函数 |
+| Tool Policy        | 风险判定、审批分级、注入检测                                                  | 不依赖模型输出来决定授权           |
+| Sandbox / Worktree | 隔离工作区、命令生命周期、资源限制                                            | 不假设 Docker 能抵御所有宿主机风险 |
+| Validation Runner  | 类型检查 / lint / 测试 / 构建，结果归一化                                     | 不根据模型口头声明伪造通过结果     |
+| Persistence        | 任务、事件、检查点、审批、工具调用持久化                                      | 不把内存队列当唯一事实来源         |
+| Session Manager    | 会话命名、fork / branch / resume / export，管理 transcript 与 worktree 的绑定 | 不接管工具执行、不判定权限         |
+| Model Gateway      | Provider 适配、路由、用量统计、结构化输出校验                                 | 不与任务持久化耦合成一个大类       |
 
 ## 4. 技术选型
 

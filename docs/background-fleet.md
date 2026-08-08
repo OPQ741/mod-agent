@@ -42,6 +42,18 @@
 | `claude attach <id>` | 在当前终端把某一个打开接管                               |
 | `claude logs <id>`   | 翻它最近的输出                                           |
 
+**状态色背后的数据契约**（Claude Code `agent-view.md` 实证，出处：https://code.claude.com/docs/en/agent-view ）：一张表只画一个"状态"是不够的，真实 Claude Code 把状态拆成三层字段，各回答一个问题：
+
+| 字段         | 取值                                                                                        | 回答的问题            |
+| ------------ | ------------------------------------------------------------------------------------------- | --------------------- |
+| `state`      | `working` / `blocked` / `done` / `failed` / `stopped`                                       | 这个活干到哪一步了？  |
+| `status`     | `busy` / `waiting` / `idle`                                                                 | 现在有没有 CPU 在跑？ |
+| `waitingFor` | `permission prompt` / `input needed` / `sandbox request` / `worker request` / `dialog open` | 卡住的话卡在谁身上？  |
+
+三层组合起来才能画出正确的状态色：一个 `state=working, status=idle` 的会话是"卡住等你回答"（红色高亮），一个 `state=working, status=busy` 的会话是"正常在跑"（绿色），一个 `state=blocked, waitingFor=worker request` 是"在等 worker 认领"（黄色）。mod-agent 的 `BackgroundSessions` 表 schema 就按这三列建，颜色是渲染层的映射，不是数据本身。
+
+detach 时的 in-flight 工作**必须一起搬去后台**——包括后台 shell、后台子 agent、dynamic workflows、`/loop` 定时任务、artifact 自动回复；只搬会话文本、丢下这些异步活不算真的 detach。反过来，`Ctrl+T` 在 agents 视图里 **pin** 一个会话，可以让它不被 1 小时不 attach 自动回收，是"我就想让它明早还在跑"的用户级例外。
+
 那张表的关键是**状态色**：把"哪个会话需要你介入"压缩成一列一眼扫过的信号，不必挨个 attach 进去看。列表里可直接**空格回一句、回车进去接管**。
 
 ### 3.1 一条会咬人的规则：attach 与 resume 互斥

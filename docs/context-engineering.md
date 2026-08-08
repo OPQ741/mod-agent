@@ -320,3 +320,10 @@ memory/
 - 系统提示词明确区分可信策略与不可信材料；
 - 无论模型如何解释这些材料，Policy 层都独立拦截越权读写、外网、凭证访问与危险命令；
 - 安全不能靠 prompt 提示模型警惕：IssueTrojanBench 实测 66.5% 恶意 issue 穿透了模型与框架防护，防护必须落在框架层（沙箱 / 审批 / 密钥隔离）。详见 [security.md](./security.md)。
+
+**输入净化清单**（Claude Code `interactive-mode.md` 实证，出处：https://code.claude.com/docs/en/interactive-mode ）：不可信内容进入模型之前，运行时按顺序做四道净化，成本极低但拦住一整类攻击。
+
+1. **不可见字符剥离**（`Enter` 前）：零宽空格（U+200B/200C/200D）、双向控制符（U+202A–U+202E、U+2066–U+2069）、Unicode Tag 段（U+E0000–U+E007F）在用户输入框按 Enter 前统一剥离，剥离时提示"Removed N invisible characters · review and press Enter to send"、允许用户回看。这一道覆盖的是"从网页 / 聊天复制携带 prompt injection"这一大类攻击；
+2. **指令形状扫描**（子代理输出回主对话前）：模仿 `<system-reminder>`、`Human:`、`Assistant:` 等指令形状的字符串会被插入反斜杠破坏，并加前缀 `[harness: ... matched instruction-shaped pattern(s)`。这是"模型生成、但由框架搬运进主上下文"的特殊类别（详见 [verification-and-multiagent.md §5.5](./verification-and-multiagent.md)）；
+3. **来源标注**：MCP 工具描述、Web 抓取内容、`!` shell mode 输出进入上下文时都带 `source: untrusted` 元数据，Policy 层不看它们作决策依据、系统提示词也不把它们当"用户话"来解释；
+4. **长度与形状硬限**：`additionalContext` / `systemMessage` / `initialUserMessage` 一律截断到 10,000 字符（Claude Code 值），防止单条被污染的 hook 输出撑爆上下文（详见 [tools-and-extensions.md §6.5](./tools-and-extensions.md)）。

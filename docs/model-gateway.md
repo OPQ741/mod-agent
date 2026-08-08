@@ -128,6 +128,30 @@ flowchart LR
 - **思考预算要显式承认为成本项**。新模型的自适应思考已经关不掉（界面直接显示关不掉的状态），且官方明写思考 token 即使被折叠或被脱敏也照常计费。我们的 [observability-evaluation.md §2](./observability-evaluation.md) 指标里应当有 thinking token 的独立计数。
 - **降级链要有长度上限与作用域**。过载时 `--fallback-model sonnet,haiku` 给一条链，去重后**最多三个型号**，且**只对当轮生效**，不改变会话默认。把降级做成临时行为而不是持久改配置，能避免"降级后没人改回来"这类运维事故。
 
+### 2.2 辅助模型与速度档
+
+出处：Claude Code `advisor.md`、`fast-mode.md`、`model-config.md` v2.1.300 实证。上一节只讲了"主模型怎么切"。真实 Claude Code 还有三件事值得单列，因为它们都不是"换个更贵的模型"能涵盖的：
+
+**① Advisor tool：主模型 + 强裁判**。在关键点把决策"升级"给一个更强模型判一次，主模型继续按判决执行。与 subagent 的区别是：advisor 不接管任务、不产生独立上下文，只回答"这一步该不该这么做"；与 model 切换的区别是：切了就一路切到底，advisor 只在关键节点回灌一次。工程要点三条：
+
+- Advisor 是**独立模型 + 独立 API key 池 + 独立 rate limit**，主模型撞限流时不能借道 advisor；
+- Advisor 复用主模型 prompt cache（官方明确"server tool 复用主模型的 cached prompt"），一次判决调用只付新增部分；
+- 会话内切换 advisor **不击穿缓存**（advisor 走 tool 通道，不动 system 静态块），这一点与切 model 击穿缓存形成对照，见 [§5.2](#_5-2-保持缓存有效的几条硬规则)。
+
+对应 [architecture.md ADR-11](./architecture.md)：mod-agent 把 advisor / evaluator / classifier 三种辅助角色统一封装在网关层，业务侧只调 `gateway.consult(role, prompt, opts)`，避免 autonomy（分类器）、verification（评估器）、workflows（决策裁判）三处各造一套。
+
+**② opusplan：按任务阶段切模型的双阶段别名**。规划那一轮用 Opus 想清楚，执行那一轮自动回落 Sonnet。它揭示一个方向：路由不只是"按风险分桶"（§2.1 表），还可以"按任务阶段"分。真实 Claude Code 里 `opusplan` 是一等别名，mod-agent 的 `ModelProvider` 路由层应保留一位 `planPhase` / `executePhase` 的模型分派钩子，让上层 planner 能声明"这两阶段用不同模型"，而不是把整个会话绑死一个。
+
+**③ Fast mode（Opus 高速档）与 effort 是两个正交轴**。同一 Opus 模型换一份 API 端点配置：延迟降到约 2.5 倍快、价格约 2 倍（Anthropic 定价 $8/$40 每 MTok 量级）。三个坑必须写清：
+
+- **首次开启击穿整段缓存**：cache 是按 model + endpoint 组合的，从标准 Opus 切到 fast Opus 相当于换后端，之前所有 cached input 全作废、按 uncached 全价重付一次；
+- **rate limit 自动降级**：撞 fast 端点限流时官方实现是**回落标准端点**而不是排队，UI 要显式提示"当前非 fast 模式"；
+- **Alt+O 快捷键与 `/fast` 命令是会话级、不落配置**，重启后回到 settings 里的 `fastMode: boolean`。
+
+对 mod-agent 落地：网关暴露两个正交轴——`effort: low|medium|high|xhigh|max`（模型内部思考预算）与 `speedTier: standard|fast`（后端点选择）——两者组合决定"发给哪个 endpoint 的哪个 model"。用户 UI 上分开展示（避免"我调了 effort 为 max 为什么还这么快"这种误解）。
+
+**④ 企业 allowlist**：真实 Claude Code 提供 `availableModels` 数组作为 managed 层键，限定会话内可切的模型集合。mod-agent 在 [security.md §4](./security.md) 的 managed 键集合里保留一位 `availableModels`，供 Phase 5 团队与企业能力使用（详见 [roadmap.md Phase 5](./roadmap.md)）。
+
 ## 3. 提示词版本管理
 
 - system policy、任务规划、工具说明、总结提示分层存放；
@@ -162,7 +186,8 @@ Anthropic 接口要求缓存点用 `cache_control` 标记，系统提示词里�
 - **动态尾巴不进静态块**：`cwd`、平台、git 状态、当前日期这些每次都变的内容，必须放在静态块之后；`CLAUDE.md` / `AGENTS.md` 因项目而异，放进首条 user 的 `<system-reminder>`，而不是系统提示词，否则静态块每个项目一份、缓存碎片化；
 - **内置工具分区排序、MCP 工具追加在后**：工具列表变化不能动到前面的静态前缀（见 [tools-and-extensions.md §1.1](./tools-and-extensions.md#_1-1-mcp-连接生命周期-工具发现、路由与调用)）；
 - **前缀缓存极其脆弱**：缓存点之前的任何一个字节变化，都会让其后的缓存全部失效，所以静态内容必须稳定、确定性渲染（无随机顺序、无时间戳）；
-- **缓存与压缩互相矛盾**：为腾窗口而裁剪、压缩历史，会改变已缓存的前缀。需要按缓存热度权衡：刚缓存上、利用率还低时不动它，等缓存 TTL 过期或窗口逼近上限再压缩（见 [context-engineering.md §5.1](./context-engineering.md#_5-1-分层压缩流水线-从最廉价到最重)）。
+- **缓存与压缩互相矛盾**：为腾窗口而裁剪、压缩历史，会改变已缓存的前缀。需要按缓存热度权衡：刚缓存上、利用率还低时不动它，等缓存 TTL 过期或窗口逼近上限再压缩（见 [context-engineering.md §5.1](./context-engineering.md#_5-1-分层压缩流水线-从最廉价到最重)）；
+- **会话内切换 model / speedTier 都击穿缓存，切 advisor / effort 不击穿**。这四类操作要按"是否改动 system 静态块"分类：切 model（含别名重解析到新后端）与开/关 fast mode（切后端点）都会让 cached prompt 全废、按 uncached 全价重付一次；advisor 走 tool 通道、effort 走 `thinking.budget_tokens` 参数，两者都不动前缀、缓存继续命中。UI 上第一次做击穿类切换要有"这一轮按全价重付"的显式提示，不能让用户以为换模型免费。
 
 ### 5.3 命中率监控
 

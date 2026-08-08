@@ -10,6 +10,8 @@
 
 先认清要防谁、防什么。mod-agent 至少要考虑这些入口：恶意 / 误导用户输入、仓库内 prompt injection（比如藏在 README、issue、HTML 注释里的指令）、恶意依赖脚本、工具参数注入、路径穿越、符号链接逃逸、网络访问 / SSRF、密钥泄漏、资源耗尽、MCP Server 被攻陷、模型误生成危险命令、重试造成重复副作用。
 
+一条 2026 年才浮出水面、但代价极低的入口值得单列：**用户从网页、issue、聊天里复制粘贴的文本可能携带不可见字符**（零宽空格 U+200B / U+200D、双向控制符 U+202A–U+202E、Unicode Tag 字符 U+E0000 段），肉眼看不到但会改变模型对文本结构的解析，是 prompt injection 的一条"隐形"通道。真实 Claude Code 在输入框按 Enter 前会主动剥离这些字符并显示"Removed N invisible characters · review and press Enter to send"。mod-agent 的输入净化管线（详见 [context-engineering.md §6](./context-engineering.md#_6-输入注入与不可信内容)）从 Phase 1 就要接上这一条：不追求 100% 覆盖，只保证"复制粘贴携带"这一大类可预防攻击不再需要模型自觉。
+
 ## 2. 关键实证（为什么防护必须落框架层）
 
 这些真实数据说明一件事：光靠提示模型提高警惕挡不住攻击，必须在框架层硬拦。
@@ -198,7 +200,8 @@ interface CommandRequest {
 
 - `allow` 列表跨层取并集；`deny` / `ask` 优先且立即生效（不需要信任文件夹）；
 - 团队提交的 `allow` 规则需用户信任文件夹后才生效；`deny` 不受此限，即"团队可以放权，但绝不能越权替你解禁"；
-- 个人例外写 `settings.local.json`，自动加进 git exclude，不污染团队。
+- 个人例外写 `settings.local.json`，自动加进 git exclude，不污染团队；
+- **合并语义按键类型区分**（对应 [architecture.md ADR-9](./architecture.md)）：数组类键（`permissions.allow`、`permissions.deny`、`claudeMdExcludes`、`mcpServers`）跨层取并集；标量类键（`model`、`defaultMode`、`autoCompactWindow`）按"最 specific 层"替换、不做合并。两类混在同一次合并里，如果按直觉"整体覆盖 / 整体合并"实现，都会写错方向。
 
 > 比如，团队在仓库里塞一条"允许跑 npm test"的规则，得你点了信任这个文件夹才作数；但团队绝对写不了一条"帮你把 sudo 也允许了"，因为 `deny` 永远压过 `allow`，且个人能在 `settings.local.json` 里加自己的例外。
 
@@ -219,15 +222,19 @@ flowchart TD
     M -- auto --> C["分类器裁决（两段式 + 脱敏）"]
     M -- acceptEdits --> E["编辑放行 / 命令仍问"]
     M -- default --> Q["交互式确认（有 TTY）"]
+    M -- dontAsk --> DN["一律拒绝<br/>（无人值守比 bypass 安全得多）"]
     M -- bypass --> Y["放行（bypass-immune 仍拦）"]
     C -- 拿不准/异常 --> Q
     C -- deny --> X
     Q -- 无 TTY --> X2["拒绝（不静默放行）"]
     style X fill:#ff6b6b,color:#fff
     style X2 fill:#ff6b6b,color:#fff
+    style DN fill:#ff6b6b,color:#fff
     style P fill:#d4edda
     style Y fill:#fff3cd
 ```
+
+**为什么 `dontAsk` 是必备档**（Claude Code 六模式实证，出处：https://code.claude.com/docs/en/permission-modes ）：语义是"本该弹框的动作一律自动拒绝"，而不是"全放行"。CI / 无人值守场景下，`bypassPermissions` 把安全检查一起关掉、太危险；`default` 在没有 TTY 时又必须回落拒绝（等同 dontAsk）；把它单独立成一档的意义在于**意图显式**——运维选它就是在承诺"宁可漏做、也绝不错做"，配置审阅时一眼可辨。mod-agent 的 `--mode` / `permissions.defaultMode` 必须支持这一档，作为 `--print` / `--bare` 未显式给档时的回落默认。
 
 配套规则：
 
@@ -265,4 +272,9 @@ flowchart TD
 - [ ] 命令白名单按「程序 + 参数」判定，而非只匹配程序名（[§3.2](#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证) 失败模式 3）；
 - [ ] 「看着像数据、实则是代码」的位置有独立高危清单：工作区 hook 配置、IDE task 配置、venv 解释器、`.git` 元数据、CI 配置（[§3.2](#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证) 失败模式 2）；
 - [ ] 沙箱外特权守护进程（Docker socket / SSH agent / 云凭证目录）确认不可达（[§3.2](#_3-2-「沙箱没被打破-人却出来了」-2026-年最值得记住的一次实证) 失败模式 4）；
-- [ ] 沙箱辅助二进制自身有完整性校验，不被 agent 覆写。
+- [ ] 沙箱辅助二进制自身有完整性校验，不被 agent 覆写；
+- [ ] `bypassPermissions` 在 Linux / macOS 上以 root 或 `sudo` 启动时被拒、以 `--restricted` 启动时被拒（fail-closed，与厂商一致；出处 https://code.claude.com/docs/en/permission-modes ）；
+- [ ] Managed 层配置文件解析失败时**拒绝启动**，而不是"当作没有策略继续跑"；
+- [ ] Worktree 隔离四条硬拦截（[code-editing.md §3.3](./code-editing.md#_3-3-worktree-隔离的四条硬拦截)）默认 bypass-immune，`--dangerously-skip-permissions` 也不豁免；
+- [ ] 输入净化管线剥离零宽 / 双向 / Unicode Tag 字符，剥离时提示用户 review（[§1](#_1-威胁模型)）；
+- [ ] 权限模式跨 `--resume` 恢复按矩阵重算（[agent-loop.md §5.2](./agent-loop.md#_5-2-权限模式的恢复矩阵)），高危档不静默继承。

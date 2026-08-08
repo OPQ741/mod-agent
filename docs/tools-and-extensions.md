@@ -78,6 +78,8 @@ sequenceDiagram
 落地要点：
 
 - **三段式命名**：每个外部工具重命名为 `mcp__<serverName>__<toolName>`，既避免不同 server 同名工具冲突，也让模型与权限规则能精确路由到具体 server；
+- **命名长度显式校验、不静默丢弃**：真实 Claude Code 的 `mcp__<server>__<tool>` 全长超过 **128 字符**时直接把这条工具**丢掉不发给模型**，属于典型"静默失败"。mod-agent 的注册阶段必须显式校验并报错 `MCP tool name too long: mcp__<server>__<tool> (N > 128)`，让 server owner 改命名而不是让模型看不见工具；
+- **凭据名模板变量例外**：真实 Claude Code 的 `.mcp.json` 里 `${VAR}` 与 `${VAR:-default}` 支持变量展开，**但** `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`AWS_BEARER_TOKEN_BEDROCK`、`HTTPS_PROXY`、`NPM_TOKEN` 五个"看起来像凭据"的名字在远端 `url` 与 `headers` 字段里会被读成空且不套用默认值，防止 `.mcp.json` 里 `${ANTHROPIC_API_KEY}` 被静默展开外送到第三方 server。mod-agent 的模板变量替换必须显式维护一份"凭据黑名单"（默认至少含上面这五个）并做同样的处理；
 - **懒加载 + 失败隔离**：server 可按需启动而非开局全拉起；单个 server 启动失败、发现超时或调用超时，只让它名下的工具不可用，不能拖垮主进程或其他 server；连接、发现、调用各设独立超时；
 - **合并进工具池时分区排序**：内置工具按字母序在前、MCP 工具追加在后，不做全局混排。缓存断点设在最后一个内置工具之后，动态挂接的 MCP 工具不影响内置工具部分的前缀缓存命中（见 [system-prompt.md §6](./system-prompt.md#_6-工具清单如何呈现给模型)、[model-gateway.md](./model-gateway.md)）；
 - **工具 schema 也要过校验**：server 声明的参数模式在注册时做兼容性校验，畸形 schema 不注册；工具结果一律标记为不可信数据，走 [context-engineering.md §6](./context-engineering.md#_6-输入注入与不可信内容) 的注入防护。注意：2026-07-28 起 `inputSchema` 支持完整 JSON Schema 2020-12（含 `oneOf` / `anyOf` / `$ref`），校验器不能再假设它是扁平结构。
@@ -403,6 +405,14 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 
 > 技能发现遵循项目级覆盖用户级（先加载用户目录、再加载项目目录，同名以项目为准）；启动时只载入 frontmatter，正文调用时才读取。技能清单也要受 token 预算约束：预算充足时全量展示描述，紧张时保留内置常用技能的完整描述、其余降级为仅列名称。
 
+**Skill listing 预算的具体规格**（Claude Code v2.1.300 实证，出处：https://code.claude.com/docs/en/skills ）：把上面那句"预算约束"落成三个数，mod-agent 直接照抄：
+
+- **单条描述截断 1,536 字符**：`description` 与 `when_to_use` 合并后硬截；配置键 `skillListingMaxDescChars` 可调，但不能设成不限；
+- **总预算 = 模型上下文窗口的 1%**：配置键 `skillListingBudgetFraction`（默认 `0.01`）或环境变量 `SLASH_COMMAND_TOOL_CHAR_BUDGET` 直接给绝对字符数。这条预算的隐含意义：装了 40 个技能、每个描述 500 字符，一共 20,000 字符 ≈ 5,000 token，逼近 200K 窗口的 1%——再多就要开始丢描述；
+- **超预算从最少调用的先丢**：按调用频次升序，先降级为"只列名字"、再降级为"完全不列"。这条排序判据是"用过多少次的运行时统计"，不是安装顺序，也不是字母序。
+
+预算告警的 UI 侧：真实 Claude Code 给了 `/skill-doctor` 命令，列出每个 skill 的上下文成本与调用频次，让用户自己判断哪个该改短描述、哪个该卸载。mod-agent 也应有等价入口（`/skills audit`），不要让用户对着黑箱调"为什么我装了 30 个 skill 模型开始不用了"。
+
 ### 6.3 选择与版本管理
 
 - 由轻量 Router 按任务类型召回候选；明确的用户指令优先；
@@ -441,7 +451,7 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 3. PostToolUse 两种介入：`additionalContext`（向上下文追加事实，如当前分支 / 测试命令；超长则落盘只传路径）、`updatedToolOutput`（替换模型看到的工具输出，如把 stdout 里的密钥打码为 `[redacted]`，不影响已发生的副作用）；
 4. 写作要求：追加内容用陈述句事实，避免祈使句式系统指令，否则会触发模型的 prompt-injection 防御而被丢弃。
 
-真实 Claude Code 的完整 Hooks 体系（v2.1.300 快照，逐页核实于 2026-10-15）：上表 6 个是最高频的子集，官方事件表实际列了 **33 个事件**，按生命周期五组分布：会话级 `SessionStart`、`Setup`、`SessionEnd`、`ConfigChange`、`InstructionsLoaded`；轮次级 `UserPromptSubmit`、`UserPromptExpansion`、`MessageDisplay`、`Stop`、`StopFailure`、`PreCompact`、`PostCompact`、`PreModelSwitch`、`PostModelSwitch`、`Notification`；工具级 `PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`PostToolBatch`、`PermissionRequest`、`PermissionDenied`、`Elicitation`、`ElicitationResult`；子代理与团队 `SubagentStart`、`SubagentStop`、`TaskCreated`、`TaskCompleted`、`TeammateIdle`；工作区 `CwdChanged`、`DirectoryAdded`、`FileChanged`、`WorktreeCreate`、`WorktreeRemove`。执行器类型也不再只有命令行一种，官方支持 `command`、`http`、`mcp_tool`、`prompt`、`agent` 五种（最后一种标注 experimental）。
+真实 Claude Code 的完整 Hooks 体系（v2.1.300 快照，逐页核实于 2026-08-15）：上表 6 个是最高频的子集，官方事件表实际列了 **33 个事件**，按生命周期五组分布：会话级 `SessionStart`、`Setup`、`SessionEnd`、`ConfigChange`、`InstructionsLoaded`；轮次级 `UserPromptSubmit`、`UserPromptExpansion`、`MessageDisplay`、`Stop`、`StopFailure`、`PreCompact`、`PostCompact`、`PreModelSwitch`、`PostModelSwitch`、`Notification`；工具级 `PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`PostToolBatch`、`PermissionRequest`、`PermissionDenied`、`Elicitation`、`ElicitationResult`；子代理与团队 `SubagentStart`、`SubagentStop`、`TaskCreated`、`TaskCompleted`、`TeammateIdle`；工作区 `CwdChanged`、`DirectoryAdded`、`FileChanged`、`WorktreeCreate`、`WorktreeRemove`。执行器类型也不再只有命令行一种，官方支持 `command`、`http`、`mcp_tool`、`prompt`、`agent` 五种（最后一种标注 experimental）。
 
 | 决策类型       | 效果                                               |
 | -------------- | -------------------------------------------------- |

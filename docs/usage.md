@@ -88,23 +88,29 @@ mod-agent 把"agent 的手能伸多远"分成四档：`ask`、`plan`、`edit`、
 
 ### 4.1 会话内斜杠命令
 
-| 命令                                 | 作用                                           | 依据                                              |
-| ------------------------------------ | ---------------------------------------------- | ------------------------------------------------- |
-| `/goal <目标>`                       | 给一个可判定目标，自跑外循环直到达成或判不可能 | [autonomy.md §1](./autonomy.md)                   |
-| `/loop [间隔/dynamic] <任务>`        | 定时或自排程续跑，如 `/loop 10m 检查 CI 状态`  | [autonomy.md §2](./autonomy.md)                   |
-| `/schedule <任务>`                   | 把循环改成脱离会话的云端计划，关会话也不停     | [autonomy.md §2.4](./autonomy.md)                 |
-| `/bg`                                | 把当前会话摘到后台常驻，终端立刻腾出来         | [background-fleet.md §2](./background-fleet.md)   |
-| `ultracode`（写在需求里）            | 本轮 opt-in 成动态工作流，模型现写脚本 fan-out | [dynamic-workflows.md §8](./dynamic-workflows.md) |
-| `/effort ultracode`                  | 会话级常驻开启工作流编排                       | [dynamic-workflows.md §8](./dynamic-workflows.md) |
-| `/workflows`                         | 看每个工作流的实时 phase 与进度                | [dynamic-workflows.md §8](./dynamic-workflows.md) |
-| `/mode <ask\|plan\|edit\|autopilot>` | 切换任务模式                                   | 本文约定                                          |
-| `/model <id>`                        | 切换当前会话用的模型                           | 本文约定                                          |
-| `/diff` `/review`                    | 逐文件审 agent 这次的改动                      | [code-editing.md §5](./code-editing.md)           |
-| `/restore`                           | 把改动退回某个检查点（三种退法见 §7）          | [code-editing.md §3.1](./code-editing.md)         |
-| `/rules`                             | 查看当前拼进上下文的项目规则及来源             | 本文约定                                          |
-| `/compact`                           | 手动压缩历史，逼近上下文上限前腾出空间         | 本文约定（机制见 context-engineering.md §5）      |
-| `/resume` `/sessions`                | 找回历史会话                                   | 本文约定（存储见 data-and-events.md）             |
-| `/help`                              | 全部命令                                       | 本文约定                                          |
+| 命令                                 | 作用                                                                                                            | 依据                                                                                   |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `/goal <目标>`                       | 给一个可判定目标，自跑外循环直到达成或判不可能                                                                  | [autonomy.md §1](./autonomy.md)                                                        |
+| `/loop [间隔/dynamic] <任务>`        | 定时或自排程续跑，如 `/loop 10m 检查 CI 状态`                                                                   | [autonomy.md §2](./autonomy.md)                                                        |
+| `/schedule <任务>`                   | 把循环改成脱离会话的云端计划，关会话也不停                                                                      | [autonomy.md §2.4](./autonomy.md)                                                      |
+| `/bg`                                | 把当前会话摘到后台常驻，终端立刻腾出来                                                                          | [background-fleet.md §2](./background-fleet.md)                                        |
+| `ultracode`（写在需求里）            | 本轮 opt-in 成动态工作流，模型现写脚本 fan-out                                                                  | [dynamic-workflows.md §8](./dynamic-workflows.md)                                      |
+| `/effort ultracode`                  | 会话级常驻开启工作流编排                                                                                        | [dynamic-workflows.md §8](./dynamic-workflows.md)                                      |
+| `/workflows`                         | 看每个工作流的实时 phase 与进度                                                                                 | [dynamic-workflows.md §8](./dynamic-workflows.md)                                      |
+| `/mode <ask\|plan\|edit\|autopilot>` | 切换任务模式                                                                                                    | 本文约定                                                                               |
+| `/output-style <name>`               | 切换输出风格（Default / Proactive / Concise / Explanatory / Learning / 自定义）；与 `/mode` 是两个正交轴        | [system-prompt.md §6.1](./system-prompt.md)                                            |
+| `/model <id>`                        | 切换当前会话用的模型                                                                                            | 本文约定                                                                               |
+| `/rename <name>`                     | 给当前会话命名，之后可用 `--resume <name>` 直接续跑                                                             | Claude Code `sessions.md` 实证：exact match 直启、ambiguous 打开 picker                |
+| `/branch [name]`                     | 从当前 turn 复制一份会话到新 ID（原 transcript 不动），适合"我想试另一种做法但不想丢掉现有进度"                 | Claude Code `sessions.md` 实证；见 [agent-loop.md §5.1](./agent-loop.md) 会话语义      |
+| `/diff` `/review`                    | 逐文件审 agent 这次的改动                                                                                       | [code-editing.md §5](./code-editing.md)                                                |
+| `/restore`                           | 把改动退回某个检查点（三种退法见 §7）                                                                           | [code-editing.md §3.1](./code-editing.md)                                              |
+| `/rules`                             | 查看当前拼进上下文的项目规则及来源                                                                              | 本文约定                                                                               |
+| `/context`                           | 打开上下文体检面板：本次会话真正加载了哪些规则文件、多少 MCP 工具、每类内容占多少 token、超上限时给腾空间的建议 | Claude Code `context-window.md` 实证；配置漂移时的第一排查入口                         |
+| `/doctor`                            | 只读诊断：解析有效配置、检查凭据、跑一次 `hello` 冒烟；`/doctor prompt-audit` 审计规则文件陈旧与自相矛盾        | Claude Code `debug-your-config.md` 实证                                                |
+| `/usage` `/status`                   | 查看当前会话花费、缓存命中、剩余预算                                                                            | 本文约定（成本口径见 [observability-evaluation.md §2](./observability-evaluation.md)） |
+| `/compact`                           | 手动压缩历史，逼近上下文上限前腾出空间                                                                          | 本文约定（机制见 context-engineering.md §5）                                           |
+| `/resume` `/sessions`                | 找回历史会话                                                                                                    | 本文约定（存储见 data-and-events.md）                                                  |
+| `/help`                              | 全部命令                                                                                                        | 本文约定                                                                               |
 
 ### 4.2 启动参数（CLI flags）
 
@@ -197,15 +203,19 @@ $ mod --continue
 
 有一点容易踩：一个已经 `/bg` 到后台的会话，你不能在别处直接 `--resume` 它，得先 attach 上或在那台后台里停掉（attach 与 resume 互斥，[background-fleet.md §3.1](./background-fleet.md)）。
 
-快捷键这几处是本文第一次成文的设计约定，实现时以专题为准：
+快捷键这几处是本文第一次成文的设计约定，实现时以专题为准。**关键区分**：agent 在跑的时候你完全可以继续打字，`Enter` 是排队到本轮 turn 结束后再冲刷、不中断当前工作；只有 `Ctrl+Enter` 或 `Esc` 才会真打断（详见 [agent-loop.md §2.5](./agent-loop.md)）。
 
-| 键       | 作用                      | 备注                            |
-| -------- | ------------------------- | ------------------------------- |
-| `Enter`  | 确认计划 / 批准高亮选项   | 计划与审批框里表示"就这个"      |
-| `Esc`    | 取消当前提议 / 关审批框   | 不是退出会话，别和 Ctrl-C 混了  |
-| `Ctrl-C` | 暂停这一轮 / 中断流式生成 | 落检查点后退出，可 `--continue` |
-| `e`      | 在计划处进入编辑          | 改完再放行                      |
-| `Ctrl-D` | 退出会话                  | 已发生的副作用不假装回滚        |
+| 键           | 作用                                           | 备注                                                                              |
+| ------------ | ---------------------------------------------- | --------------------------------------------------------------------------------- |
+| `Enter`      | 排队注入下一条消息（不打断） / 批准高亮选项    | Agent 忙时提交即入队，turn 结束前不 abort                                         |
+| `Ctrl+Enter` | 立即发送：打断当前 turn、把新输入当轮起点      | 走 AbortController → 落 checkpoint → 重启 turn                                    |
+| `Esc`        | 中断当前生成，**保留已完成的工作**             | 已改文件不回滚；关闭审批框（不是退出会话）                                        |
+| `Ctrl-C`     | 暂停这一轮 / 中断流式生成                      | 落检查点后退出，可 `--continue`                                                   |
+| `Ctrl-B`     | 把当前正在跑的 Bash 或子 agent 摘到后台        | 主循环继续响应；对齐 [background-fleet.md](./background-fleet.md)                 |
+| `Ctrl-O`     | 展开 transcript viewer，看 thinking 与工具细节 | 只读视图，不改任何东西                                                            |
+| `e`          | 在计划处进入编辑                               | 改完再放行                                                                        |
+| `Tab`        | 审批框里附加"为什么批 / 为什么拒"的评论        | 一次审计证据，随 `approval.decided` 落库（[agent-loop.md §2.5](./agent-loop.md)） |
+| `Ctrl-D`     | 退出会话                                       | 已发生的副作用不假装回滚                                                          |
 
 回退分三种，不是一把梭（[code-editing.md §3.1](./code-editing.md)）：
 
@@ -235,6 +245,7 @@ $ mod --continue
 6. **CI 里无人值守跑一遍**：`mod --print "<需求>" --output-format stream-json --bare --settings ci.json`，不加载仓库自带扩展与规则，退出码 0/非 0 直接给流水线分支。
 7. **只想读懂代码不想动手**：`/mode ask` 后问"解释这个页面的请求链路"，它只查不改，结论带文件路径与符号证据。
 8. **盯一个会自己变的信号**：`/loop 10m 检查 CI 状态`，红了就报；要跑完这一整个下午就 `/bg` 摘到后台，或 `/schedule` 转成脱离会话的云端计划。
+9. **Coding Agent 与 UI 自动验证**：修改代码后启动开发服务，打开真实页面，执行交互测试、记录截图并检查控制台错误。对于视觉问题，再将实际渲染与设计参考进行对比，形成“修改 → 验证 → 修复”的闭环。
 
 ## 10. 常见问题与边界
 

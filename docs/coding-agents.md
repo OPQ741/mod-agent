@@ -1,6 +1,6 @@
 # Coding Agent Landscape · Coding Agent 全景图鉴（对标）
 
-> 这篇把 2026 年市面上能自己动手写代码的 AI（Coding Agent）的主流形态汇总在一起：它们长什么样、开不开源、用什么模型、怎么改代码、怎么防出错，以及哪些机制值得 mod-agent 借鉴。所有链接与许可证均于 2026-10-14 逐个打开核对。项目体量只给规模档位（10万+ / 数万 / 数千 / 数百）不给精确 star 数，因为那是一天就能变的数字，只用来判断「有没有人在用」，不用来排序。
+> 这篇把 2026 年市面上能自己动手写代码的 AI（Coding Agent）的主流形态汇总在一起：它们长什么样、开不开源、用什么模型、怎么改代码、怎么防出错，以及哪些机制值得 mod-agent 借鉴。所有链接与许可证均于 2026-08-14 逐个打开核对。项目体量只给规模档位（10万+ / 数万 / 数千 / 数百）不给精确 star 数，因为那是一天就能变的数字，只用来判断「有没有人在用」，不用来排序。
 
 > **没接触过这类工具的话，先看这三句**：
 >
@@ -24,7 +24,7 @@
 
 > 名词预备：**MCP** = agent 接外部工具的统一插头；**BYOK** = Bring Your Own Key，自带模型 API Key；**ACP** = Agent Client Protocol，编辑器（如 Zed）把外部 CLI agent 挂进来当后端的协议；**沙箱** = 把 agent 关进隔离环境，让它碰不到你的系统和密钥；**worktree** = Git 给同一仓库开多个互不干扰的工作目录。
 
-> 2026-10 扩容后的两点口径说明：分类框架不动（四类加一类协议），表也不重排，但 ④ 与 ⑤ 里新长出三种此前没有的形态：**CLI 转 SDK**（§4.20，SDK 不重写逻辑，只把自家 CLI 当子进程包起来）、**协议与观测语义标准**（§4.24 ACP 管编辑器↔agent，§4.25 OTel GenAI 管 trace 字段命名）、**策略与规约即代码**（§4.26，命令白名单写成可测试文件，规约三件套做成独立工具包），它们分别归进 ④ 与 ⑤。项目总数按画像条目计：Continue 的 CLI 与 IDE 两种形态算 1 个项目、占 2 条画像。
+> 2026-08 扩容后的两点口径说明：分类框架不动（四类加一类协议），表也不重排，但 ④ 与 ⑤ 里新长出三种此前没有的形态：**CLI 转 SDK**（§4.20，SDK 不重写逻辑，只把自家 CLI 当子进程包起来）、**协议与观测语义标准**（§4.24 ACP 管编辑器↔agent，§4.25 OTel GenAI 管 trace 字段命名）、**策略与规约即代码**（§4.26，命令白名单写成可测试文件，规约三件套做成独立工具包），它们分别归进 ④ 与 ⑤。项目总数按画像条目计：Continue 的 CLI 与 IDE 两种形态算 1 个项目、占 2 条画像。
 
 ### 0.0 零基础怎么读这张图鉴（先读这节）
 
@@ -171,7 +171,7 @@ flowchart TD
 
 1. **形态收敛**：无论 CLI、IDE 还是云端，核心都是自主循环 + 工具调用 + 人在关键点审批 + 产出可审查的 Git 变更，差异只在运行环境与自主程度的高低。
 2. **开源生态默认 BYOK + MCP**：开源项目几乎都不锁模型、不做模型中间商，且把 MCP 作为工具扩展的标准；商业产品则靠订阅、托管环境和协作取胜。
-3. **2026 年的洗牌信号**：Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 进入维护模式、Amazon Q CLI 转闭源。选型时要把 项目活跃度 + 许可证性质 当硬指标，不能只看 star。2026-10 扩容这一批又补进两条同类信号：JetBrains 的 Fleet 于 2025-12-22 关停让位 Air，Kiro 把前身 CLI 的 Apache-2.0 换成 AWS IP License。
+3. **2026 年的洗牌信号**：Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 进入维护模式、Amazon Q CLI 转闭源。选型时要把 项目活跃度 + 许可证性质 当硬指标，不能只看 star。2026-08 扩容这一批又补进两条同类信号：JetBrains 的 Fleet 于 2025-12-22 关停让位 Air，Kiro 把前身 CLI 的 Apache-2.0 换成 AWS IP License。
 
 ---
 
@@ -412,8 +412,8 @@ flowchart TD
 #### 1.11 Pi（earendil-works/pi）
 
 - **一句话看懂**：刻意做小的终端 agent harness：内核只管循环和工具下发，其余能力靠扩展挂上去；它最出名的主张是「让模型写脚本来调工具」，而不是一个个发 JSON 工具调用。
-- **形态与平台**：终端 CLI（TypeScript 实现），2026-10-01 发布 1.0。与 mod-agent 同为 TS 技术栈的终端 agent。
-- **是否开源 / 许可证**：开源，MIT。体量：10万+（第三方清单记载，官方仓库页未直接显示该数字，口径按第三方记，2026-10 核实）。
+- **形态与平台**：终端 CLI（TypeScript 实现），2026-08-01 发布 1.0。与 mod-agent 同为 TS 技术栈的终端 agent。
+- **是否开源 / 许可证**：开源，MIT。体量：10万+（第三方清单记载，官方仓库页未直接显示该数字，口径按第三方记，2026-08 核实）。
 - **支持模型 / 供应商**：未核实。
 - **核心架构与运行机制**：三个机制撑起它的差异：**Codemode**（模型写一段脚本，在脚本里批量调用 MCP 工具，一次跑完再回结果）、**deferred tool loading**（工具 schema 平时不进 prompt，模型真要用才下发，官方称约省 40% prompt token）、Pi Durable（可恢复会话）。
 - **上下文与代码检索**：未核实。
@@ -430,7 +430,7 @@ flowchart TD
 
 - **一句话看懂**：xAI 把自家终端 agent 开源出来的产物，开源起因是一次事故：整个仓库连 `.env` 一起被上传，属被动开源。
 - **形态与平台**：终端 CLI（Rust 实现），2026-07-15 开源。
-- **是否开源 / 许可证**：开源，Apache-2.0。体量：数万（2026-10 核实；开源后 9 天即进入该档）。
+- **是否开源 / 许可证**：开源，Apache-2.0。体量：数万（2026-08 核实；开源后 9 天即进入该档）。
 - **支持模型 / 供应商**：xAI 自家模型为主，其它 provider 的配置细节未核实。
 - **核心架构与运行机制**：**Actor 模型 runtime**（每个 agent 是一个消息驱动的 actor）；任务按 Plan / Execute / Verify 三阶段推进；最多 8 个并行子 agent，每个各占一个 git worktree；另有 Arena mode（多个 agent 同题竞跑，横向比产出）。
 - **上下文与代码检索**：未核实。
@@ -630,7 +630,7 @@ flowchart TD
 
 - **一句话看懂**：开源圈最流行的 VS Code agent 扩展，前身叫 Claude-dev，理念是"你的 Key、你的模型、每一步都经你确认"。
 - **形态与平台**：VS Code 侧边栏扩展；同时提供 SDK、IDE 扩展、Headless CLI（CI/CD 可用）；CLI 2.0 起通过 ACP 可进 JetBrains、Zed、Neovim 等。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/cline/cline （体量：数万，2026-10 核实）；创始人为 Saoud Rizwan，扩展 ID 仍带 `claude-dev`。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/cline/cline （体量：数万，2026-08 核实）；创始人为 Saoud Rizwan，扩展 ID 仍带 `claude-dev`。
 - **支持模型 / 供应商**：BYOK，自带 Anthropic / OpenAI / Google / Mistral 等 Key，或 Ollama 本地模型；不锁定厂商。
 - **核心架构与运行机制**：Plan-and-Act 两阶段：Plan 模式只推理不动文件，Act 模式才自主改文件、跑终端、操作浏览器；执行中监听 linter/编译器报错并自修（补 import、修类型）。
 - **上下文与代码检索**：读项目结构、理解文件关系做跨文件协调（索引方案细节未核实）。
@@ -648,7 +648,7 @@ flowchart TD
 
 - **一句话看懂**：从 Cline fork 出来的 AI 开发团队扩展，主打多种角色 agent；但 2026-05-15 已正式停服、仓库归档。
 - **形态与平台**：VS Code 扩展（兼容 Cursor / Windsurf 等所有 VS Code fork）。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/RooCodeInc/Roo-Code （体量：数万，2026-10 核实），仓库顶部明确标注 Public archive，并声明"The Roo Code Extension was shut down on May 15th"，引导用户转社区 fork ZooCode 或回 Cline；付费用户 billing@roocode.com。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/RooCodeInc/Roo-Code （体量：数万，2026-08 核实），仓库顶部明确标注 Public archive，并声明"The Roo Code Extension was shut down on May 15th"，引导用户转社区 fork ZooCode 或回 Cline；付费用户 billing@roocode.com。
 - **支持模型 / 供应商**：BYOK，Claude / GPT / Gemini / Ollama 本地模型均可。
 - **核心架构与运行机制**：多角色模式：Architect（规划设计，只读+仅改 md）/ Code（实现，全权文件+终端）/ Debug（诊断）/ Ask（只问答不改文件）/ Orchestrator（跨模式派发任务）；另有 Boomerang 编排：派生子 agent 做隔离子任务，结果回收。
 - **上下文与代码检索**：随角色注入不同系统提示与工具集。
@@ -665,7 +665,7 @@ flowchart TD
 
 - **一句话看懂**：Roo/Cline 谱系里仍在活跃的全能 agent 平台，500+ 模型可随时切换、零加价，还自带云端 agent。
 - **形态与平台**：VS Code 扩展、JetBrains 插件、CLI 三栖。
-- **是否开源 / 许可证**：开源，MIT。仓库 https://github.com/Kilo-Org/kilocode （体量：数万，2026-10 核实）。
+- **是否开源 / 许可证**：开源，MIT。仓库 https://github.com/Kilo-Org/kilocode （体量：数万，2026-08 核实）。
 - **支持模型 / 供应商**：500+ 模型、任务中途可切换，按模型方原价零加价；注册即用、无需先有 Key。
 - **核心架构与运行机制**：Agent Manager 管理多会话，每个会话有独立 worktree 目录下的专属终端；Cloud Agent 在远程开发环境里读写 GitHub/GitLab/Bitbucket 仓库、跑命令、可提交推送；支持远程连接（本地算力、云端窗口）。
 - **上下文与代码检索**：skill 文件夹（`kilocode/skills/`）自动可用。
@@ -683,7 +683,7 @@ flowchart TD
 
 - **一句话看懂**：最早的开源 coding agent 之一，CLI + VS Code 扩展 + JetBrains 插件三栖；现已停止维护、仓库只读。
 - **形态与平台**：VS Code 扩展、JetBrains 插件、CLI。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/continuedev/continue （体量：数万，2026-10 核实），README 顶部明确"`continuedev/continue` 仓库不再活跃维护、对所有人只读"；发布了收尾的 2.0.0（移除匿名遥测、拆出鉴权、修 bug），并建议 JetBrains 用户改用 CLI。2026-06-16 被 Cursor 母公司收编（团队并入），仓库转为只读，最终版仍是 2.0.0。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/continuedev/continue （体量：数万，2026-08 核实），README 顶部明确"`continuedev/continue` 仓库不再活跃维护、对所有人只读"；发布了收尾的 2.0.0（移除匿名遥测、拆出鉴权、修 bug），并建议 JetBrains 用户改用 CLI。2026-06-16 被 Cursor 母公司收编（团队并入），仓库转为只读，最终版仍是 2.0.0。
 - **支持模型 / 供应商**：BYOK，可接任意模型（历史定位即模型无关）。
 - **核心架构与运行机制**：历史上主打 chat / autocomplete / agent；2026 停更后新机制未核实。
 - **上下文与代码检索**：历史上有 codebase 索引 / @-引用（停更后细节未核实）。
@@ -697,7 +697,7 @@ flowchart TD
 
 - **一句话看懂**：Atom / Tree-sitter 原班人马用 Rust 写的高性能多人协作编辑器；它的 AI 特色是自己有 agent，还能当别人 agent 的宿主。
 - **形态与平台**：独立原生编辑器（Rust，自研 GPU 渲染 GPUI）；macOS / Linux / Windows。
-- **是否开源 / 许可证**：开源，主要 GPL-3.0-or-later（标注为 Apache-2.0 的组件除外）。仓库 https://github.com/zed-industries/zed （体量：数万，2026-10 核实）；开发方 Zed Industries, Inc. 为营利公司。
+- **是否开源 / 许可证**：开源，主要 GPL-3.0-or-later（标注为 Apache-2.0 的组件除外）。仓库 https://github.com/zed-industries/zed （体量：数万，2026-08 核实）；开发方 Zed Industries, Inc. 为营利公司。
 - **支持模型 / 供应商**：自带配置各 Provider / Key；并通过 **ACP（Agent Client Protocol）** 接入外部 agent。
 - **核心架构与运行机制**：三条 agent 路径：Zed Agent（原生，带内置工具/Profile/skills/instructions/MCP）；External Agents（经 ACP 接入 Claude、Codex、OpenCode、Copilot、Cursor 等第三方 agent，各自带自己的运行时与鉴权）；Terminal Threads（在 Zed 里直接跑某个 agent CLI/TUI）。
 - **上下文与代码检索**：Agent Panel 里内置 read/search/edit 工具；Parallel Agents 从 Threads 侧栏同时跑多个 agent 线程 + 终端线程，每个线程独立上下文窗口与对话历史。
@@ -715,7 +715,7 @@ flowchart TD
 
 - **一句话看懂**：字节做的 AI 原生 IDE，VS Code 内核，主打 Chat → Builder → SOLO 从提问到交付的三段式；国内版 trae.com.cn、国际版 trae.ai。
 - **形态与平台**：独立 AI IDE（VS Code 内核）；Windows / macOS。
-- **是否开源 / 许可证**：IDE 本体闭源商业；仅其研究型 CLI agent 开源，仓库 https://github.com/bytedance/trae-agent （体量：数万，2026-10 核实，MIT），定位"面向软件工程的 LLM agent，研究友好、模块化"。IDE 本身无公开源码仓库。
+- **是否开源 / 许可证**：IDE 本体闭源商业；仅其研究型 CLI agent 开源，仓库 https://github.com/bytedance/trae-agent （体量：数万，2026-08 核实，MIT），定位"面向软件工程的 LLM agent，研究友好、模块化"。IDE 本身无公开源码仓库。
 - **支持模型 / 供应商**：以字节系模型为主；开源 CLI agent 支持 OpenAI / Anthropic / Doubao / Azure / OpenRouter / Ollama / Gemini。
 - **核心架构与运行机制**：IDE 内 Chat / Builder / SOLO 三模式：Chat（问）、Builder（搭原型/结构）、SOLO（内置专职 coding agent，理解目标→规划任务→编排工具→自主推进各阶段）；官方博客提过 Trae Agent 2.0（统一 agent 模式、工具编排、长期记忆）。
 - **上下文与代码检索**：agent 可理解需求、搜索 codebase、制定多步计划（索引细节未核实）。
@@ -732,7 +732,7 @@ flowchart TD
 
 - **一句话看懂**：YC 孵化的开源 Cursor 平替，VS Code fork，强调代码直连你选的模型方、不经中间商、数据全归你；现已弃用、仓库归档。
 - **形态与平台**：独立 AI IDE（fork VS Code）；macOS / Windows / Linux。
-- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/voideditor/void （体量：数万，2026-10 核实），标注 Public archive，README 写明"Void is now deprecated，不再接收贡献"；2025-01 起由 MIT 切换到 Apache-2.0。
+- **是否开源 / 许可证**：开源，Apache-2.0。仓库 https://github.com/voideditor/void （体量：数万，2026-08 核实），标注 Public archive，README 写明"Void is now deprecated，不再接收贡献"；2025-01 起由 MIT 切换到 Apache-2.0。
 - **支持模型 / 供应商**：BYOK 直连：OpenAI / Anthropic / Google / Groq / Ollama / LM Studio / 任意 OpenAI 兼容端点，消息直接发给模型方，不经 Void 后端留存数据。
 - **核心架构与运行机制**：在 codebase 上跑 AI agent、checkpoint、可视化变更。
 - **上下文与代码检索**：本地直连模式（细节未核实）。
@@ -1053,7 +1053,7 @@ flowchart TD
 
 - **一句话看懂**：给它一个 GitHub issue，它拿一套精心设计的命令行工具去读代码、定位、改文件、跑测试，尝试把 bug 修掉。
 - **形态与平台**：Python 库 + CLI，由单个 YAML 配置驱动；`pip install swe-agent` 或源码运行；官方文档 swe-agent.com。
-- **是否开源 / 许可证**：是，MIT（仓库 LICENSE 核实）。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT（仓库 LICENSE 核实）。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：模型无关，"your LM of choice"，示例用 GPT-4o、Claude Sonnet 等。
 - **核心架构与运行机制**：核心概念是 **ACI（Agent-Computer Interface，agent-计算机接口）**：不直接把整个文件塞给模型，而是给模型一套受限、信息密度高的终端命令（如分页浏览文件、搜索、编辑），让模型像人一样在命令行里导航。论文 arxiv 2405.15793（NeurIPS 2024）。
 - **上下文与代码检索**：靠 ACI 命令做快速导航/搜索（grep、文件树），核心是更快的导航、更有信息量的搜索界面。
@@ -1067,7 +1067,7 @@ flowchart TD
 
 - **一句话看懂**：最有名的开源通用 AI 软件工程师平台：让 agent 像人类开发者一样改代码、跑命令、开浏览器、调 API。
 - **形态与平台**：开源平台，Python SDK + Agent Server（REST）+ Web/桌面前端；当前主仓库形态是自托管控制中心 Agent Canvas，`npm install -g @openhands/agent-canvas` 或 Docker 跑。
-- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**："Bring your own model"，多 provider。
 - **核心架构与运行机制**：**EventStream（事件流）架构**，把 agent 的所有动作记录成可追溯事件；配合 Docker runtime 在沙箱里执行。论文 arxiv 2407.16741。多仓库拆分：`OpenHands/software-agent-sdk`（Python SDK/Agent Server/事件/工作区）、`OpenHands/typescript-client`、`OpenHands/automation`。agent 核心已重构进独立 SDK `OpenHands/software-agent-sdk`，其中一手可见的工具名是 `terminal`、`file_editor`、`task_tracker`、`apply_patch`、`browser_use`、`delegate`、`task`、`planning_file_editor`、`ask_oracle`、`glob`、`grep`、`workflow`，condenser 组件在 `openhands-sdk` 的 `context/` 目录下；GitHub 301 重定向已由 `All-Hands-AI/OpenHands` 迁至 `OpenHands/OpenHands`。
 - **上下文与代码检索**：agent 在工作区里自主浏览/读取；事件流即其工作记忆。
@@ -1081,7 +1081,7 @@ flowchart TD
 
 - **一句话看懂**：与主流做法相反，不用 agent 循环，用三个确定性流水线阶段就把 SWE-bench 上的 bug 修了，便宜且可复现。
 - **形态与平台**：Python 研究代码库，conda 环境 + `pip install -r requirements.txt`；配 `OPENAI_API_KEY` 后在 SWE-bench 上跑。
-- **是否开源 / 许可证**：是，MIT。体量：数千（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数千（2026-08 核实）。
 - **支持模型 / 供应商**：OpenAI API 为主；News 提到接 Claude 3.5 Sonnet 提升解率。
 - **核心架构与运行机制**：三阶段：① **Localization 定位**：分层先定位到文件、再到类/函数、再到细粒度编辑点；② **Repair 修复**：对每个编辑点采样多个 diff 格式候选补丁；③ **Patch Validation 补丁验证**：挑回归测试 + 生成复现测试，按测试结果对候选补丁重排选最优。论文 "Demystifying LLM-based Software Engineering Agents" arxiv 2407.01489。
 - **上下文与代码检索**：靠 `get_repo_structure` 预处理仓库结构，分层定位而非开放式探索。
@@ -1095,7 +1095,7 @@ flowchart TD
 
 - **一句话看懂**：一个人 hobby 实验出来的 SWE agent，核心信念是"与其让 agent 凭空推理，不如造好工具把对的上下文塞进 prompt"。
 - **形态与平台**：Python 包（`pip install moatless`，或源码 `uv sync`），配 docker-compose 起 UI；可跑 SWE-bench 评估。
-- **是否开源 / 许可证**：是，MIT。体量：数百（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数百（2026-08 核实）。
 - **支持模型 / 供应商**：经 LiteLLM 接任意 provider（OpenAI/Anthropic/DeepSeek/Gemini 等），并需 Voyage AI embedding 做预嵌向量库。
 - **核心架构与运行机制**：search loop + 工具：一组动作（action）让 agent 在代码库里检索/编辑；提供多种 flow（function-calling 式、ReAct 式）。README 明确：论文 "SWE-Search（MCTS + 迭代精化）" 的实现见另一个仓库 `moatless-tree-search`。
 - **上下文与代码检索**：tree-sitter 做代码结构检索 + 预嵌向量存储，把相关上下文提供给模型。
@@ -1109,7 +1109,7 @@ flowchart TD
 
 - **一句话看懂**：不按字符串搜文件，而是直接在代码的 AST（抽象语法树）里按类/方法搜，定位更准、更省。
 - **形态与平台**：Python，推荐 Docker（`docker build`）或 conda 本地；三种运行模式：GitHub issue 模式 / 本地 issue 模式 / SWE-bench 模式。
-- **是否开源 / 许可证**：是，但许可证需特别注意：Sonar Source-Available License v1.0（Sonar 源码可用许可，仅限非竞争性用途），不是标准 MIT/Apache。体量：数千（2026-10 核实）。
+- **是否开源 / 许可证**：是，但许可证需特别注意：Sonar Source-Available License v1.0（Sonar 源码可用许可，仅限非竞争性用途），不是标准 MIT/Apache。体量：数千（2026-08 核实）。
 - **支持模型 / 供应商**：OpenAI、Claude、Gemini、Groq、AWS Bedrock、Llama、LiteLLM 任意模型。
 - **核心架构与运行机制**：两阶段：① **Context retrieval 上下文检索**：给 LLM 一套程序结构感知的代码搜索 API（在 AST 上找方法/类，而非字符串匹配）；② **Patch generation 补丁生成**：基于检索到的上下文写补丁。论文 ISSTA 2024，arxiv 2404.05427。
 - **上下文与代码检索**：AST 程序结构感知检索；若有测试套件，可做**统计故障定位（statistical fault localization）**进一步提效。
@@ -1123,7 +1123,7 @@ flowchart TD
 
 - **一句话看懂**：一句话需求进去，一个 AI 软件公司出来：产品经理、架构师、项目经理、工程师按 SOP 接力，产出用户故事/需求/数据结构/API/文档/代码。
 - **形态与平台**：Python 库 + CLI（`pip install metagpt`，需 Node/pnpm）；`metagpt "Create a 2048 game"` 直接产出仓库；也可作库 `generate_repo()`。
-- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：`api_type` 可配 openai/azure/ollama/groq 等。
 - **核心架构与运行机制**：`Code = SOP(Team)`：把软件公司的标准作业流程(SOP) 物化到一组 LLM 角色上；角色间按流程传递结构化产物（Message/产物）。论文 ICLR 2024。
 - **上下文与代码检索**：以结构化产物（文档/接口定义）作为角色间共享记忆，而非自由对话。
@@ -1137,7 +1137,7 @@ flowchart TD
 
 - **一句话看懂**：微软研究院开创的多 agent 对话框架，让多个 agent 像同事一样对话/分工执行任务，现已进入维护模式。
 - **形态与平台**：Python（及 .NET）框架，`pip install autogen-agentchat autogen-ext[openai]`；另有 AutoGen Studio 无代码 GUI。
-- **是否开源 / 许可证**：代码 MIT（文档 CC-BY-4.0）。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：代码 MIT（文档 CC-BY-4.0）。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：多 provider（OpenAI/AzureOpenAI 等扩展）。
 - **核心架构与运行机制**：分层设计：Core API（消息传递、事件驱动 agent、本地/分布式运行时）、AgentChat API（两 agent 对话/组群等高层模式）、Extensions API（模型客户端、代码执行等）。
 - **上下文与代码检索**：以对话消息流为核心；不专门做代码库检索。
@@ -1152,7 +1152,7 @@ flowchart TD
 
 - **一句话看懂**：用角色 + 任务 + 团队(Crew) 快速搭一个自主协作的多 agent 团队，再用流程(Flow) 做精确的事件驱动控制。
 - **形态与平台**：Python 框架 + CLI（`uv tool install crewai`）；`crewai create crew` 生成 JSON-first 项目（agents/\*.jsonc + crew.jsonc），`crewai run` 跑。
-- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：默认 OpenAI，可配 Ollama 等本地模型。
 - **核心架构与运行机制**：两套互补原语：**Crews**（角色/目标/backstory/工具/任务的自主团队，支持 sequential 与 hierarchical 层级流程，自动派 manager）+ **Flows**（`@start/@listen/@router` 装饰器的事件驱动工作流，带状态、分支、路由）。
 - **上下文与代码检索**：任务间可用 `context` 引用前序任务输出；自带 memory/knowledge 抽象。
@@ -1166,7 +1166,7 @@ flowchart TD
 
 - **一句话看懂**：把 agent 当成一张有状态的图/状态机来编排：节点是步骤，边是转移，天然支持持久化、人审、长任务恢复。
 - **形态与平台**：Python（及 LangGraph.js）低层编排库，`pip install langgraph`；可脱离 LangChain 单独用。
-- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：经 LangChain 集成接任意 provider。
 - **核心架构与运行机制**：图 + 有状态（stateful）执行，灵感来自 Pregel/Apache Beam、接口借鉴 NetworkX。主打 Durable execution（持久化执行，失败后从断点续跑）、checkpointer、短期工作记忆 + 长期持久记忆。
 - **上下文与代码检索**：以共享 State 为核心；不专门做代码库检索。
@@ -1180,7 +1180,7 @@ flowchart TD
 
 - **一句话看懂**：OpenAI 出的轻量多 agent SDK，概念干净：agent、工具、handoff、guardrail、tracing、session，而且不绑死 OpenAI 模型。
 - **形态与平台**：Python 库（`pip install openai-agents`），另有官方 JS/TS 版（openai/openai-agents-js）。
-- **是否开源 / 许可证**：是，MIT。Python 版体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。Python 版体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：provider-agnostic：支持 OpenAI Responses/Chat Completions，并经 LiteLLM/any-llm 接 100+ 模型。
 - **核心架构与运行机制**：核心概念：Agent（指令+工具+guardrail+handoff）、Handoffs（把任务交给另一个 agent）、Agents-as-tools、Guardrails（输入/输出安全校验）、Sessions（跨运行自动管理对话历史）、Tracing（内建追踪调试）。
 - **上下文与代码检索**：Session 自动管理历史；不专门做代码库检索。
@@ -1194,7 +1194,7 @@ flowchart TD
 
 - **一句话看懂**：谷歌的 code-first agent 工具包：图执行引擎编排流程，Task API 让 agent 之间结构化地派发任务，主打能落地部署。
 - **形态与平台**：Python（`pip install google-adk`），并提供 Java/Kotlin/Go/TypeScript 版；CLI `adk run` / `adk web` / `adk eval` / `adk deploy`。
-- **是否开源 / 许可证**：是，Apache-2.0。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，Apache-2.0。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：为 Gemini 优化，但模型无关、部署无关。
 - **核心架构与运行机制**：**Workflow Runtime（图执行引擎）**：路由、fan-out/fan-in、循环、重试、状态管理、动态节点、嵌套工作流；**Task API**：结构化的 agent-to-agent 委托（多轮任务模式、单轮受控输出）。
 - **上下文与代码检索**：工作流状态管理；不专门做代码库检索。
@@ -1208,7 +1208,7 @@ flowchart TD
 
 - **一句话看懂**：Pydantic 团队出的类型安全 agent SDK：从工具入参到输出结构全程带类型，换模型只改一个字符串，还自带一整套 Harness 能力。
 - **形态与平台**：Python 库（`uv add pydantic-ai`）；同一 agent 定义可跑成 CLI / Web 聊天 / 实时语音 / GitHub Action / ACP 编辑器 agent。
-- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：几乎所有 provider（OpenAI/Anthropic/Google/Bedrock/Azure/Groq/Mistral/xAI/Ollama…），字符串切换；另有 Pydantic AI Gateway 统一密钥。
 - **核心架构与运行机制**：端到端类型安全（结构化输出、类型化依赖注入、类型化工具）；Capability 作为可复用组合单元（把工具/指令/hooks/模型设置打包）；Pydantic Graph 做类型化图控制流；Durable execution 接 Temporal/DBOS/Prefect 等 9 种引擎。
 - **上下文与代码检索**：Harness 提供 memory、context management、planning、RepoContext。
@@ -1222,7 +1222,7 @@ flowchart TD
 
 - **一句话看懂**：TypeScript 生态里最完整的 agent 框架：agent、图工作流、HITL、MCP、可观测/评测全在一套现代 TS 栈里。
 - **形态与平台**：TypeScript 框架（`npm create mastra@latest`），可嵌 React/Next.js/Node 或独立部署；自带 Mastra Studio 调试界面。
-- **是否开源 / 许可证**：双许可：核心框架 Apache-2.0，但 `ee/` 目录（如某些 auth）为 Mastra Enterprise License（生产需企业许可，开发测试可用）。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：双许可：核心框架 Apache-2.0，但 `ee/` 目录（如某些 auth）为 Mastra Enterprise License（生产需企业许可，开发测试可用）。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：统一路由接 40+ provider（OpenAI/Anthropic/Gemini/xAI 等）。
 - **核心架构与运行机制**：Agents（自主推理+工具迭代）+ Workflows（图式引擎，`.then()/.branch()/.parallel()` 控制流）。
 - **上下文与代码检索**：对话历史、retrieve（API/DB/文件）、Observational Memory。
@@ -1236,7 +1236,7 @@ flowchart TD
 
 - **一句话看懂**：最早一波一句话需求→整个代码库的 codegen 实验平台，Lovable 的前身；仓库现已归档(archived)。
 - **形态与平台**：Python CLI（`pip install gpt-engineer`）；在空文件夹放一个无后缀 `prompt` 文件，`gpte <dir>` 生成代码；`-i` 增量改进已有项目。
-- **是否开源 / 许可证**：是，MIT，但 GitHub 标记为 Public archive（已归档、停止维护）。体量：数万（2026-10 核实）。当前有效 slug 为 `AntonOsika/gpt-engineer`（`gpt-engineer-org/gpt-engineer` 跳转至此）。
+- **是否开源 / 许可证**：是，MIT，但 GitHub 标记为 Public archive（已归档、停止维护）。体量：数万（2026-08 核实）。当前有效 slug 为 `AntonOsika/gpt-engineer`（`gpt-engineer-org/gpt-engineer` 跳转至此）。
 - **支持模型 / 供应商**：OpenAI/Azure OpenAI/Anthropic，可配本地开源模型（如 WizardCoder）。
 - **核心架构与运行机制**：preprompts 模板塑造 agent 身份；从 prompt 直接"坐看 AI 写并执行代码"。
 - **上下文与代码检索**：早期项目，无 AST/索引概念。
@@ -1250,7 +1250,7 @@ flowchart TD
 
 - **一句话看懂**：定位是你自己的初级开发：要么给个产品 spec 让它把整库脚手架出来，要么作为几百行的库嵌进你自己的 app。
 - **形态与平台**：Python（`pip install smol_dev` 用库模式；或 `python main.py "<需求>"`）；核心就几个函数。
-- **是否开源 / 许可证**：是，MIT。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，MIT。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：基于 OpenAI Function Calling。
 - **核心架构与运行机制**：三步：`plan(prompt)` 返回编码计划字符串 → `specify_file_paths(prompt, plan)` 靠 Function Calling 保证 JSON 列出要写的文件 → `generate_code_sync(...)` 逐文件生成源码。强调 human-in-the-loop：人跑代码、把报错当 issue 贴回 prompt 迭代。
 - **上下文与代码检索**：无（spec→code 的直通生成）。
@@ -1268,7 +1268,7 @@ flowchart TD
 
 - **一句话看懂**：给 LLM 接外部工具和数据的 USB-C 接口标准：一次接入，到处能用。
 - **形态与平台**：开放协议规范（不是某个 app）；仓库含规范 + TypeScript 定义的 schema（也出 JSON Schema）+ Mintlify 文档。当前仓库 slug 为 `modelcontextprotocol/modelcontextprotocol`（由 modelcontextprotocol/specification 迁移）。
-- **是否开源 / 许可证**：是，MIT。规范仓库体量：数千（2026-10 核实）。由 David Soria Parra 与 Justin Spahr-Summers 创建（Anthropic 发起）。
+- **是否开源 / 许可证**：是，MIT。规范仓库体量：数千（2026-08 核实）。由 David Soria Parra 与 Justin Spahr-Summers 创建（Anthropic 发起）。
 - **支持模型 / 供应商**：与模型无关：跑在 LLM 客户端(host) ↔ 工具/数据(server) 之间。
 - **核心架构与运行机制**：定义 Client/Host ↔ Server 通信，Server 向外暴露三类原语：Tools（可调用工具）、Resources（可读资源）、Prompts（提示模板）。解决"每个 agent 框架都要为每个工具写一遍集成"的碎片化问题。
 - **上下文与代码检索**：不适用（协议层）：它定义如何暴露，不定义如何检索。
@@ -1292,7 +1292,7 @@ flowchart TD
 
 - **一句话看懂**：让不同公司、不同框架、跑在不同服务器上的 agent 之间，像同事而不是工具那样互相发现、派发任务、协作长任务。
 - **形态与平台**：开放协议规范（GitHub a2aproject/A2A），配多语言 SDK（Python/Go/JS/Java/.NET/Rust）。由 Google 发起，现归属 Linux 基金会。
-- **是否开源 / 许可证**：是，Apache-2.0。体量：数万（2026-10 核实）。
+- **是否开源 / 许可证**：是，Apache-2.0。体量：数万（2026-08 核实）。
 - **支持模型 / 供应商**：与模型无关。
 - **核心架构与运行机制**：JSON-RPC 2.0 over HTTP(S)；**Agent Card（代理名片）** 让彼此发现能力与连接方式；围绕 Task（任务）做同步请求/响应、SSE 流式、异步 push 通知；支持文本/表单/媒体/文件/结构化 JSON。关键原则是 **Opacity（不透明）**：协作时不必暴露内部状态、记忆、工具实现。
 - **上下文与代码检索**：不适用（协议层）。
@@ -1578,4 +1578,4 @@ Agentless 用分层定位 → 多候选补丁采样 → 测试重排选最优的
 
 ---
 
-> 本图鉴的项目链接与许可证均于 2026-10-14 逐个打开核对，规模档位同日起口径统一。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-定稿之后的两条追加实证) 是主体定稿之后追加或更新的内容，各自的追加时点标在正文里。
+> 本图鉴的项目链接与许可证均于 2026-08-14 逐个打开核对，规模档位同日起口径统一。发现链接失效或项目状态变化时，以官方仓库为准并更新 [references.md](./references.md)。[§4.16](#_4-16-model-context-protocol-mcp) / [§4.18](#_4-18-agents-md-标准) / [§4.19](#_4-19-agent-skills-开放标准) 与 [§5.13](#_5-13-定稿之后的两条追加实证) 是主体定稿之后追加或更新的内容，各自的追加时点标在正文里。

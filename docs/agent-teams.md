@@ -235,11 +235,28 @@ Agent Teams 是 [roadmap.md](./roadmap.md) 的 Phase 6/7 能力，且对实现�
 
 ### 8.2 最小版本：先做「同进程内对等」，再谈跨会话
 
-mod-agent 的团队建议分两小步，别一上来就跨机：
+**先亮底线：真实 Claude Code 的 Teams 至今标注 experimental、默认关闭**，开启方式是环境变量 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`（出处：https://code.claude.com/docs/en/agent-teams ）。不设这个变量时，会话不会建团队、不写团队目录，模型也不会 spawn 或提议 teammate。官方列了九条硬限制，任何一条我们没解决就不要声称"支持 teams"：
 
-1. **同进程团队（最小）**：先不实现 UDS/bridge 跨会话，只在一个进程里支持，多个 teammate 用队列（不是共享 socket）互发消息，共享一个内存任务列表，通信认名字；这一步已经能验证对等协作加共享任务的价值；
+| #   | 限制                                                                     | mod-agent 落地时的处置建议                                                                                   |
+| --- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| 1   | lead 固定不可换                                                          | MVP 也锁定单 lead，不做多 lead 选举                                                                          |
+| 2   | 一个会话一个团队，不支持嵌套团队                                         | 显式拒绝"团队里再建团队"，与子 agent 嵌套上限配套                                                            |
+| 3   | in-process teammate 不随 `/resume` 与 `/rewind` 恢复                     | 恢复时 teammate 一律视为已死，重新派生                                                                       |
+| 4   | in-process teammate 不能起后台子代理                                     | 与 [verification-and-multiagent.md §5.5](./verification-and-multiagent.md) 四层过滤一致：teammate 摘派生工具 |
+| 5   | teams 不用 worktree 隔离 teammate                                        | 我们做 teams 时**必须反过来**：文件分区是前置条件，不然并行写冲突                                            |
+| 6   | 任务状态同步有延迟                                                       | 事件流上给 teammate 一个 `task_state_stale` 事件让上层容忍                                                   |
+| 7   | 关闭流程可能很慢                                                         | 提供 `--force-shutdown` 与硬超时，防止 lead 关不掉                                                           |
+| 8   | 分屏显示需要 tmux 或 iTerm2                                              | Ink TUI 里做原生 pane 布局，不依赖外部终端                                                                   |
+| 9   | spawn 时不能给单个 teammate 设权限模式、spawn 后 model 与 fast mode 固定 | 与 [security.md §4.2](./security.md) 传播规则一致：teammate 继承 lead 权限（`dontAsk` 除外）                 |
+
+**成本红线**：官方明说 token 消耗"significantly more tokens"，随人数线性放大。in-process teammate 的 prompt cache 默认持 5 分钟（`subagentPromptCacheTtl` 可调 `1h`）。这三条一起决定了：**没有明确"多角色长期协商"需求的任务，不要上 teams**（见 [§8.3](#_8-3-什么时候才需要团队)）。
+
+对应到 mod-agent 的落地节奏，团队能力分两小步走，别一上来就跨机：
+
+1. **同进程团队（最小）**：先不实现 UDS/bridge 跨会话，只在一个进程里支持，多个 teammate 用队列（不是共享 socket）互发消息，共享一个内存任务列表，通信认名字；mailbox 落盘 + 逐条校验（不合规的报错移出、合规的仍投递，与真实实现一致）；这一步已经能验证对等协作加共享任务的价值；
 2. **跨会话团队（后补）**：再引入 UDS 同机寻址、跨会话消息包裹、以及 [§4](#_4-别的会话不携带你的用户权威) 的权威规则；跨机 bridge 是最后才做、且必须自带 bypass-immune 闸；
-3. **安全规则不分先后、必须随通信一起上**：哪怕只做同进程，跨会话消息不携带用户权威、转发被拒动作即洗白，也要在代码层落地，安全边界不能等功能做完再补。
+3. **安全规则不分先后、必须随通信一起上**：哪怕只做同进程，跨会话消息不携带用户权威、转发被拒动作即洗白，也要在代码层落地，安全边界不能等功能做完再补；
+4. **事件驱动型协作先不做**：真实 Claude Code 支持队友外的通道把事件推入会话（artifact comment 触发、Channels webhook），我们 MVP 只支持 teammate 内触发，事件驱动（评论、CI 回调、channels）留 Phase 5+（详见 [references.md](./references.md) 与 roadmap Phase 5）。
 
 ### 8.3 什么时候才需要团队
 

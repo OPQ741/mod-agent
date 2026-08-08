@@ -63,13 +63,13 @@ LLM 在一个循环里自主调用工具、每步从环境拿到 ground truth（
 5. **协议层基本定型**：MCP 管"agent 接工具"、A2A 管"agent 连 agent"、ACP 管"编辑器挂 CLI agent"、AGENTS.md 管"agent 读项目规则"，四者互补。
 6. **活跃度与许可证是硬约束**：2026 年 Roo Code 停服、Continue 只读、Void 弃用、gpt-engineer 归档、AutoGen 转维护模式、Amazon Q CLI 停更；Crush（FSL）、Claude Code（自定义源码许可）、AutoCodeRover（Sonar 源码可用）、Zed（GPL-3.0）都不是标准宽松许可，选型时必须逐项目核对 LICENSE 与最近提交（见 [references.md](./references.md)）。
 
-## 3. 真实能力水平（2025–2026，2026-10 核实）
+## 3. 真实能力水平（2025–2026，2026-08 核实）
 
 ### 3.1 SWE-bench Verified：先看「谁跑的」，再看分数
 
 同一套 harness 才能横向比；跨 harness 只能看时间线演进。两张表分开列，就是因为这个。
 
-**表 A · 官方统一 harness 榜**（swebench.com，全部用 mini-SWE-agent 跑，2026-02 更新）。这张表内部可比。2026-10-14 回官方榜单数据复核，前三行（Gemini 3 Flash 72.7 / Claude 4.6 Opus 72.0 / Claude 4.5 Opus 70.7）与官方一致，其余行未逐格重验。
+**表 A · 官方统一 harness 榜**（swebench.com，全部用 mini-SWE-agent 跑，2026-02 更新）。这张表内部可比。2026-08-14 回官方榜单数据复核，前三行（Gemini 3 Flash 72.7 / Claude 4.6 Opus 72.0 / Claude 4.5 Opus 70.7）与官方一致，其余行未逐格重验。
 
 | 模型                              | % Resolved | 平均成本/题     |
 | --------------------------------- | ---------- | --------------- |

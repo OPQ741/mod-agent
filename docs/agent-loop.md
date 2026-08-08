@@ -202,6 +202,20 @@ flowchart TD
 
 一次模型响应通常有 5–30 秒的流式生成窗口。运行时不必等整段响应结束才执行工具：当某个 `tool_use` 的参数 JSON 在流中拼完整（Anthropic 的 `content_block_stop` 事件）时，若该工具只读、并发安全且权限已放行，就立刻启动执行，把工具耗时藏进模型继续生成的窗口里，多个只读工具自然并行。写操作和命令执行不在此列，必须等响应完整、权限确认后再跑。具体事件与双后端差异见 [tools-and-extensions.md §2.4](./tools-and-extensions.md#_2-4-并行工具执行) 与 [model-gateway.md](./model-gateway.md)。
 
+### 2.5 消息队列 vs 中断：两条不同的分支
+
+出处：Claude Code `interactive-mode.md`、`agent-sdk/streaming-vs-single-mode.md` v2.1.300 实证。Agent 在跑的时候，用户完全可以继续打字。成熟运行时必须区分"你想让我立刻停"与"你想让我下一轮再看"这两件事，它们的实现路径完全不同：
+
+| 用户动作     | 语义                             | 运行时处理                                                           |
+| ------------ | -------------------------------- | -------------------------------------------------------------------- |
+| `Enter` 提交 | 排队：下一条消息在 turn 边界注入 | 消息进队列，当前 turn 继续；turn 结束前不 abort，按序冲刷到下一轮    |
+| `Ctrl+Enter` | 立刻发送（打断当前 turn）        | 触发 `AbortController`、在检查点退出，然后按新输入重启 turn          |
+| `Esc`        | 中断当前生成，保留已完成的工作   | 停止流式、落 checkpoint，把已完成的部分作为 observation 回灌而非丢弃 |
+
+对应到 SDK 契约，用户消息带一个 `priority: "now" | "next" | "later"` 三档（出处：https://code.claude.com/docs/en/interactive-mode 、https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode ）：`now` 立即打断、`next` 排队到本 turn 结束、`later` 排队到主循环空闲时。TUI 必须让这两个动作有清晰的键位分离，不能像早期 CLI 那样只做一个"中断"按钮。
+
+对 mod-agent：主循环 `runTask` 的伪代码在 §2 只处理"取消 vs 预算撞线"两条退出路径，没写"用户新消息进入"这一支。实现时必须补一条 `pendingUserMessages: Queue<{ text, priority }>`，`priority: now` 走 abort + 重启，其他走 turn 边界注入。审批对话框的 Tab 附加评论（见 [usage.md §5](./usage.md)）也是这条队列的一部分，它是"用户对这次决策的上下文说明"，不是新的 prompt。
+
 ## 3. 分层循环
 
 - **主循环（任务级）**：上面的 `runTask`，负责中断 / 恢复 / 预算；
@@ -285,6 +299,21 @@ sequenceDiagram
 - 历史太长可自动压缩（官方提供 compaction session）；存储后端可插拔（本地 SQLite / 远程 Redis / MongoDB / 加密包装）。
 
 对 mod-agent：`awaiting_approval` / `paused` 状态恢复时，除 `task_id + checkpoint_version` 外，还应校验同一会话历史被完整恢复、审批与参数 hash 绑定，避免恢复后上下文漂移。
+
+### 5.2 权限模式的恢复矩阵
+
+出处：Claude Code `permission-modes.md`、`sessions.md` v2.1.300 实证。会话恢复时权限档位不是"原样还原"，而是按"启动入口 + 是否命中 deny"重算。真实 Claude Code 的行为可以整理成一张矩阵，作为我们 `resume` 语义的验收口径：
+
+| 起点模式            | 终端 `claude --resume`      | VS Code 恢复        | 非交互 `claude -p` 恢复                                                          | picker 里选中恢复 |
+| ------------------- | --------------------------- | ------------------- | -------------------------------------------------------------------------------- | ----------------- |
+| `default`           | 保持                        | 保持                | 保持                                                                             | 保持              |
+| `acceptEdits`       | 保持                        | 保持                | 保持                                                                             | 保持              |
+| `plan`              | 保持                        | 保持                | 需同时满足"上次以 plan 结束、未 deny `ExitPlanMode`、`permission.mode` 已持久化" | 保持              |
+| `auto`              | 保持（分类器仍生效）        | 保持                | 保持，但不弹框                                                                   | 保持              |
+| `dontAsk`           | 保持                        | 保持                | 保持                                                                             | 保持              |
+| `bypassPermissions` | 视 managed 与 root 判定重算 | 视 VS Code 独立开关 | 视 CLI 是否传了 `--dangerously-skip-permissions`                                 | 视同终端          |
+
+三条硬规则必须写进我们 `resume` 的判定管线：**deny 掉的动作模式跨恢复不还原**（如上次会话被 `permissions.deny: ["ExitPlanMode"]` 拦下，`plan` 档不会自动续跑）；**高危档不静默继承**（`bypassPermissions` 恢复前必须重新过 root / sudo / `--restricted` / managed kill switch 判定，见 [security.md §4.2](./security.md#_4-2-单次动作的判定管线-fail-closed)）；**auto 分类器与主模型解耦**（分类器是独立模型、独立 API key 池、独立 rate limit，恢复会话时若分类器不可用，回落到 `default` 而不是直接放行）。
 
 ## 6. 预算与循环防护
 

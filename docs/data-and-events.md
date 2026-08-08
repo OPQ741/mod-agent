@@ -119,6 +119,18 @@ OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https:
 2. **会话起点事件是一份自描述体检单**。它的第一条事件把本次会话实际生效的东西全列出来：模型、工具集、每个 MCP server 的连接状态与配置来源、已加载插件、斜杠命令与 skill 清单、子代理清单、工作目录、程序版本、当前权限模式、API 凭证来源、能力位。这是把"环境装配结果"当成**事件而不是配置**来记，事后调试与"为什么这台机器行为不同"全靠它。我们的 `SessionStarted` 事件应当携带同等内容（配置指纹见 [system-prompt.md §1](./system-prompt.md)）。
 3. **终止原因是枚举，不是布尔**。它的收尾事件用 `subtype` 区分 `success`、`error_max_turns`、`error_during_execution`、`error_max_budget_usd`、`error_max_structured_output_retries`，并带 `num_turns`、`duration_ms` 与 `duration_api_ms` 两个时长、`permission_denials` 拒绝清单。预算撞线、轮次撞线、执行中异常是三类不同的失败，[agent-loop.md §6](./agent-loop.md) 的循环防护要各自可辨，[usage.md §4](./usage.md) 的退出码也才有稳定语义。
 
+### 1.3 收尾事件、重试事件与 transcript 稳定性契约
+
+出处：Claude Code `headless.md`、`worktrees.md` v2.1.300 实证。上一节的三条对齐只覆盖了主循环事件。真实 Claude Code 还有三条事件契约值得直接抄进我们的 `EventEnvelope` schema：
+
+**① 收尾事件除 `subtype` 还要带 `startup_failure_reason` 枚举**。会话启动阶段失败（不是运行中失败）在 `result` 消息里以独立字段回吐，例如 `worktree_unverified`（worktree 建立但没通过 `[§4.2 判定管线](./security.md)` 的启动自检）、`worktree_resume_refused`（恢复时 worktree 目录被外部改动或删除）、`credentials_unavailable`（多设备切换时凭据不匹配）等。运行中失败靠 `subtype`，启动失败靠 `startup_failure_reason`，两条独立枚举不能混。mod-agent 的 `SessionStart` 与 `SessionFailed` 事件必须携带这个字段，否则 `--resume` 报错时脚本无法分支处理。
+
+**② 每一次模型请求重试都是一条独立事件 `retry.api`**。真实 Claude Code 的 `system/api_retry` 事件带 `attempt`、`max_retries`、`retry_delay_ms`、`error_status`（HTTP 状态码）、`error`（枚举：`overloaded` / `rate_limit` / `network` / `server_error` 等）。这条事件是"重试过程可回放"的基础：模型网关的重试如果只写在日志里、不进事件流，长任务崩溃恢复时就无法判断"上一次是不是撞了 rate limit"，也就无法正确决定退避时长。我们的 `Model Gateway` 层每次退避重试都要往事件流追加一条 `retry.api`，与 [model-gateway.md §4 重试与限流](./model-gateway.md) 一一对应。
+
+**③ 收尾字段 `permission_denials` 数组随 `result` 一起返**。真实 Claude Code 的一条 prompt 结束时会带一个数组，记录这一轮里所有被拒动作的 `{ tool_name, tool_input_redacted, denial_reason, mode }`。它比独立事件 `approval.decided` 多了一件事：**跨审批来源的收敛视图**——既包括用户手拒、也包括 `dontAsk` 自动拒、`bypass-immune` 硬拒、`plan` 模式拒。这一份份"本轮被拒清单"是审计、评测、循环防护（[agent-loop.md §6](./agent-loop.md) 的拒绝追踪）三条链路的共用输入，必须放在收尾事件里，不能只散在事件流中。
+
+**transcript 稳定性契约**：真实 Claude Code 明确警告 `~/.claude/projects/**/*.jsonl` 里的行格式是"内部格式，版本之间会变"，不承诺向后兼容。mod-agent 要做相反的选择——**本地 transcript JSONL 一旦落定就是稳定接口，版本间只加字段不删字段、不改字段类型**，因为我们把 JSONL 定位为"SQLite 之外的第二份审计/恢复格式"（§1.2 已定），如果它随版本漂移，用户拿 `jq` / `grep` 写的脚本会静默失效。这个契约需要写进 [development-guide.md](./development-guide.md) 的"实现坑清单"。
+
 ## 2. 持久化表（SQLite）
 
 PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模型（先跑起来，逻辑不变，以后换库只换驱动）。

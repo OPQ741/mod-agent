@@ -185,6 +185,25 @@ paths: "src/api/**"
 - **不常用工具延迟加载**：只给模型下发工具名（或通过 `tool_search` 按需激活），避免几十个工具的完整 schema 白占 token。机制见 [tools-and-extensions.md §2.3](./tools-and-extensions.md#_2-3-延迟加载-deferred-tools-tool-search)；系统提示词里同步告知模型「哪些工具可以通过 tool_search 激活」；
 - **技能 / 子代理只下发 frontmatter 摘要**（名字 + 描述 + 何时用），完整 prompt 调用时才读取。
 
+### 6.1 Output Style：与权限档正交的行为轴
+
+出处：Claude Code `output-styles.md` v2.1.300 实证。Output Style 是一个独立子系统，不是"提示词的一部分"，也不是"权限模式的一种"。它的定位是：在不改工具、不改权限的前提下，切换 agent 的**角色 / 语气 / 输出格式**。这件事值得单列，是因为 mod-agent 目前只把"行为风格"藏在系统提示词里、没有一等公民的存储与切换通道，用户改一次风格就得改整段 prompt。
+
+真实 Claude Code 的实现要点：
+
+- **五个内置 style**：`Default`（原样）、`Proactive`（少问多做）、`Concise`（简短、结论先行）、`Explanatory`（讲解式，多写"为什么这样改"）、`Learning`（引导式，让用户参与决策）。Default 的注入内容长度是 0（不追加任何内容），其余四个各自注入一段角色指令；
+- **用户自定义 style 落三级作用域**：managed 层、`~/.claude/output-styles/`、`.claude/output-styles/`（可提交），文件形态就是一个 Markdown 加可选 frontmatter；同名时项目压过用户压过内置；
+- **`keep-coding-instructions` frontmatter**（布尔）决定这份 style 是**完全替换**默认 system prompt 里"软件工程那一节"，还是**在其后追加**。默认 false 意味着 style 会顶掉默认行为指导，写用户 style 时最容易踩空；
+- **切换击穿 prompt cache**：因为 style 指令注入在 system 静态块里，切 style 就等于把整个静态块换掉，下一轮请求要按 uncached 全价重付。这条要在 UI 里明写，不要让用户以为切换零成本；
+- **与权限模式正交**：`Proactive` style 只是让模型语气上少问多做，它不改权限模式；配合 `auto` 权限模式才是完整的"少问多做"体验，单独一个都不到位。mod-agent 目前把两件事压在 `/mode` 一档里，是设计上的一处**耦合错误**，应当拆开。
+
+对 mod-agent 落地：
+
+- 新增配置键 `outputStyle`（数组类跨层不合并，标量类按最高层替换，对应 [architecture.md ADR-9](./architecture.md)）；
+- 三个入口：`/output-style <name>`（会话内切）、settings 里持久化、启动 `--output-style` flag；
+- 与 [context-engineering.md §5.5 压缩后存活清单](./context-engineering.md#_5-5-压缩后的存活清单-claude-code-v2-1-300-实证-出处-https-code-claude-com-docs-en-context-window) 保持语义一致：style 指令注入在 system 静态块里、压缩后仍然生效；
+- 与 [usage.md §3 四种任务模式](./usage.md) 显式解耦：`/mode` 管"能不能问"、`/output-style` 管"用什么口吻说话"。
+
 ## 7. 设计决策（ADR）
 
 | 决策                  | 选择                                  | 理由 / 对立面                                                                   |

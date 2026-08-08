@@ -180,7 +180,12 @@ CronCreate({"cron": "*/1 * * * *", "prompt": "…", "recurring": true})
 - **云端计划**：间隔 ≥ 1 小时、或用每天早上这类日级措辞时，先问要不要改成能脱离会话的云端计划（`/schedule`，跑在 Anthropic 那边、关会话也不停）；纯 /loop 一关会话就没了；
 - **Monitor**：盯长跑脚本/日志、有输出就推回来（比轮询省），事件以 `<task-notification>` 唤醒循环；
 - **KAIROS**：本地 cron / 唤醒 / 通知背后的调度守护进程；
-- **Jitter（错峰）**：重复任务会滞后周期的 10%、最多 15 分钟（官方文档另有"最多半小时"口径，多半是版本差异）；建 cron 时还会避开整点 `:00`/`:30`，防止全球请求同一秒打到 API。
+- **Jitter（错峰）** 完整规则（Claude Code v2.1.300 实证，出处：https://code.claude.com/docs/en/scheduled-tasks ）：
+  - recurring 任务：延后不超过半个周期、且不超过 **30 分钟**（不是 15 分钟，网上流传的 15 分钟是版本差异，官方现口径是"最多半小时"）；
+  - `*/5` 特例：每 5 分钟这类高频 recurring 提前 **15 秒**跑，防止撞整点；
+  - one-shot 任务：如果落在 `:00` 或 `:30` 提前不超过 **90 秒**，防止全球调度在同一秒打到 API；
+  - 用户可通过 `Esc` 撤销尚未触发的 wakeup、通过 `ScheduleWakeup(stop: true)` 主动收尾，这两条退出路径要作为 `/loop` 契约的一等公民实现（对应 mod-agent 侧的 `ScheduleWakeup` 工具返回 `stopped: true` 而非仅"下次不排"）；
+  - **`CLAUDE_CODE_DISABLE_CRON=1`** 一键关调度器；关闭时未过期的任务落到项目内 `.claude/scheduled_tasks.json`，下次开机接着跑——这一点值得抄：关调度不等于丢任务，只是把任务从"运行时状态"降级到"配置文件里的持久队列"（对应 mod-agent 的 `data-and-events.md §2`）。
 
 ## 3. 动作自动批准：Auto Mode
 

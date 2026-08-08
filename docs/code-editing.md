@@ -150,6 +150,35 @@ flowchart TD
 
 对 mod-agent：MVP 先拿 Aider 档（改动即 commit，零成本审计与回滚）；worktree 阶段拿 v0 / Copilot 档（分支命名规则 + 禁推 main + draft PR + 不自批）。
 
+### 3.3 Worktree 隔离的四条硬拦截
+
+出处：Claude Code `worktrees.md` v2.1.300 实证（https://code.claude.com/docs/en/worktrees ）。给任务开独立 worktree 只完成了"物理隔离"，还差"防回流主检出"。真实 Claude Code 在隔离会话期间强制四条规则，任何一条不满足直接拒绝执行而不是弹提示，值得原样落到我们的 `Sandbox/Worktree` 层与 [security.md §4.2](./security.md) 判定管线：
+
+| 规则                                   | 拦什么                                                                                        | 为什么必须是硬拦截                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| ① 编辑不得写主检出                     | 目标绝对路径命中"主检出目录树"时拒绝 Edit/Write，只允许 `<worktree>` 与共享 scratch 目录      | 一旦允许，用户在主分支看到"意外改了个文件"根本查不到是哪个隔离会话干的            |
+| ② 命令 `cwd` 不得落回主检出            | 通过 Bash / PowerShell 起子进程时，若 `cwd` 位于主检出目录树内直接拒；不允许 `cd ..` 逃逸     | 命令型副作用（`git commit`、`npm install`）不看路径白名单，只看 `cwd`，最容易绕过 |
+| ③ 拒 `git -C` / `GIT_DIR` 定向到主检出 | 参数级匹配：任何 `git -C <主检出>`、`GIT_DIR=<主检出>`、`GIT_WORK_TREE=<主检出>` 视为违规     | 前两条按路径拦，这一条按环境变量与 git 参数拦，专门挡"用 git 元数据绕目录白名单"  |
+| ④ 无法静态解析的命令形状拒执行         | 命令里出现 `eval`、`sh -c "<拼接>"`、`xargs -I{}`、复杂重定向、动态构造的路径字符串时，拒执行 | 静态检查拦不住的形状 = 前面三条都可能有绕过路径，宁可拦错也不放过                 |
+
+四条一起才凑出"worktree 隔离"这个词的真实含义。少了任何一条，隔离都会漏。附带两条落地要点：
+
+- 这四条属于 **bypass-immune** 类规则，即便会话以 `bypassPermissions` 或 `--dangerously-skip-permissions` 起动也不豁免（[security.md §4.2](./security.md) 判定管线里的最高一档），否则 worktree 隔离就成了摆设；
+- worktree 创建时同步落 `.worktreeinclude`（Claude Code 用这个文件指定跨 worktree 拷贝的 gitignored 路径，如 `.env`、本地 lockfile），避免用户在主检出配好环境、切进 worktree 又要重来。这一份"必须跨 worktree 同步"的清单是 worktree 隔离能真的可用的前提。
+
+### 3.4 影子快照的不覆盖清单
+
+出处：Claude Code `checkpointing.md` v2.1.300 实证（https://code.claude.com/docs/en/checkpointing ）。我们的影子 git（§3.1）与它的会话内 file-history 快照是两套独立机制，但"哪些天然不覆盖"这条边界同样存在。写文档时必须把清单摆出来，否则用户以为"有 checkpoint = 什么都能撤回"：
+
+- **Bash / PowerShell 命令改的文件不跟踪**（`rm`、`mv`、`cp`、`sed -i`、`npm install` 都撤不回），只跟踪文件编辑工具；
+- **子 agent 的编辑不恢复**（只有 fork 型 skill 的编辑会随父 turn 一起回退），官方建议是"use git to revert them"；
+- **工作目录外的手工改动、并发其它会话的改动不捕获**；
+- **turn 中途插入的用户消息标 `No code restore`**（因为无法定位当时的文件基线）；
+- **symlink 与 hard-link 路径被跳过**（`Restored the code, but skipped N files`）；
+- **数据库、API、部署这类远端副作用无法 checkpoint**——回滚靠幂等键与 outbox 表，不靠快照。
+
+配套交互设计：每个快照点旁同时给 Compare（看本次 diff）与 Restore（三种退法见 §3.1 表），且**回退不可逆**要在按钮上写清楚（Windsurf 原话："Reverts are currently irreversible, so be careful!"）。
+
 ## 4. 变更规模与范围保护
 
 - 配置每任务最大文件数、最大行数、可改目录与禁止目录；

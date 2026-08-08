@@ -38,13 +38,13 @@ flowchart TB
 
 ### Phase 1 · 纵向 MVP 闭环
 
-实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告；静态/动态系统提示词组装（见 [system-prompt.md](./system-prompt.md)）、编辑安全（read-before-edit、mtime 外部修改检测、引号容错）、工具错误作为 tool_result 回喂的自修复。
-验收：覆盖"改一个组件""修一个 bug""补一个测试"三类端到端任务；失败与取消可观察；用户可审 diff；工具执行有审计；未读先编辑、文件被外部改动等场景能被代码层拦下。
+实现：任务创建、状态机、事件流、仓库扫描、规则加载、精确搜索、读文件、补丁编辑、git diff、命令执行、基础审批、类型检查/测试、交付报告；静态/动态系统提示词组装（见 [system-prompt.md](./system-prompt.md)）、编辑安全（read-before-edit、mtime 外部修改检测、引号容错）、工具错误作为 tool_result 回喂的自修复。**成本极低的输入净化也放这一期**：不可见字符剥离（零宽、双向控制、Unicode Tag 段）与提示"Removed N invisible characters"（见 [security.md §1](./security.md)、[context-engineering.md §6](./context-engineering.md)）；**CLI 与 SDK 共用同一 runtime 内核的骨架**（ADR-10，见 [architecture.md §2](./architecture.md)），Phase 1 就先把 `sdk.query()` 走同一 loop 的实现路径定死，后期不再有"SDK 与 CLI 行为漂移"的债。
+验收：覆盖"改一个组件""修一个 bug""补一个测试"三类端到端任务；失败与取消可观察；用户可审 diff；工具执行有审计；未读先编辑、文件被外部改动等场景能被代码层拦下；复制粘贴含不可见字符的 prompt 被剥离并提示。
 
 ### Phase 2 · 可靠性补齐
 
-实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）。
-验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪；压缩只在 turn boundary 触发、不破坏工具调用配对；缓存命中率可观测。
+实现：SQLite 检查点、执行租约、幂等工具执行、分层超时、失败分类、有限重试、暂停/恢复/取消、资源预算、用户原有变更保护；流式双后端适配与前缀缓存（[model-gateway.md](./model-gateway.md)）、分层压缩流水线（大结果持久化 → 裁剪 → 去重 → 摘要，[context-engineering.md §5](./context-engineering.md#_5-压缩-compaction-与外置记忆)）、工具延迟加载与只读并行执行、Plan 模式只读契约与四选项审批（[agent-loop.md §3.2](./agent-loop.md#_3-2-plan-mode-的落地-只读契约-计划文件-审批四选项)）。**Phase 2 一并交付**：Output Style 作为一等子系统（[system-prompt.md §6.1](./system-prompt.md)，与权限档正交的行为轴）；`dontAsk` 权限档进入判定管线（[security.md §4.2](./security.md)，CI/headless 未显式给档时的默认回落）；`startup_failure_reason` 枚举与 `system/api_retry` 独立事件、`permission_denials` 收尾数组（[data-and-events.md §1.3](./data-and-events.md)）；会话消息队列 vs 中断的 TUI 契约（[agent-loop.md §2.5](./agent-loop.md)）与权限模式跨 resume 的恢复矩阵（[agent-loop.md §5.2](./agent-loop.md)）。
+验收：在模型超时、工具超时、崩溃、重复投递、审批过期等故障注入下，任务状态与文件变更一致且可追踪；压缩只在 turn boundary 触发、不破坏工具调用配对；缓存命中率可观测；重试过程可回放（`retry.api` 事件齐全）；`--resume` 跨高危模式（bypass / root / `--restricted`）不静默继承。
 
 ### Phase 3 · 代码理解增强
 
@@ -53,13 +53,13 @@ flowchart TB
 
 ### Phase 4 · Skills、MCP 与浏览器验证
 
-实现：Skill 加载/版本、inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md#_6-2-触发路径与执行模式-inline-fork)）、MCP Client（按 2026-07-28 无状态规范实现：stdio / Streamable HTTP、三段式命名、懒加载与失败隔离、列表缓存、MRTR 交互、错误码 `-32602`，见 [tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)）、外部文档/代码托管集成、Playwright 页面验证与截图产物。
-验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；单个 MCP server 挂起不影响其余工具；浏览器结果可复现并归档。
+实现：Skill 加载/版本、inline / fork 执行模式与双触发路径（[tools-and-extensions.md §6.2](./tools-and-extensions.md#_6-2-触发路径与执行模式-inline-fork)）、Skill listing 预算（1% 窗口 + 单条 1,536 字符 + 从最少调用先丢，见 [tools-and-extensions.md §6.2](./tools-and-extensions.md)）、MCP Client（按 2026-07-28 无状态规范实现：stdio / Streamable HTTP、三段式命名、**工具名 128 字符显式校验不静默丢**、**凭据名模板变量例外**、懒加载与失败隔离、列表缓存、MRTR 交互、错误码 `-32602`，见 [tools-and-extensions.md §1.1](./tools-and-extensions.md)、[tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)）、外部文档/代码托管集成、Playwright 页面验证与截图产物。**Worktree 完整子能力也在这一期**：`.worktreeinclude` 跨 worktree 拷贝 gitignored 文件、`EnterWorktree` / `ExitWorktree` 一等工具、`WorktreeCreate` / `WorktreeRemove` hooks（任何非零退出即失败）、`--worktree` CLI flag 与 `isolation: worktree` 子代理配置、四条硬拦截（[code-editing.md §3.3](./code-editing.md)），把 worktree 从"我们建了个目录"升级为"我们拦得住回流"。**Advisor / 辅助模型统一封装**（ADR-11，[model-gateway.md §2.2](./model-gateway.md)）同期落地，供 Phase 6 多 Agent 与 Phase 7 自治复用。
+验收：MCP 工具调用带权限与审批信息；恶意工具描述不能绕过策略；单个 MCP server 挂起不影响其余工具；worktree 隔离会话期间任何写主检出、`git -C` 逃逸、`cwd` 落回主检出都被拦下且审计事件带 `bypass-immune` 标签；浏览器结果可复现并归档。
 
 ### Phase 5 · 团队与企业能力
 
-实现：多租户、RBAC、组织级策略、费用限额、仓库级配置、审计导出、团队评测看板、PR 工作流、可控模型路由（含 Web 控制台 + BFF + PostgreSQL + 队列）。
-验收：跨租户隔离与审计通过安全测试；团队可追踪成本、成功率、审批与模型版本。
+实现：多租户、RBAC、组织级策略、费用限额、仓库级配置、审计导出、团队评测看板、PR 工作流、可控模型路由（含 Web 控制台 + BFF + PostgreSQL + 队列）。**企业 managed 键集合**同步落地：`allowManagedPermissionRulesOnly` / `allowManagedHooksOnly` / `allowManagedMcpServersOnly` / `availableModels`（组织级模型 allowlist，见 [model-gateway.md §2.2](./model-gateway.md)）/ `requiredMinimumVersion` / `requiredMaximumVersion` / `blockedMarketplaces`；**managed 文件解析失败即拒绝启动**这条 fail-closed 行为也在此期定死（[security.md §6](./security.md) 验收清单）。
+验收：跨租户隔离与审计通过安全测试；团队可追踪成本、成功率、审批与模型版本；组织侧下发的模型 allowlist、hooks 白名单、MCP 白名单在个人配置里翻不了案。
 
 ### Phase 6 · 选择性多 Agent
 
@@ -67,8 +67,8 @@ flowchart TB
 
 ### Phase 7 · 自治与续跑
 
-在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（Stop hook 封装、独立评估器 JSON 三形状、判决走 API 层 schema、`impossible` 防死循环、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（解析三规则、`CronCreate` 固定间隔 7 天过期、`ScheduleWakeup` 缓存感知、无新变化即停、headless 日志）、Auto Mode 动作自动批准（四规则桶、两段式 64/4096 裁决、reasoning-blind、不对称意图门槛、fail-closed、拒绝上限、权限传子代理）。
-验收：评估器与执行分离、目标不可达时能 `impossible` 刹车、裁判不被主 agent 话术忽悠；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权、只读工具不触发分类器。
+在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（Stop hook 封装、独立评估器 JSON 三形状、判决走 API 层 schema、`impossible` 防死循环、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（解析三规则、`CronCreate` 固定间隔 7 天过期、Jitter 完整规则（recurring ≤ 半间隔 30 分钟、`*/5` 特例提前 15 秒、one-shot 遇 `:00`/`:30` 提前 ≤ 90 秒）、`ScheduleWakeup` 缓存感知 + `stop: true` 主动收尾、Esc 撤 wakeup、`CLAUDE_CODE_DISABLE_CRON` 与 `scheduled_tasks.json` 落盘、无新变化即停、headless 日志）、Auto Mode 动作自动批准（四规则桶、两段式 64/4096 裁决、reasoning-blind、不对称意图门槛、fail-closed、拒绝上限、权限传子代理）。**模型路由的两个正交轴**同期补齐：`speedTier: standard | fast`（fast mode 击缓存代价与限流自动降级，见 [model-gateway.md §2.2](./model-gateway.md)）与 `planPhase / executePhase` 双阶段别名（`opusplan` 语义，规划用强、执行用弱）。
+验收：评估器与执行分离、目标不可达时能 `impossible` 刹车、裁判不被主 agent 话术忽悠；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权、只读工具不触发分类器；cron 关闭时任务落到 `scheduled_tasks.json` 下次开机可续跑；会话内切 fast / model 击缓存有 UI 提示，切 advisor / effort 无提示。
 
 ### Phase 8 · 工作流、团队与后台舰队
 
