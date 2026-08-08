@@ -142,19 +142,20 @@ flowchart TB
 
 ## 3. 组件职责边界
 
-| 组件               | 职责                                                                          | 不应承担                           |
-| ------------------ | ----------------------------------------------------------------------------- | ---------------------------------- |
-| CLI / TUI          | 命令解析、流式渲染、Diff 展示、审批交互                                       | 不持有模型密钥、不直接执行任意命令 |
-| Agent Runtime      | 驱动主循环、状态转换、停止条件、预算控制                                      | 不把未校验的模型文本直接喂 shell   |
-| Planner            | 需求归一化、计划生成、动态重规划                                              | 不在阻塞性澄清未解决前进入执行     |
-| Context Builder    | 聚合规则、文件、符号、搜索结果、Git 状态                                      | 不把整个仓库无差别塞进上下文       |
-| Tool Registry      | 工具 Schema、风险标签、超时、幂等属性                                         | 不允许模型绕过 Policy 直连实现函数 |
-| Tool Policy        | 风险判定、审批分级、注入检测                                                  | 不依赖模型输出来决定授权           |
-| Sandbox / Worktree | 隔离工作区、命令生命周期、资源限制                                            | 不假设 Docker 能抵御所有宿主机风险 |
-| Validation Runner  | 类型检查 / lint / 测试 / 构建，结果归一化                                     | 不根据模型口头声明伪造通过结果     |
-| Persistence        | 任务、事件、检查点、审批、工具调用持久化                                      | 不把内存队列当唯一事实来源         |
-| Session Manager    | 会话命名、fork / branch / resume / export，管理 transcript 与 worktree 的绑定 | 不接管工具执行、不判定权限         |
-| Model Gateway      | Provider 适配、路由、用量统计、结构化输出校验                                 | 不与任务持久化耦合成一个大类       |
+| 组件               | 职责                                                                                                              | 不应承担                             |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| CLI / TUI          | 命令解析、流式渲染、Diff 展示、审批交互                                                                           | 不持有模型密钥、不直接执行任意命令   |
+| Agent Runtime      | 驱动主循环、状态转换、停止条件、预算控制                                                                          | 不把未校验的模型文本直接喂 shell     |
+| Planner            | 需求归一化、计划生成、动态重规划                                                                                  | 不在阻塞性澄清未解决前进入执行       |
+| Context Builder    | 聚合规则、文件、符号、搜索结果、Git 状态                                                                          | 不把整个仓库无差别塞进上下文         |
+| Tool Registry      | 工具 Schema、风险标签、超时、幂等属性                                                                             | 不允许模型绕过 Policy 直连实现函数   |
+| Tool Policy        | 风险判定、审批分级、注入检测                                                                                      | 不依赖模型输出来决定授权             |
+| Sandbox / Worktree | 隔离工作区、命令生命周期、资源限制                                                                                | 不假设 Docker 能抵御所有宿主机风险   |
+| Validation Runner  | 类型检查 / lint / 测试 / 构建，结果归一化                                                                         | 不根据模型口头声明伪造通过结果       |
+| Persistence        | 任务、事件、检查点、审批、工具调用持久化                                                                          | 不把内存队列当唯一事实来源           |
+| Session Manager    | 会话命名、fork / branch / resume / export，管理 transcript 与 worktree 的绑定                                     | 不接管工具执行、不判定权限           |
+| Model Gateway      | Provider 适配、路由、用量统计、结构化输出校验                                                                     | 不与任务持久化耦合成一个大类         |
+| Plugin Loader      | 声明式 plugin 与函数级 mod 的加载、审计与信任分级（详见 [tools-and-extensions.md §7](./tools-and-extensions.md)） | 不越 Policy 授权、不静默改写引擎事件 |
 
 ## 4. 技术选型
 
@@ -196,12 +197,15 @@ src/
   store/                # SQLite schema、repositories、事件追加
   observability/        # trace、metrics、logging
   evals/                # 数据集、评分器、回归用例
+  plugins/              # Plugin Loader：清单解析、marketplace 校验、mod 沙箱装载
   shared/               # DTO、Zod schemas、事件类型定义
 .agent/
   skills/
     bug-triage/SKILL.md
     react-feature/SKILL.md
     test-repair/SKILL.md
+  plugins/              # 项目级声明式插件（与 skills 同目录约定，可提交）
+  mods/                 # 项目级函数级 mod（Phase 6+ 生效；须逐个显式批准）
 infra/
   docker/
   migrations/

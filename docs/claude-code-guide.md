@@ -736,7 +736,7 @@ claude mcp get|remove|add-json|add-from-claude-desktop|reset-project-choices|log
 
 ### 10.7 对 mod-agent
 
-[tools-and-extensions.md §6](./tools-and-extensions.md) 已经定了"用 Markdown 加目录约定降低扩展门槛"，方向与 skills 一致，但要看清它为什么在此之上又加了 mods：**声明式扩展能被审计、能被策略管控，但它改不动引擎怎么想**。当你需要"给所有工具调用注入统一校验"或者"改写系统提示的某一节"时，frontmatter 那一层是够不着的。我们的插件设计（[architecture.md](./architecture.md) 的扩展层）应当预留一层函数级扩展点，但把它和声明式扩展分在**不同的信任级**：mod 级要求用户显式批准且不受 `disableAllHooks` 之外的开关控制，这一条 `sec-default` 的做法（策略 mod 最先加载、用户不可关）可以直接抄。第二件事是那份预算表：我们的 skill 或工具描述清单也要有"总量随安装数线性膨胀"的问题，1% 窗口预算加"从最少调用的开始丢"是个可落地的策略，建议写进 [context-engineering.md §4](./context-engineering.md)。第三是 MCP 工具名 128 字符上限与"超长直接不发模型"这类**静默失败**，我们的工具注册必须有显式的命名长度校验并给出报错而不是静默丢弃，见 [tools-and-extensions.md §2](./tools-and-extensions.md)。
+[tools-and-extensions.md §6](./tools-and-extensions.md) 已经定了"用 Markdown 加目录约定降低扩展门槛"，方向与 skills 一致，但要看清它为什么在此之上又加了 mods：**声明式扩展能被审计、能被策略管控，但它改不动引擎怎么想**。当你需要"给所有工具调用注入统一校验"或者"改写系统提示的某一节"时，frontmatter 那一层是够不着的。mod-agent 侧的完整设计已经落到 [tools-and-extensions.md §7](./tools-and-extensions.md)：§7.1 Plugin 声明式打包（三种覆写语义 + `mod plugin details` 审计入口 + 无代码签名的四件兜底）、§7.2 Mods 函数级扩展点（`register(on, options)` + `($, e, next)` + 事件分组 + "每个 API 方法同时是同名事件"）、§7.3 两层的信任分级（mods 不受 `disableAllHooks` 影响 + 策略 mod 用户关不掉）。Phase 归属：Plugin 在 Phase 4、远程 marketplace 在 Phase 5、Mods 与策略 mod 在 Phase 6+，见 [roadmap.md](./roadmap.md) 对应段。第二件事是那份预算表：我们的 skill 或工具描述清单也要有"总量随安装数线性膨胀"的问题，1% 窗口预算加"从最少调用的开始丢"是个可落地的策略，已经落到 [tools-and-extensions.md §6.2](./tools-and-extensions.md)。第三是 MCP 工具名 128 字符上限与"超长直接不发模型"这类**静默失败**，我们的工具注册必须有显式的命名长度校验并给出报错而不是静默丢弃，已经落到 [tools-and-extensions.md §1.1](./tools-and-extensions.md)。
 
 ## 11. 编排：workflows 与代码审查
 

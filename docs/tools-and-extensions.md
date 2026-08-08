@@ -505,3 +505,77 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 - Hook 是确定性扩展：比让模型临场改行为可靠，也让用户/组织在不写代码的前提下，把确定性逻辑插进主循环；
 - Hook 与 Auto Mode 的 Stop hook 是同一套引擎：`/goal` 本质就是封装了一个会话级 Stop hook（见 [autonomy.md §1.5](./autonomy.md#_1-5-真实-claude-code-证据-goal-其实是-stop-hook-的封装)）；
 - CI/无人值守默认不自动加载仓库自带 hooks（`--bare`，见 [security.md §3](./security.md#_3-沙箱基线)），防止恶意仓库借 hook 执行任意代码。
+
+## 7. Plugins 与 Mods：扩展的打包与函数级扩展点
+
+出处：Claude Code `plugins/overview`、`plugins/components`、`plugins/manifest-reference`、`plugins/marketplace-reference`、`plugins/mods/*` 与 `anthropics/claude-code/tree/main/plugins` v2.1.300 实证。Skills / Hooks / MCP / Subagents / Output styles / Workflows 各管一段能力，但真实团队会遇到两类问题：**一个想复用的能力横跨多个组件（比如"code review 包"要同时挂 skill + hook + subagent + MCP），怎么打包？以及"给所有工具调用注入统一校验"或"改写系统提示的某一节"这类需求，frontmatter 那一层够不着，怎么办？** Claude Code 的答案分别是 Plugins 与 Mods。mod-agent 应当同样预留两层，但把它们放在**不同的信任级**。
+
+### 7.1 Plugin：声明式扩展的打包与分发单位
+
+Plugin 不是一个新扩展点，它是"把已有的六类扩展点打包成一个可分发单位"。组件目录约定与真实实现一致，字段全部可选、按需放：
+
+```text
+my-plugin/
+  .claude-plugin/plugin.json     # 清单，只有 name 必填（kebab-case）
+  skills/                        # 追加到默认扫描（不顶掉用户已有 skill）
+  commands/                      # 替换默认扫描
+  agents/                        # 替换默认扫描，子目录进 scoped identifier
+  hooks/hooks.json               # 与默认 hooks 合并加载
+  .mcp.json                      # 与默认 MCP servers 合并加载
+  .lsp.json                      # 与默认 LSP 配置合并加载
+  bin/                           # 会被加进 Bash 工具的 PATH
+  settings.json                  # 插件根级默认设置
+  output-styles/                 # 替换默认扫描
+  workflows/                     # 替换默认扫描
+  themes/ · monitors/ · mods/    # 见下文 §7.2
+```
+
+**三种覆写语义必须一次定清楚**（这是 guide.md §10.3 反复强调的"最容易写错的地方"）：追加（`skills`）只加不减、替换（`commands` / `agents` / `outputStyles` / `workflows` / `themes`）顶掉默认扫描、合并（`hooks` / `mcpServers` / `lspServers`）与用户已有配置合并加载。**mod-agent 的清单 schema 要在文档里显式声明每个字段的语义，不能让实现者靠猜**——一份 plugin.json 的 `skills: ["./custom"]` 是"追加"还是"只扫这里"，写错就是"装了插件反而少了 skill"的诡异 bug。
+
+**Marketplace 是分发单位**，`marketplace.json` 声明 `plugins[]`，每个条目的 `source` 允许几种形态：仓库内相对路径、`github{repo,ref,sha}`、任意 git `url{...}`、`npm{package,version,registry}`、`archive{url,sha256}`。MVP 只做前两种 + 本地路径即可，其他形态按需再加。
+
+**没有代码签名机制**是必须显式声明的现实，不是"我们还没做"：真实 Claude Code 唯一能提供的完整性只有 `archive` 源的 `sha256` 与 marketplace 名对应的源域校验（保留 marketplace 名要求来自 `github.com/anthropics/`）。mod-agent 侧的兜底四件套：
+
+1. **保留 marketplace 名 + 源域校验**（同 Claude Code 逻辑），其他 marketplace 明确标注"第三方"，UI 上装之前一眼可辨；
+2. **`archive` 与 `github` 类源要求 sha / ref 锁定**，防止"上游 force-push 之后我这边悄悄换代码"；
+3. **审计入口 `mod plugin details <name>`** 打出 Component inventory：这个 plugin 提供了几个 skill / hook / MCP server / agent、各自的权限范围，让装的人在装之前看一眼；
+4. **企业 managed 层两把闸**：`blockedMarketplaces`（明确禁止的 marketplace）与 `strictKnownMarketplaces`（只允许列出的 marketplace），后者是"组织白名单"，与 `allowManagedMcpServersOnly`（[security.md §4.1](./security.md)）同级。
+
+### 7.2 Mods：函数级扩展点，能改写别的扩展
+
+Mods 是**用 TypeScript 函数挂钩引擎事件**的插件。核心签名：
+
+```ts
+export function register(on, options) {
+  on("tool.call", "Bash", async ($, e, next) => {
+    e.tool_input.command = sanitize(e.tool_input.command)
+    return next(e)
+  })
+}
+```
+
+`$` 是 mods API（`$.model.complete` / `$.fs.read` / `$.ui.open` / `$.http.fetch` 等），`e` 是**深度冻结**的事件输入，`next(e)` 是中间件式继续。事件点按组：`tool.*`、`prompt.*`、`command.*`、`turn.*`、`session.*`、`agent.*`、`ui.*`、`plugin.*`、`engine.*`、`telemetry.*`，另有一族 `classic.<Event>` 把 §6.5 那些 settings 型 hook 事件也接进来。**巧思是"每个 API 方法同时是同名事件"**：`fs.read`、`model.complete`、`ui.open` 既能调也能拦。
+
+Mods 与 skills / plugins 的关键差别在**能改写别的扩展点向模型呈现的内容**：`prompt.section` 改系统提示词的某一节、`skill.prompt` 改某个 skill 展开后的正文、`tool.describe` 改工具描述、`command.describe` 改命令描述。frontmatter 那一层做不到这件事，因为它是"声明"、不是"函数"。
+
+### 7.3 两层扩展的信任分级（mod-agent 的核心决策）
+
+声明式扩展能被审计、能被策略管控，但它改不动引擎怎么想；函数级扩展能力强、但每一分能力都是攻击面。所以 mod-agent 必须把两层放在**不同的信任级**，明确到规则：
+
+| 层               | 载体                 | 触发                     | 关闭方式                                                                         | 谁负责审                                       |
+| ---------------- | -------------------- | ------------------------ | -------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Plugin（声明式） | 目录 + `plugin.json` | `/plugin` 装、启动时加载 | `disableAllPlugins`、`disableAllHooks`、`/plugin` disable                        | 用户在装前跑 `mod plugin details`              |
+| Mods（函数级）   | `hooks/*.js` 模块    | 引擎事件驱动             | **不受 `disableAllHooks` 影响**，只有 `--safe-mode` 与 `mod plugin disable` 能关 | 用户**逐个显式批准**，装完第一次触发时再问一次 |
+
+内建 mod 的四个示范各是一类：`diff` 接管 `/diff` 并自己绘制面板（**UI 接管型**）；`agents-md` 负责读 `AGENTS.md`（**规则加载型**，见 [context-engineering.md §2.1](./context-engineering.md)）；`sec-default` 是守护组织配置不被用户 mod 绕过的策略 mod（**策略 mod**，见下）；`telemetry` 给其它 mod 提供上报方法（**基础设施型**）。
+
+**策略 mod 是一个必须单列的模式**：真实 Claude Code 的 `sec-default` 最先加载、managed 与 deny 规则优先、**用户关不掉**。这是"用同一个 mod 机制反过来守护配置"的做法，`plugin.register` 事件可以返回 `{refuse}` 拒绝其他 mod 注册。mod-agent 若上 mods，第一版就要有等价的"内核策略 mod"，否则 mods 系统会自己变成越权通道。
+
+### 7.4 落地节奏
+
+- **Phase 4（Skills / MCP 同期）**：Plugin 声明式打包 + 本地 marketplace + 保留 marketplace 名 + `mod plugin details` 审计入口。这一期只做"把已有的 6 类扩展点打包成一份目录 + 装/卸/启用/禁用"，不做在线 marketplace；
+- **Phase 5（团队与企业）**：企业 managed 层的 `blockedMarketplaces` / `strictKnownMarketplaces`、远程 marketplace（`github` / `npm` / `archive` 三档 source）；
+- **Phase 6+（引擎事件总线稳定之后）**：Mods 函数级扩展点。前提是 §6.5 的事件清单已经收敛、子代理与 team 事件也已经稳定，否则改一次事件名就要重跑一遍 mod 兼容性；策略 mod（"用户关不掉的那一个"）与 mods 同期上，不留裸奔窗口；
+- **反 sprawl 边界**：`themes/`（配色）、`monitors/`（进程外监控）、语音输入、屏幕阅读器适配、状态栏自定义、终端配置等 —— 都属"用户体验层"的扩展，本设计文档不预留结构，Phase 6 后按需再加。这一档如果提前抽象，会变成"为了未来可能的插件写一堆现在没人用的字段"。
+
+> 与 §6 Skills / §1 MCP / §6.5 Hooks 的关系：它们都是**组件类型**，Plugin 是它们的**打包与分发单位**，Mods 是一个**新组件类型**（函数级、能改写别的组件）。四者共同构成 mod-agent 的扩展体系，全景对照见 [claude-code-guide.md §10.6](./claude-code-guide.md#_10-6-扩展点全景对照)。
