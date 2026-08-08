@@ -1,6 +1,6 @@
 # Development Guide · 开发者实现指南
 
-> 这篇是施工手册。[architecture.md](./architecture.md) 讲系统长成什么样，[roadmap.md](./roadmap.md) 讲什么时候做到什么算完，这篇讲从空目录到跑通第一个循环：先写哪个文件、模块之间按什么顺序调用、一条 ADR 落到代码上是什么形状、哪一步最容易写错。
+> 这篇是施工手册。[architecture.md](./architecture.md) 讲系统长成什么样，[roadmap.md](./roadmap.md) 讲什么时候做到什么算完，这里讲从空目录到跑通第一个循环：先写哪个文件、模块之间按什么顺序调用、一条 ADR 落到代码上是什么形状、哪一步最容易写错。
 >
 > 给准备动手写 `src/` 的人看。仓库协作那一套（环境安装、Git 钩子、提交信息、文档站硬性规则）在根目录 `CONTRIBUTING.md` 里，本文一行不重复。
 

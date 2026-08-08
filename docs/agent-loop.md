@@ -2,7 +2,7 @@
 
 > Agent Runtime 负责驱动整个系统。这篇定义任务状态机、核心循环、停止 / 恢复语义与预算防护。
 
-这一节讲的是 mod-agent 的核心运行时。先说结论：Agent 不是一次把活干完，而是反复读状态、让模型决定下一步、执行、再把结果喂回上下文，直到任务完成、被人叫停，或者撞到预算上限。后面按这个顺序展开：任务在哪些状态之间切换，每一轮要过几道关卡，什么时候停下来等人，崩了之后怎么从原地接着跑。
+先说结论：Agent 不是一次把活干完，而是反复读状态、让模型决定下一步、执行、再把结果喂回上下文，直到任务完成、被人叫停，或者撞到预算上限。
 
 ## 1. 任务状态机
 
@@ -200,7 +200,7 @@ flowchart TD
 
 ### 2.4 流式窗口里提前执行工具
 
-一次模型响应通常有 5–30 秒的流式生成窗口。运行时不必等整段响应结束才执行工具：当某个 `tool_use` 的参数 JSON 在流中拼完整（Anthropic 的 `content_block_stop` 事件）时，若该工具只读、并发安全且权限已放行，就立刻启动执行，把工具耗时藏进模型继续生成后续内容的窗口里，多个只读工具自然并行。写操作和命令执行不在此列，必须等响应完整、权限确认后再跑。具体事件与双后端差异见 [tools-and-extensions.md §2.4](./tools-and-extensions.md#_2-4-并行工具执行) 与 [model-gateway.md](./model-gateway.md)。
+一次模型响应通常有 5–30 秒的流式生成窗口。运行时不必等整段响应结束才执行工具：当某个 `tool_use` 的参数 JSON 在流中拼完整（Anthropic 的 `content_block_stop` 事件）时，若该工具只读、并发安全且权限已放行，就立刻启动执行，把工具耗时藏进模型继续生成的窗口里，多个只读工具自然并行。写操作和命令执行不在此列，必须等响应完整、权限确认后再跑。具体事件与双后端差异见 [tools-and-extensions.md §2.4](./tools-and-extensions.md#_2-4-并行工具执行) 与 [model-gateway.md](./model-gateway.md)。
 
 ## 3. 分层循环
 
@@ -220,7 +220,7 @@ flowchart TD
 
 ### 3.2 Plan Mode 的落地：只读契约 + 计划文件 + 审批四选项
 
-规划模式靠的不是在提示词里叮嘱模型先别动手。更准确地说，它在运行时直接把写权限收回来。机制由四部分组成：
+规划模式靠的不是在提示词里叮嘱模型先别动手，而是在运行时直接把写权限收回来。机制由四部分组成：
 
 1. **一对进入 / 退出工具**：`enter_plan_mode`、`exit_plan_mode`。这两个工具不常用，做**延迟加载**（平时不占 schema，需要时再激活，见 [tools-and-extensions.md](./tools-and-extensions.md)）；
 2. **只读契约**：进入规划模式后，权限层对所有写 / 编辑 / shell 工具一律返回 `deny`，模型只能读、搜索、分析；
@@ -298,7 +298,7 @@ sequenceDiagram
 - 同一错误在设定修复次数后不变；
 - 上下文持续膨胀但目标不收敛。
 
-比如，模型连着 4 轮跑同一条 `npm test`，退出码都是 1，报错行几乎没变。这属于同一命令连续重复且无状态变化，系统不再让模型继续空试，而是把这几轮失败压成一段诊断（报错集中在 token 过期，可能不是测试本身的问题）重新规划，而不是放任它在原地空转烧 token。
+比如，模型连着 4 轮跑同一条 `npm test`，退出码都是 1，报错行几乎没变。这属于同一命令连续重复且无状态变化，系统不再让模型继续空试，而是把这几轮失败压成一段诊断（报错集中在 token 过期，可能不是测试本身的问题）重新规划，别放任它原地空转烧 token。
 
 > 术语备注：**检查点**（checkpoint）指每轮工具执行后，把当前干到哪、改了哪些文件、还剩多少预算落一次盘；**Observation**（观测）指工具跑完回给模型的那段裁剪过的输出；**ACI** 指给模型看的操作界面的设计规范（详见 [context-engineering.md §1.1](./context-engineering.md#_1-1-接口即能力-aci-工具界面设计与-prompt-同等重要)）；**compaction**（压缩）指上下文快满时把长历史总结成摘要。
 
@@ -330,7 +330,7 @@ sequenceDiagram
 | json        | 一次返回 result + session_id + usage + total_cost_usd，可 `--json-schema` 约束结构 |
 | stream-json | NDJSON，逐事件实时吐，末行是 result 汇总                                           |
 
-- 退出码即成败：0 成功、非 0 失败，脚本可直接分支。真实 Claude Code 的退出码更细：`0` 正常结束、`1` 出错、`2` 被中止（SIGINT/EOF），另有内部用 `51`（bypass 模式被拒）、`52`（远程/无 TTY 环境问题）等。脚本只需区分 0/非 0，但交互模式用退出码 2 区分人主动打断与真出错，是值得照抄的约定；
+- 退出码即成败：0 成功、非 0 失败，脚本可直接分支。真实 Claude Code 的退出码更细：`0` 正常结束、`1` 出错、`2` 被中止（SIGINT/EOF），另有内部用 `51`（bypass 模式被拒）、`52`（远程/无 TTY 环境问题）等。脚本只需区分 0/非 0。但交互模式用退出码 2 区分人主动打断与真出错，这个约定值得照抄；
 - Gemini 的 headless JSON 还带一份用量账：`stats.models[].tokens`（prompt / candidates / total / cached / tool）、`stats.tools`（totalCalls / totalSuccess / totalFail / totalDurationMs / totalDecisions: accept | reject | modify | auto_accept）、`stats.files`（totalLinesAdded / totalLinesRemoved），可以直接拿来做用量记账与工具成功率分析；
 - **`--bare` 模式**（CI / 脚本默认推荐，出处同 Claude headless）：跳过一切自动发现（hooks / skills / MCP / 记忆 / 规则文件），不读本机 OAuth 与钥匙串，保证每台机器结果可复现。
 

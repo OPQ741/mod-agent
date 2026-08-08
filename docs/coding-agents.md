@@ -1524,7 +1524,7 @@ Claude Code 的 Skills（`.claude/skills/<name>/SKILL.md`）+ 斜杠命令 + hoo
 
 ### 5.8 模型接入：BYOK 是开源门票，模型网关还要管「订阅复用」与「可观测」
 
-开源世界（Aider、Cline、Kilo、OpenCode、Crush、Mastra、Pydantic AI）几乎全部模型无关；更值得注意的是 Goose 和 Zed 通过 ACP 直接复用用户已有的 Claude/ChatGPT/Gemini 订阅，不重复造计费。OpenAI Agents SDK 用 LiteLLM 接 100+ 模型，Pydantic AI 换模型只改一个字符串，Mastra 统一路由 40+ provider。
+开源世界（Aider、Cline、Kilo、OpenCode、Crush、Mastra、Pydantic AI）几乎全部模型无关；更巧的是 Goose 和 Zed 通过 ACP 直接复用用户已有的 Claude/ChatGPT/Gemini 订阅，不重复造计费。OpenAI Agents SDK 用 LiteLLM 接 100+ 模型，Pydantic AI 换模型只改一个字符串，Mastra 统一路由 40+ provider。
 
 > **对 mod-agent**：[model-gateway.md](./model-gateway.md) 与 ADR-6 方向正确。实现时多覆盖两条：① 除了 API key 模式，预留外部 agent 后端 / 订阅 OAuth 适配位（ACP 模式，Qwen Code 的 `qwen serve` 也证明把自己当编码后端暴露给别的 agent 会成为需求）；② 网关层统一输出 token/成本用量（Kilo 的成本护栏、Devin 的 ACU 都建立在用量可计量上），供给 [observability-evaluation.md](./observability-evaluation.md)。
 

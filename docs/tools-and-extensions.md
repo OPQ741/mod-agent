@@ -1,8 +1,8 @@
 # Tools & Extensions · 工具系统、MCP 与 Skills
 
-> 这篇讲工具契约、统一执行结果、幂等与重试、人工审批策略，以及 MCP / Skills 扩展机制。
+> 工具契约、统一执行结果、幂等与重试、人工审批策略，外加 MCP / Skills 扩展机制，一篇讲完。
 
-模型再强，也得靠工具才能真正改代码、跑命令。这篇回答两个问题：模型每一轮能调用哪些工具，一次调用又要过几道检查才能落地。工具按来源分内部核心工具和 MCP 外部能力两类，审批则按动作风险决定放行、拒绝还是问人。读完你会知道 mod-agent 为什么连跑哪条命令都要拆成前缀白名单/黑名单来管。
+模型再强，也得靠工具才能真正改代码、跑命令。关键在两件事：模型每一轮能调用哪些工具，一次调用又要过几道检查才能落地。工具按来源分内部核心工具和 MCP 外部能力两类；审批按动作风险决定放行、拒绝还是问人。
 
 ## 1. 工具分层
 
@@ -40,7 +40,7 @@ MCP 是互操作协议，不天然代表可信或安全。每个 MCP Server 单�
 
 ### 1.1 MCP 连接生命周期：工具发现、路由与调用
 
-第 1 节的角色模型回答谁是谁，这里补连接怎么建、工具怎么发现、调用怎么路由。下面两张图：第一张是现行规范（2026-07-28）的写法，第二张是已被移除的旧握手，保留旧图是为了让你在读存量资料和旧 server 时不至于困惑。
+第 1 节的角色模型回答谁是谁，这里讲连接怎么建、工具怎么发现、调用怎么路由。先看现行规范（2026-07-28）的写法，再对照已被移除的旧握手。保留旧图，是为了让你读存量资料和旧 server 时不至于困惑。
 
 **现行（2026-07-28，无状态）**：
 
@@ -98,7 +98,7 @@ sequenceDiagram
 | **错误码**                            | 资源缺失返回自定义 `-32002`                                                | 改为 JSON-RPC 标准 **`-32602`**                                                                                                 | 任何硬编码匹配 `-32002` 的代码会静默漏判                                                                                            |
 | **废弃（12 个月最短窗口，SEP-2596）** | Roots / Sampling / Logging 可用                                            | 三者**废弃**，分别改用工具参数或资源 URI、直接调 LLM 厂商 API、stderr 或 OpenTelemetry；HTTP+SSE 传输也废弃，转 Streamable HTTP | 别在新代码里用它们；用了就当作已知搬迁债务                                                                                          |
 
-治理归属这点在选型评审时会被问到：Anthropic 已于 2025-12-09 把 MCP 捐给 Linux 基金会旗下的 Agentic AI Foundation（AAIF），创始成员包括 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。MCP 不再是单一厂商的赌注，协议被弃的长期风险显著下降。
+治理归属这点在选型评审时会被问到：Anthropic 已于 2025-12-09 把 MCP 捐给 Linux 基金会旗下的 Agentic AI Foundation（AAIF），创始成员包括 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。MCP 不再是单一厂商的赌注，协议被弃的长期风险小了不少。
 
 规模参考：Tier 1 SDK 月下载接近 5 亿次，TypeScript 与 Python SDK 累计下载各破 10 亿。
 
@@ -129,7 +129,7 @@ interface AgentTool<I = unknown, O = unknown> {
 - 工具名带命名空间（`repo.read_file`），避免多个 MCP Server 提供同名 `search` 产生歧义；
 - ACI 反向定制：输出分页 / 折叠 / 截断、报错结构化带"你可能想运行…"提示、强制绝对路径。Anthropic 实测改成强制绝对路径后，模型再没犯过相对路径错误。
 
-模型说跑什么，运行时不会直接跑。每次工具调用要依次过下面这道安检：
+模型说跑什么，运行时不会直接跑。每次工具调用都要依次过一道安检：
 
 ```mermaid
 flowchart TD
@@ -146,7 +146,7 @@ flowchart TD
     X --> R["统一 ToolExecutionResult，标 truncated"]
 ```
 
-模型想跑的任何一条命令，都要先过一串关卡：参数对不对、允不允许、黑不黑名单、要不要问人，最后拿到的都是一份格式统一、标了截断、带耗时和退出码的结果。这样模型拿到的反馈是确定的，不会因为一次报错文本措辞不同就判断失误。
+模型想跑任何一条命令，都要先过一串关卡：参数对不对、允不允许、黑不黑名单、要不要问人。过完关，拿到的是一份格式统一、标了截断、带耗时和退出码的结果。反馈是确定的，模型不会因为一次报错文本措辞不同就判断失误。
 
 比如，你刚批准模型跑 `npm test`。下一轮它想跑 `npm install lodash`，这是另一条命令、带网络副作用，不能因为你批过 npm 相关的命令就自动放行。审批必须和具体参数绑定，系统会按参数 hash 重新问你一次。
 
@@ -297,7 +297,7 @@ interface ToolExecutionResult<T = unknown> {
 
 ### 6.0 Agent Skills 已是一个开放标准（2026 核实）
 
-`SKILL.md` 这套一个目录 + 一个 Markdown 文件的格式，已经是一个开放标准：由 Anthropic 提出并开源、被大量 agent 产品采用（出处：https://skill.md ）。这一点决定了 mod-agent 该怎么选：直接跟标准，而不是自造一套。
+`SKILL.md` 这套一个目录 + 一个 Markdown 文件的格式，已经是一个开放标准：由 Anthropic 提出并开源、被大量 agent 产品采用（出处：https://skill.md ）。mod-agent 因此直接跟标准，不自造一套。
 
 格式小到不能再小：一个目录 + `SKILL.md`（YAML frontmatter + Markdown 正文）。frontmatter 只有两个必需字段：
 
@@ -323,7 +323,7 @@ flowchart LR
     style N fill:#f5f5f5
 ```
 
-一个团队可以装几十个技能，平时只付几十个名字 + 一句话的 token 成本。这也意味着 `description` 是整份文件里权重最高的字段，它是模型在做决定前唯一能看到的文字：写得太模糊，技能永远不会触发；写得太宽泛，技能会在不该触发的时候乱触发。
+一个团队可以装几十个技能，平时只付几十个名字 + 一句话的 token 成本。`description` 因此是整份文件里权重最高的字段，模型在做决定前唯一能看到的文字就是它：写得太模糊，技能永远不会触发；写得太宽泛，技能会在不该触发的时候乱触发。
 
 规模与落地：规范的客户端展示页列出 46 个产品支持，包括 Claude Code、ChatGPT/Codex、Cursor、GitHub Copilot、VS Code、Gemini CLI、OpenHands、Goose、Amp 等。安装路径的通用位置是项目根的 `.agents/skills/`，Claude Code 另扫 `.claude/skills/`（个人 `~/.claude/skills/`、项目 `.claude/skills/`）。规范建议正文 <5000 token / <500 行。
 
@@ -426,7 +426,7 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 3. PostToolUse 两种介入：`additionalContext`（向上下文追加事实，如当前分支 / 测试命令；超长则落盘只传路径）、`updatedToolOutput`（替换模型看到的工具输出，如把 stdout 里的密钥打码为 `[redacted]`，不影响已发生的副作用）；
 4. 写作要求：追加内容用陈述句事实，避免祈使句式系统指令，否则会触发模型的 prompt-injection 防御而被丢弃。
 
-真实 Claude Code 的完整 Hooks 体系（v2.1.88 快照）：上面 6 个是最常用、官方文档化的事件；实际运行时按生命周期分约 13 组、23+ 个事件，四个执行点（会话边界 / 轮次边界 / 工具执行前 / 工具执行后），且在执行点可产出四种决策：
+真实 Claude Code 的完整 Hooks 体系（v2.1.88 快照）：上表 6 个是最常用、官方文档化的事件。实际运行时按生命周期分约 13 组、23+ 个事件，四个执行点（会话边界 / 轮次边界 / 工具执行前 / 工具执行后），在执行点可产出四种决策：
 
 | 决策类型       | 效果                                               |
 | -------------- | -------------------------------------------------- |
@@ -438,6 +438,6 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 除上表的核心事件外，还有 Notification、SubagentStop、PreCompact、SessionStart 的 `source` 等更细挂点（如压缩前、子 agent 停止、通知时）。对 mod-agent：
 
 - MVP 先做上表 6 个事件 + 阻断/追加/替换三类决策，覆盖 90% 场景；其余事件按真实需求再补；
-- Hook 是确定性扩展，比让模型临场改行为可靠，它是用户/组织在不写代码的前提下插进主循环的确定性逻辑；
+- Hook 是确定性扩展：比让模型临场改行为可靠，也让用户/组织在不写代码的前提下，把确定性逻辑插进主循环；
 - Hook 与 Auto Mode 的 Stop hook 是同一套引擎：`/goal` 本质就是封装了一个会话级 Stop hook（见 [autonomy.md §1.5](./autonomy.md#_1-5-真实-claude-code-证据-goal-其实是-stop-hook-的封装)）；
 - CI/无人值守默认不自动加载仓库自带 hooks（`--bare`，见 [security.md §3](./security.md#_3-沙箱基线)），防止恶意仓库借 hook 执行任意代码。

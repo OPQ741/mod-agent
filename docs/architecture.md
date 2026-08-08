@@ -85,7 +85,7 @@ flowchart LR
 | ADR-7 | CLI-first（Commander + Ink + SQLite），不先做 Web 平台      | 纵向闭环最快；Web/BFF/PostgreSQL 留到团队阶段                        |
 | ADR-8 | 工具经 Zod schema 校验入参、Policy 层独立判定权限           | 权限判定不依赖模型自然语言自述，安全可独立测试                       |
 
-上表这 8 条 ADR，下面挑几条用工程口吻再注解一遍（决策与理由保持原样，这里只加解释）：
+上表这 8 条 ADR，挑几条用工程口吻再注解一遍（决策与理由保持原样，这里只加解释）：
 
 - **ADR-1**：宁可一个主循环加可控的小助手，也不上一堆平级同事互相传话。多 agent 协同改文件，跨文件不一致出过太多次事故。
 - **ADR-2**：走过的步骤只往一个事件日志里追加，不再维护第二份运行内存账本，重启能原样回放。
@@ -125,13 +125,13 @@ flowchart TB
     style AG fill:#7c5cfc,color:#fff
 ```
 
-紫色那个是我们的位置，其余四个都是别人定好、我们去适配的开放标准。只有 A2A 是可选的远期项，其余三个首期就该接上，因为它们不需要我们造轮子，还能直接换来生态兼容性。
+紫色那个是我们的位置，其余四个都是别人定好、我们去适配的开放标准。只有 A2A 是可选的远期项，其余三个首期就该接上：不用自己造轮子，还能直接换来生态兼容性。
 
 边界原则：日常默认只做 MCP；A2A 官方明确"不是框架、不是子代理协议"，内部多步 / 子任务编排用单主循环 + 子工具委托（ADR-1），不在主线里把 A2A 当工具调用协议用（出处：https://a2a-protocol.org/latest/ ）。
 
 两个影响选型的近期变化（2026）：
 
-1. **MCP 治理归属变了**：Anthropic 已于 2025-12-09 将 MCP 捐给 Linux 基金会旗下的 Agentic AI Foundation（AAIF），创始成员含 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。含义：MCP 不再是单一厂商的赌注，长期协议废弃风险下降。选型评审被问到这协议谁说了算时，答案是基金会，不是某家厂商。
+1. **MCP 治理归属变了**：Anthropic 已于 2025-12-09 将 MCP 捐给 Linux 基金会旗下的 Agentic AI Foundation（AAIF），创始成员含 AWS、Anthropic、Block、Bloomberg、Cloudflare、Google、Microsoft、OpenAI；基金会明确不干预技术方向，日常仍走 SEP 流程。这意味着 MCP 不再是单一厂商的赌注，长期协议废弃风险下降。选型评审再被问到这协议谁说了算，答案是基金会，不是某家厂商。
 2. **MCP 现行规范是 2026-07-28**（替代 2025-11-25），握手与会话已移除、改无状态内核。这是自发布以来最大的一次改版，实现细节见 [tools-and-extensions.md §1.2](./tools-and-extensions.md#_1-2-2026-07-28-规范改了什么-必读-影响所有-mcp-代码)。
 
 ## 3. 组件职责边界
