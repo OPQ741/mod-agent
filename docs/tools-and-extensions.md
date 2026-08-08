@@ -285,6 +285,21 @@ interface ToolExecutionResult<T = unknown> {
 
 能不能用，与用的时候要不要问人，是两个正交维度，应分别配置。
 
+### 5.2 Claude Code 实证：判定顺序、规则语法与持久度（出处：https://code.claude.com/docs/en/permissions 、https://code.claude.com/docs/en/permission-modes ，v2.1.300 核实）
+
+它有六种权限模式：`default`（界面里叫 Manual）、`acceptEdits`、`plan`、`auto`、`dontAsk`、`bypassPermissions`，其中 `dontAsk` 的语义值得单记：**会问的一律拒绝**，而不是全放行，这使它成为无人值守场景里比 bypass 安全得多的默认档。另有一张"任何模式都不会自动批准"的清单：命中显式 ask 规则的调用、组织设为 ask 的 connector、需要人交互的工具、critical path 上的 `rm` 与 `rmdir`、跨会话消息防护、目录外读取（开关式）。这张清单是"自治上限"的可执行定义，我们的审批表应当有对应的一列 bypass-immune，而不是把高风险动作写成"默认审批"。
+
+判定顺序是 deny、ask、allow，第一个命中的结论生效，**规则写得具体与否不参与排序**，且任何一层的 deny 全局无法在别处放行。这一点容易写错：直觉方案是"更具体的规则优先"，那会让团队级 deny 被个人级 allow 精确规则翻掉。
+
+规则语法的四个坑会直接决定白名单是否误伤：
+
+1. `Bash(ls:*)` 与 `Bash(ls *)` 等价，但 `Bash(ls*)` 会连 `lsof` 一起命中，前者要求 `ls` 后必须是空格；
+2. 复合命令按 `&&`、`||`、`;`、`|`、`&` 与换行拆成子命令**逐个匹配**，全部通过才放行，所以 `Bash(git status *)` 放不倒 `git status && rm -rf /tmp/x`；
+3. wrapper 会先剥离再匹配（`timeout`、`nice`、`nohup`、`stdbuf`、`command`、裸 `xargs` 等），但 `npx`、`docker exec`、`mise exec` 这类"再套一层执行入口"的**不剥**；
+4. 路径规则的锚点有四种（`//` 文件系统绝对、`~/` 相对 home、`/` 相对**该 settings 文件所在目录**、裸路径相对 cwd），且同一 pattern 在 allow 与 deny 下**目录深度语义不同**：`Edit(src/**)` 作 allow 时只覆盖 `<cwd>/src`，`Read(secrets/**)` 作 deny 时匹配任意深度。写收权规则可以偷懒，写放权规则不行。
+
+审批的持久度按动作类型分档，不是一把梭：Bash 的"不再询问"按仓库加命令永久落盘，文件修改的批准**只活到会话结束**（官方原话"A file-modification approval isn't saved to the file."），WebFetch 按仓库加域名永久。工作区信任又是另一档：接受只对当次会话有效、不写盘，也没有持久化开关。这个三档划分比"要么记住要么每次都问"精细，建议照抄进 §5 表的"失效时间"列。
+
 ## 6. Skills · 工程流程复用
 
 | 概念                  | 是什么                                                 | 例子                                                    |
@@ -426,7 +441,7 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 3. PostToolUse 两种介入：`additionalContext`（向上下文追加事实，如当前分支 / 测试命令；超长则落盘只传路径）、`updatedToolOutput`（替换模型看到的工具输出，如把 stdout 里的密钥打码为 `[redacted]`，不影响已发生的副作用）；
 4. 写作要求：追加内容用陈述句事实，避免祈使句式系统指令，否则会触发模型的 prompt-injection 防御而被丢弃。
 
-真实 Claude Code 的完整 Hooks 体系（v2.1.88 快照）：上表 6 个是最常用、官方文档化的事件。实际运行时按生命周期分约 13 组、23+ 个事件，四个执行点（会话边界 / 轮次边界 / 工具执行前 / 工具执行后），在执行点可产出四种决策：
+真实 Claude Code 的完整 Hooks 体系（v2.1.300 快照，逐页核实于 2026-10-15）：上表 6 个是最高频的子集，官方事件表实际列了 **33 个事件**，按生命周期五组分布：会话级 `SessionStart`、`Setup`、`SessionEnd`、`ConfigChange`、`InstructionsLoaded`；轮次级 `UserPromptSubmit`、`UserPromptExpansion`、`MessageDisplay`、`Stop`、`StopFailure`、`PreCompact`、`PostCompact`、`PreModelSwitch`、`PostModelSwitch`、`Notification`；工具级 `PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`PostToolBatch`、`PermissionRequest`、`PermissionDenied`、`Elicitation`、`ElicitationResult`；子代理与团队 `SubagentStart`、`SubagentStop`、`TaskCreated`、`TaskCompleted`、`TeammateIdle`；工作区 `CwdChanged`、`DirectoryAdded`、`FileChanged`、`WorktreeCreate`、`WorktreeRemove`。执行器类型也不再只有命令行一种，官方支持 `command`、`http`、`mcp_tool`、`prompt`、`agent` 五种（最后一种标注 experimental）。
 
 | 决策类型       | 效果                                               |
 | -------------- | -------------------------------------------------- |
@@ -435,9 +450,13 @@ fork 的安全约束：工具集受 frontmatter `allowed-tools` 白名单限制�
 | 追加上下文     | 向上下文加事实（PostToolUse 的 additionalContext） |
 | 替换输出       | 改模型看到的工具输出（updatedToolOutput）          |
 
+阻断能力要按事件区分，不能笼统承诺"exit 2 就拦"。可阻断的是 `PreToolUse`、`UserPromptSubmit`、`UserPromptExpansion`、`Stop`、`SubagentStop`、`TeammateIdle`、`TaskCreated`（回滚这次创建）、`TaskCompleted`、`ConfigChange`、`PostToolBatch`、`PreCompact`、`PreModelSwitch`、`Elicitation`、`ElicitationResult`、`WorktreeCreate` 与 `WorktreeRemove`（这两个任何非零退出都算失败）；不可阻断的走专门契约：`PermissionRequest` 要返回 `decision` 对象、`PostToolUse` 与 `PostToolUseFailure` 的 stderr 是展示给模型、`PermissionDenied` 用 `retry: true`、`SubagentStart` 与 `SessionStart` 等的 stderr 只给人看、`DirectoryAdded` 只进 debug log。stdout 里还能改三样东西，层次分明：`updatedInput` 改入参、`updatedToolOutput` 改返回、`displayContent` **只改显示而不改模型输入**，这一档是审计与体验分离的现成范式。
+
+其余数值口径：timeout 默认按类型 600 秒（command / http / mcp_tool）、30 秒（prompt）、60 秒（agent），并按事件下调（`MessageDisplay` 10 秒、`SessionEnd` 全体共享 1.5 秒）；同一事件下所有匹配的 hook **并行执行**；`additionalContext`、`systemMessage`、`initialUserMessage` 的注入长度上限都是 **10,000 字符**；hook 的 allow 不能越过 settings 的 deny 规则，但 hook 的 deny 在 `bypassPermissions` 下依然生效；`UserPromptSubmit` 只能追加、不能替换用户输入。
+
 除上表的核心事件外，还有 Notification、SubagentStop、PreCompact、SessionStart 的 `source` 等更细挂点（如压缩前、子 agent 停止、通知时）。对 mod-agent：
 
-- MVP 先做上表 6 个事件 + 阻断/追加/替换三类决策，覆盖 90% 场景；其余事件按真实需求再补；
+- MVP 先做上表 6 个事件 + 阻断/追加/替换三类决策，覆盖 90% 场景；其余事件按真实需求再补，但**事件名要一次性预留** `PostToolBatch`、`PermissionRequest`、`InstructionsLoaded` 三个位，它们分别对应并行批次收敛、规则未命中时的决策外移、规则加载可观测，事后补名会牵动事件流；
 - Hook 是确定性扩展：比让模型临场改行为可靠，也让用户/组织在不写代码的前提下，把确定性逻辑插进主循环；
 - Hook 与 Auto Mode 的 Stop hook 是同一套引擎：`/goal` 本质就是封装了一个会话级 Stop hook（见 [autonomy.md §1.5](./autonomy.md#_1-5-真实-claude-code-证据-goal-其实是-stop-hook-的封装)）；
 - CI/无人值守默认不自动加载仓库自带 hooks（`--bare`，见 [security.md §3](./security.md#_3-沙箱基线)），防止恶意仓库借 hook 执行任意代码。

@@ -119,6 +119,15 @@ flowchart LR
 
 换句话说，路由不是越省越好，而是要有能信的难度信号。没有信号就别硬分桶，把便宜模型留给那些确定简单的活（格式化、摘要、分类），而不是让分类器去猜。
 
+### 2.1 别名、档位与降级链（Claude Code v2.1.300 实证，出处：https://code.claude.com/docs/en/model-config ）
+
+路由这一层它给我们的四条可抄事实：
+
+- **对用户暴露别名，不对用户暴露型号**。`opus`、`sonnet`、`haiku`、`fable`、`default`、`best` 加 `[1m]` 变体是一层稳定接口，而别名到具体型号的解析结果**按平台与版本分成四组不同映射**（Anthropic API、Bedrock 与 Agent Platform、Foundry、Claude Platform on AWS 各一套）。任何把某个别名钉死到某个型号的文档都会在下个版本失效，我们的 [usage.md §4](./usage.md) 命令表因此只写 `--model <id>` 而不列型号。
+- **推理档位是独立于模型选择的一个轴**。它有 `low`、`medium`、`high`、`xhigh`、`max` 五档，**每个型号有自己的默认档**（新出的 5.5 一代默认 `medium`，上一代普遍默认 `high`，个别型号默认 `xhigh`），给了不支持的档位则**降级到不超过请求值的最高可用档**而不是报错。"按能力降档而不是失败"这条对网关很实用。
+- **思考预算要显式承认为成本项**。新模型的自适应思考已经关不掉（界面直接显示关不掉的状态），且官方明写思考 token 即使被折叠或被脱敏也照常计费。我们的 [observability-evaluation.md §2](./observability-evaluation.md) 指标里应当有 thinking token 的独立计数。
+- **降级链要有长度上限与作用域**。过载时 `--fallback-model sonnet,haiku` 给一条链，去重后**最多三个型号**，且**只对当轮生效**，不改变会话默认。把降级做成临时行为而不是持久改配置，能避免"降级后没人改回来"这类运维事故。
+
 ## 3. 提示词版本管理
 
 - system policy、任务规划、工具说明、总结提示分层存放；

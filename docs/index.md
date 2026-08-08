@@ -58,30 +58,31 @@ flowchart LR
 
 按"为什么 → 是什么 → 怎么做"组织：
 
-| 文档                                                               | 回答的问题                                                                                |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| [overview.md](./overview.md)                                       | 目标与边界、设计原则、任务模式、MVP 做 / 不做                                             |
-| [usage.md](./usage.md)                                             | 使用者视角：命令怎么敲、四种模式怎么切、审批与回滚怎么看（设计阶段的使用体验规格）        |
-| [research.md](./research.md)                                       | 领域调研：主流产品、评测基准、架构范式、失败模式与安全实证                                |
-| [coding-agents.md](./coding-agents.md)                             | Coding Agent 全景图鉴：63 个产品 / 框架 / 协议的逐一对标画像，以及对 mod-agent 的设计启示 |
-| [architecture.md](./architecture.md)                               | 总体分层架构、架构决策记录（ADR）、技术选型、monorepo 结构                                |
-| [agent-loop.md](./agent-loop.md)                                   | Agent Runtime：任务状态机、核心循环、停止/恢复/预算语义                                   |
-| [context-engineering.md](./context-engineering.md)                 | 代码库理解、分层检索、上下文装配与压缩、注入防护                                          |
-| [system-prompt.md](./system-prompt.md)                             | 系统提示词分层（静态/动态）、提示词写法、规则注入、缓存边界                               |
-| [tools-and-extensions.md](./tools-and-extensions.md)               | 工具契约、统一执行结果、延迟加载、并行执行、MCP、Skills、人工审批策略                     |
-| [code-editing.md](./code-editing.md)                               | 文件读取与编辑策略、编辑安全校验、Worktree 隔离、用户变更保护、Diff 审核                  |
-| [verification-and-multiagent.md](./verification-and-multiagent.md) | 验证流水线、错误分类、Repair Loop、子 Agent 协作模式与隔离                                |
-| [autonomy.md](./autonomy.md)                                       | 自治与续跑：目标追达（/goal）、定时/自排程（/loop）、动作自动批准（Auto Mode）            |
-| [dynamic-workflows.md](./dynamic-workflows.md)                     | 动态工作流：确定性脚本编排、pipeline/parallel、结构化返回、三道上限、断点续跑             |
-| [agent-teams.md](./agent-teams.md)                                 | Agent 团队：对等组队、共享任务/记忆/产出、跨会话安全（用户权威不转移）                    |
-| [background-fleet.md](./background-fleet.md)                       | 后台舰队：脱终端常驻、daemon 监管、子 agent 后台化、commit/push/draft PR 收尾             |
-| [security.md](./security.md)                                       | 威胁模型、沙箱基线、权限判定引擎、命令执行层、密钥/网络、安全验收                         |
-| [data-and-events.md](./data-and-events.md)                         | EventStream 事件模型、SQLite 持久化、检查点、一致性规则                                   |
-| [model-gateway.md](./model-gateway.md)                             | Provider 适配、模型路由、提示词版本管理、结构化输出                                       |
-| [observability-evaluation.md](./observability-evaluation.md)       | Trace/指标/日志/成本，以及评测体系与发布门禁                                              |
-| [roadmap.md](./roadmap.md)                                         | 分阶段路线（Phase 0–6）、优先开发顺序、MVP 验收清单                                       |
-| [development-guide.md](./development-guide.md)                     | 开发者视角：模块依赖顺序、最小可跑循环、各模块自测口径、前人踩过的实现坑                  |
-| [references.md](./references.md)                                   | 参考来源汇总                                                                              |
+| 文档                                                               | 回答的问题                                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| [overview.md](./overview.md)                                       | 目标与边界、设计原则、任务模式、MVP 做 / 不做                                              |
+| [usage.md](./usage.md)                                             | 使用者视角：命令怎么敲、四种模式怎么切、审批与回滚怎么看（设计阶段的使用体验规格）         |
+| [research.md](./research.md)                                       | 领域调研：主流产品、评测基准、架构范式、失败模式与安全实证                                 |
+| [coding-agents.md](./coding-agents.md)                             | Coding Agent 全景图鉴：63 个产品 / 框架 / 协议的逐一对标画像，以及对 mod-agent 的设计启示  |
+| [claude-code-guide.md](./claude-code-guide.md)                     | 对标产品实战教程：Claude Code 今天怎么用、内部发生什么、每一处限制的数值是多少（逐页核实） |
+| [architecture.md](./architecture.md)                               | 总体分层架构、架构决策记录（ADR）、技术选型、monorepo 结构                                 |
+| [agent-loop.md](./agent-loop.md)                                   | Agent Runtime：任务状态机、核心循环、停止/恢复/预算语义                                    |
+| [context-engineering.md](./context-engineering.md)                 | 代码库理解、分层检索、上下文装配与压缩、注入防护                                           |
+| [system-prompt.md](./system-prompt.md)                             | 系统提示词分层（静态/动态）、提示词写法、规则注入、缓存边界                                |
+| [tools-and-extensions.md](./tools-and-extensions.md)               | 工具契约、统一执行结果、延迟加载、并行执行、MCP、Skills、人工审批策略                      |
+| [code-editing.md](./code-editing.md)                               | 文件读取与编辑策略、编辑安全校验、Worktree 隔离、用户变更保护、Diff 审核                   |
+| [verification-and-multiagent.md](./verification-and-multiagent.md) | 验证流水线、错误分类、Repair Loop、子 Agent 协作模式与隔离                                 |
+| [autonomy.md](./autonomy.md)                                       | 自治与续跑：目标追达（/goal）、定时/自排程（/loop）、动作自动批准（Auto Mode）             |
+| [dynamic-workflows.md](./dynamic-workflows.md)                     | 动态工作流：确定性脚本编排、pipeline/parallel、结构化返回、三道上限、断点续跑              |
+| [agent-teams.md](./agent-teams.md)                                 | Agent 团队：对等组队、共享任务/记忆/产出、跨会话安全（用户权威不转移）                     |
+| [background-fleet.md](./background-fleet.md)                       | 后台舰队：脱终端常驻、daemon 监管、子 agent 后台化、commit/push/draft PR 收尾              |
+| [security.md](./security.md)                                       | 威胁模型、沙箱基线、权限判定引擎、命令执行层、密钥/网络、安全验收                          |
+| [data-and-events.md](./data-and-events.md)                         | EventStream 事件模型、SQLite 持久化、检查点、一致性规则                                    |
+| [model-gateway.md](./model-gateway.md)                             | Provider 适配、模型路由、提示词版本管理、结构化输出                                        |
+| [observability-evaluation.md](./observability-evaluation.md)       | Trace/指标/日志/成本，以及评测体系与发布门禁                                               |
+| [roadmap.md](./roadmap.md)                                         | 分阶段路线（Phase 0–6）、优先开发顺序、MVP 验收清单                                        |
+| [development-guide.md](./development-guide.md)                     | 开发者视角：模块依赖顺序、最小可跑循环、各模块自测口径、前人踩过的实现坑                   |
+| [references.md](./references.md)                                   | 参考来源汇总                                                                               |
 
 ### 从哪篇开始读
 
@@ -93,6 +94,7 @@ flowchart LR
 | 想知道将来怎么用       | [usage.md](./usage.md) → [overview.md](./overview.md)                                                              | 看命令、模式与审批交互长什么样     |
 | 要参与开发             | [architecture.md](./architecture.md) → [development-guide.md](./development-guide.md) → [roadmap.md](./roadmap.md) | 先看分层，再看怎么动手与开发顺序   |
 | 想判断设计靠不靠谱     | [research.md](./research.md) → [security.md](./security.md) → [coding-agents.md](./coding-agents.md)               | 看业界事实依据、安全边界与对标图鉴 |
+| 想吃透对标产品         | [claude-code-guide.md](./claude-code-guide.md) → 它每节末指回的机制专题                                            | 先看清它怎么做对的，再定我们怎么做 |
 
 下图是这份文档集的阅读主线（箭头表示"先读哪篇再读哪篇"）：
 

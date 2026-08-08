@@ -113,6 +113,12 @@ OpenHands 把一次交互抽象成一个 `Conversation` 对象（出处：https:
 - 子 agent / workflow 各写自己的文件，每条委派链的追踪分开（见 [verification-and-multiagent.md](./verification-and-multiagent.md)、[dynamic-workflows.md](./dynamic-workflows.md)）；
 - 这是默认就在、不依赖遥测开关的那份 trace，对没有接 OTel 后端的单机用户尤其重要。
 
+事件模型还有三处它的字段设计值得直接对齐（出处：https://code.claude.com/docs/en/headless 、https://code.claude.com/docs/en/sub-agents ，v2.1.300 核实）：
+
+1. **每条消息带一个指向"谁发起我"的父调用 ID**。它的 `parent_tool_use_id` 有三种取值：主会话为 `null`、子代理产生的消息指向派生它的那次工具调用 ID、fork 型 skill 用固定前缀区分。有了这一个字段，一次混合输出的流就能按执行主体完整拆开，不需要额外的会话表。我们的 `EventEnvelope` 应当有等价的 `parentCallId`，并且**明确规定它可空**，而不是用 `agentId` 之类的字符串默认空值来混淆"主线程"与"未知"。
+2. **会话起点事件是一份自描述体检单**。它的第一条事件把本次会话实际生效的东西全列出来：模型、工具集、每个 MCP server 的连接状态与配置来源、已加载插件、斜杠命令与 skill 清单、子代理清单、工作目录、程序版本、当前权限模式、API 凭证来源、能力位。这是把"环境装配结果"当成**事件而不是配置**来记，事后调试与"为什么这台机器行为不同"全靠它。我们的 `SessionStarted` 事件应当携带同等内容（配置指纹见 [system-prompt.md §1](./system-prompt.md)）。
+3. **终止原因是枚举，不是布尔**。它的收尾事件用 `subtype` 区分 `success`、`error_max_turns`、`error_during_execution`、`error_max_budget_usd`、`error_max_structured_output_retries`，并带 `num_turns`、`duration_ms` 与 `duration_api_ms` 两个时长、`permission_denials` 拒绝清单。预算撞线、轮次撞线、执行中异常是三类不同的失败，[agent-loop.md §6](./agent-loop.md) 的循环防护要各自可辨，[usage.md §4](./usage.md) 的退出码也才有稳定语义。
+
 ## 2. 持久化表（SQLite）
 
 PostgreSQL 是团队阶段的权威库；MVP 用 SQLite 落地同一套逻辑模型（先跑起来，逻辑不变，以后换库只换驱动）。

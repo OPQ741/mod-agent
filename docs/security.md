@@ -145,6 +145,31 @@ flowchart TB
 
 agent 产出的工作流默认不自动跑（GitHub Copilot，出处：https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github ）：Copilot 云端代理 push 后，GitHub Actions 默认不自动执行，因为 workflow 可能有权限访问敏感密钥，而 agent 可能改过 `.github/workflows/`；需人亲眼看过改动后手动点"Approve and run workflows"。凡 agent 改动涉及工作流定义 / 密钥读取路径时，评审界面显式提示。
 
+### 3.3 沙箱不覆盖清单（Claude Code v2.1.300 实证，出处：https://code.claude.com/docs/en/sandboxing ）
+
+上一节的结论是"沙箱外程序的输入源才是攻击面"。这一节把它落到具体产品上：厂商自己列出的盲区清单，比任何第三方评测都更能说明"开了沙箱"到底买到了什么。
+
+先说平台事实。它的 Bash 沙箱在 macOS 用内置 Seatbelt、Linux 与 WSL2 用 bubblewrap（文件系统隔离加独立 network namespace），**WSL1 不支持**，**原生 Windows 上沙箱根本不运行**、命令全部 unsandboxed；依赖缺失或平台不支持时默认行为是**静默回退**到不隔离，除非显式设 `sandbox.failIfUnavailable: true`。也就是说"配了沙箱"与"沙箱真的在跑"是两件事，它给了 `/sandbox` 面板与两行自查命令（`touch ~/sandbox-probe`、`curl --noproxy '*' https://example.com`）来区分。
+
+官方明确列出的不覆盖范围：
+
+| 不受沙箱约束                                                                                | 原因                                                  |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 内置 `Read`、`Edit`、`Write`、`WebFetch`、`WebSearch`                                       | 这些工具不经 Bash 沙箱，走权限规则                    |
+| hooks、本地 MCP server、插件 monitors、LSP、statusline 命令、`apiKeyHelper`                 | 全部在沙箱外执行                                      |
+| 用户以 `!` 前缀手敲的 shell mode 命令                                                       | 多数会话下 unsandboxed                                |
+| 命中 `sandbox.excludedCommands` 的命令、沙箱失败后带 `dangerouslyDisableSandbox` 重试的命令 | 前者是显式豁免，后者需人批但批了就绕过                |
+| `allowAllUnixSockets: true` 时的 Unix socket                                                | 可及 Docker socket，正是 §3.2 里第 4 类失败模式的成因 |
+| 自定义 proxy 端口、`filesystem.disabled: true`、`allowAppleEvents: true`                    | 分别使网络管控失效、关掉文件隔离、放宽进程间控制      |
+
+网络默认不放开：所有出站经本地代理逐 host 校验，未列域名按当前权限模式处理。有一条值得学：`WebFetch(domain:...)` 的 allow 规则会直接喂给沙箱域名 allowlist，一份配置两处生效，避免权限规则与网络策略漂移。
+
+对 mod-agent 的三条硬结论：
+
+1. **覆盖率要显式声明**。[§3](#_3-沙箱基线) 的基线表应当增加一列"是否受沙箱约束"，把只读工具、扩展执行体（hook、MCP、statusline）、用户手敲命令三类点名列出，并注明各自的兜底机制是权限规则还是 workspace 信任还是审批，避免读者把"开了沙箱"读成"全都隔离了"。
+2. **静默回退是不可接受的默认**。它把选择权交给用户，代价是绝大多数用户不知道自己从未被隔离。我们的 Docker 方案应当默认 fail-closed：沙箱不可用则拒绝高风险动作，把降级许可做成显式配置项并进安全验收清单（[§6](#_6-安全验收清单)）。
+3. **扩展执行体是一等攻击面**。它把 hooks 与本地 MCP 明言放在沙箱外，正对应 §3.2 的失败模式 2 与本节表第 2 行。我们的插件与 hook 引擎必须落在沙箱**内**执行，或者像它一样在文档里明写"不覆盖"并靠信任工作区加审批兜底，两者择一，不能含糊。
+
 ## 4. 命令执行层
 
 不把模型生成的一整段文本交给有宿主机权限的 shell（也就是不要 `bash -c "<模型吐出的一长串>"`）。接口采用可审查结构：

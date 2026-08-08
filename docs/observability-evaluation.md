@@ -132,6 +132,16 @@ flowchart LR
 
 分母选错，结论就反了。每次成功解决的成本才是能拿来做路由和选型的数字，它把重试和失败自动算进了账里。
 
+### 2.1 命名基线与成本账的口径（Claude Code v2.1.300 实证，出处：https://code.claude.com/docs/en/monitoring-usage 、https://code.claude.com/docs/en/agent-sdk/cost-tracking ）
+
+我们的指标如果与开放语义约定同名，用户就能拿现成的看板与告警规则接上。它这一层全部走 OpenTelemetry，命名可直接抄：一个 `claude_code.` 前缀下八个 metric（`session.count`、`lines_of_code.count`、`pull_request.count`、`commit.count`、`cost.usage`、`token.usage`、`code_edit_tool.decision`、`active_time.total`），以及十八项 event（`user_prompt`、`assistant_response`、`tool_result`、`api_request`、`api_error`、`api_refusal`、`tool_decision`、`permission_mode_changed`、`auth`、`mcp_server_connection`、`plugin_installed`、`plugin_loaded`、`skill_activated`、`system_prompt`、`managed_settings_resolved`、`internal_error` 十六项，另有 API 请求与响应的原始 body 两项）。
+
+三件事值得注意：
+
+- **内容默认不落遥测**。用户输入、模型回复、工具细节、原始 body、系统提示、托管配置各有独立开关，**六个开关全部默认关闭**；官方另给了一键关到骨头的变量（遥测、错误上报、反馈命令、问卷、非必要流量）。指标名与属性名可以公开，内容必须逐项 opt-in，这条应当写进我们的日志原则（[§3](#_3-日志原则)）。
+- **成本有两个口径，别混用**。`usage` 只计主循环，含子代理的是按模型分组的 `modelUsage`；`total_cost_usd` 是客户端按公开价估的数、不是账单。流式会话里每轮都会吐一个收尾事件，而这两个值是**整次调用的累计**，读最新值而不是求和，`/clear` 一类重置会清零。我们的成本表如果按轮求和，就会把同一笔账重复计入。
+- **决策类指标要有独立事件**。`code_edit_tool.decision` 与 `tool_decision` 单列，是因为"人怎么批"本身就是要长期观测的量：审批被拒次数、被"不再询问"固化的比例、模式切换次数，是权限策略是否合理的唯一证据。这三项都应在我们 [§4 评测体系](#_4-评测体系) 的策略回归里留位。
+
 ## 3. 日志原则
 
 只记录调试与审计所需内容。对源码片段、用户输入、日志、模型输出定义脱敏 / 保留策略。密钥、Cookie、Authorization、访问令牌不写日志；高敏内容不默认作为 trace 属性。日志需采样与大小限制，但安全审计事件不因采样丢失。

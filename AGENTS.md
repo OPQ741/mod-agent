@@ -2,9 +2,34 @@
 
 本文件是给 AI 编码代理（Coding Agent）看的项目操作手册。README.md 讲「这个项目是什么」，本文件讲「在这个仓库里怎样正确干活」。Codex、GitHub Copilot、Cursor、Windsurf、Amp、Devin 都会自动读取根目录的 `AGENTS.md`；Claude Code 可通过 `CLAUDE.md` 里一行 `@AGENTS.md` 引用本文件。跨工具共享约定只写这一份，工具专属配置另放原生文件。
 
+请先理解当前代码仓库，再完成后续开发任务。
+
+第一阶段：分析项目。
+
+阅读 README、项目配置、目录结构和相关源代码。
+
+分析项目使用的技术栈、运行方式、测试命令和现有代码规范。
+
+找出与当前任务相关的模块及依赖关系。
+
+暂时不要修改任何文件，先告诉我你的理解、实现方案、风险和验证方式。
+
+第二阶段：实施修改。
+在我确认方案后，再修改代码。尽量复用已有组件和工具，不要为了简单需求大规模重构，也不要擅自修改无关文件。
+
+第三阶段：验证。
+
+执行相关测试、类型检查和必要的构建命令。
+
+如果失败，分析原因并修复，再次验证。
+
+总结改动文件、关键实现、测试结果，以及仍然存在的问题。
+
+最后检查 git diff，确保没有无关改动或敏感信息。
+
 ## 1. 项目当前阶段
 
-TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于设计阶段**：仓库主体是 VitePress 文档站（`docs/`，23 篇源文档，约 6800 行），尚无运行时代码。修改前请先确认你面对的是「文档站阶段的仓库」还是「未来代码阶段的仓库」，两者约束不同。
+TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于设计阶段**：仓库主体是 VitePress 文档站（`docs/`，24 篇源文档，约 8200 行），尚无运行时代码。修改前请先确认你面对的是「文档站阶段的仓库」还是「未来代码阶段的仓库」，两者约束不同。
 
 ## 2. 开始任何任务前
 
@@ -37,7 +62,7 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | 改某篇文档正文                                        | `docs/<name>.md`                                                                                       | `npm run lint:links` → `npm run lint`  |
 | 加 / 删 / 重命名一篇文档                              | `docs/` 新增文件 + `docs/.vitepress/config.mts` sidebar + `docs/index.md` 导航表，三处同步             | `npm run lint:links` → `npm run lint`  |
-| 改侧栏编号 / 顺序                                     | `docs/.vitepress/config.mts`；侧栏 `text` 前缀使用连续两位数 `01`–`23`，不用 `03-1` 之类的连字符子编号 | `npm run lint:links` → `npm run lint`  |
+| 改侧栏编号 / 顺序                                     | `docs/.vitepress/config.mts`；侧栏 `text` 前缀使用连续两位数 `01`–`24`，不用 `03-1` 之类的连字符子编号 | `npm run lint:links` → `npm run lint`  |
 | 改 VitePress 站点配置（主题、导航、构建）             | `docs/.vitepress/config.mts`；主题/静态资源在 `docs/public/`                                           | `npm run docs:build`                   |
 | 修本文件里引用的命令是否还存在                        | `scripts/verify-agents-md-commands.mjs`；改 `package.json` scripts 或本文件后必跑                      | `npm run lint:agents`                  |
 | 修 ESLint / Prettier / commitlint / markdownlint 规则 | 分别对应 `eslint.config.mjs`、`.prettierrc.json`、`commitlint.config.mjs`、`.markdownlint-cli2.jsonc`  | `npm run lint`                         |
