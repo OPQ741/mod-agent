@@ -216,6 +216,27 @@ flowchart TD
 
 对 mod-agent：主循环 `runTask` 的伪代码在 §2 只处理"取消 vs 预算撞线"两条退出路径，没写"用户新消息进入"这一支。实现时必须补一条 `pendingUserMessages: Queue<{ text, priority }>`，`priority: now` 走 abort + 重启，其他走 turn 边界注入。审批对话框的 Tab 附加评论（见 [usage.md §5](./usage.md)）也是这条队列的一部分，它是"用户对这次决策的上下文说明"，不是新的 prompt。
 
+### 2.6 Channels：把外部事件推入主循环
+
+出处：Claude Code `channels.md`、`channels-reference.md` v2.1.300 实证（https://code.claude.com/docs/en/channels ）。真实 Claude Code 支持通过一个 MCP server 把外部事件（CI 结果、chat 消息、监控告警、webhook）主动推入一个正在跑的会话。这不是新造一套队列，是**上面那条 `pendingUserMessages` 队列的第二种生产者**：
+
+| 生产者       | 事件类型               | 语义                                                                              |
+| ------------ | ---------------------- | --------------------------------------------------------------------------------- |
+| 用户输入     | `user-message`         | 携带用户权威，可以直接改预算、批准动作                                            |
+| Channels     | `channel-notification` | **不携带用户权威**，与 teammate 消息同级（[agent-teams.md §4](./agent-teams.md)） |
+| 后台子 agent | `task-notification`    | 与 §5.1 会话恢复语义挂钩，是"派出去的东西回来了"                                  |
+| 定时器       | `cron-fire`            | 与 [autonomy.md §2.4](./autonomy.md) `CronCreate` 是同一批                        |
+
+统一实现是一处 `pendingExternalEvents: Queue<{ origin, kind, payload, priority }>`：主循环每轮结束、下一轮开始前按 `priority` 冲刷注入。四类生产者共用同一队列、同一注入路径，避免"CI 回调走一条通道、用户输入走另一条通道、子 agent 通知又走第三条"这种分散的状态机。
+
+三条硬约束：
+
+- **Channels 事件不能借道绕过权限判定**。CI 推来一条"帮我把这个 PR merge 了"看起来像消息、其实只是不可信输入，policy 层按普通工具调用判，deny 与 bypass-immune 规则照常生效。这条与 reasoning-blind（[autonomy.md §3.7](./autonomy.md)）对称：任何"非用户本人当面点的头"，一律不携带用户权威；
+- **事件源要显式声明能力位**。真实 Claude Code 的 `channels-reference` 里，server 连上来第一件事就是宣告它打算推哪几类事件（`declares: ["ci-result", "chat-message"]`），未宣告类型到达时丢弃。mod-agent 对应 `ChannelServerRegistration.declaredEvents[]`，主循环按类型分派 handler，未注册的 kind 落 `task.warning` 事件而不是崩溃；
+- **回信通道是可选的**。CI 类只要单向推入即可，chat 类可能要"agent 回一句话给原始渠道"。真实实现提供一个 `PushNotification` 工具让模型主动回信，未宣告 `canReply: true` 的 server 拿不到它。mod-agent 落地把 `canReply` 作为 channel 注册的一个能力位、和 `declaredEvents` 一起决定运行时暴露给模型的工具子集。
+
+Phase 归属：MVP 只做 `user-message` + `task-notification` + `cron-fire` 三类生产者（前两类已经覆盖主循环，第三类由 [autonomy.md](./autonomy.md) `/loop` 提供）。Channels（外部事件驱动）留到 Phase 5 团队与企业能力，与 Artifact、Web 控制台同期。
+
 ## 3. 分层循环
 
 - **主循环（任务级）**：上面的 `runTask`，负责中断 / 恢复 / 预算；

@@ -312,6 +312,36 @@
 - https://code.claude.com/docs/en/agent-sdk/typescript ｜ /python ｜ /permissions ｜ /custom-tools ｜ /cost-tracking ｜ /hosting ｜ /modifying-system-prompts ｜ /migration-guide — `Options` 约 80 字段、`Query` 方法集、`canUseTool` 六步评估顺序与"预批的调用不触发回调"、进程内 MCP 工具、`settingSources` 隔离语义、V2 session API 已 removed、每 agent 1 GiB / 5 GiB / 1 CPU 的托管起步值
 - https://github.com/anthropics/claude-code — `LICENSE.md` 全文一句、`CHANGELOG.md` 421 节（2.0.0 至 2.1.300 特性时间线）、`mods/` 与 `plugins/`（13 个官方插件）、`.claude/commands/` 三个自用命令、仓库自身是 marketplace、`.github/workflows/` 全是 issue 治理流水线、`CLAUDE.md` 里三条 Actions 加固规则
 - **已失效或改名的页面路径**（旧引用一律按右侧改指）：`plan-mode` → `permission-modes`；`model` 与 `thinking` → `model-config`；`context-editing` → `context-window`；`background-tasks` → `agent-view`；`claude-code-workflows` → `workflows`；`sandbox-setup` → `sandboxing`；`monitor-usage` → `monitoring-usage`；`iam-roles` → `authentication`；`cli` → `cli-reference`；`slash-commands` → 与 `skills` 逐字节相同的别名页；`plugins` 与 `plugin-marketplaces` → `plugins/*` 多级路径；`microcompact` 一词在现行文档中不存在
+- https://code.claude.com/docs/en/debug-your-config — `/context` `/doctor` `/hooks` `/mcp` 四件套排查面板、配置漂移的第一入口（本设计文档 `usage.md §4.1` 引用）
+- https://code.claude.com/docs/en/advisor — Advisor tool：主模型 + 强裁判、独立模型 / key / rate limit、复用主模型 prompt cache、会话内切不击缓存（`model-gateway.md §2.2` 引用）
+- https://code.claude.com/docs/en/fast-mode — Opus 高速档与 effort 正交、首次切击整段缓存、限流自动降级到标准端点（`model-gateway.md §2.2` 引用）
+- https://code.claude.com/docs/en/output-styles — 五个内置 style 与三级作用域、`keep-coding-instructions` 布尔、切 style 击穿缓存、与权限模式正交（`system-prompt.md §6.1` 引用）
+- https://code.claude.com/docs/en/interactive-mode — Enter 排队 vs Ctrl+Enter 打断 vs Esc 保留已完成、`priority: now|next|later` 消息队列、不可见字符剥离提示、`@` 引用文件（`agent-loop.md §2.5/§2.6` 与 `context-engineering.md §6` 引用）
+- https://code.claude.com/docs/en/sessions — `/rename` 命名 + `--resume <name>` 精确匹配直启、`/branch` 从当前 turn 复制到新会话、picker 与 `--continue` / `--from-pr`（`usage.md §4.1` 与 `agent-loop.md §5.2` 引用）
+- https://code.claude.com/docs/en/scheduled-tasks — `/loop` 三规则解析、`CronCreate` 会话内 7 天过期、`ScheduleWakeup` 缓存感知、`CLAUDE_CODE_DISABLE_CRON` + `scheduled_tasks.json` 落盘（`autonomy.md §2.4` 引用）
+- https://code.claude.com/docs/en/worktrees — 四条硬拦截、`.worktreeinclude` 跨 worktree 拷贝、`EnterWorktree` / `ExitWorktree` 一等工具、`WorktreeCreate/Remove` hooks 任何非零失败（`code-editing.md §3.3 / §3.5` 引用）
+- https://code.claude.com/docs/en/routines — 云端脱离会话的第三档调度、三种触发（定时 + API + GitHub 事件）、权限按"发起者"而非"部署者"（`autonomy.md §2.5` 引用）
+- https://code.claude.com/docs/en/channels 与 https://code.claude.com/docs/en/channels-reference — MCP server 把 CI 结果 / chat 消息 / 监控告警主动推入正在跑的会话、不携带用户权威、能力声明与回信通道（`agent-loop.md §2.6` 引用）
+- https://code.claude.com/docs/en/artifacts — 会话产物变成交互页（claude.ai 域下沙箱 iframe）、四态可见性、`&lt;artifact-reply&gt;` 回灌（`tools-and-extensions.md §3.1` 引用）
+- **其他参考页面（P2 边缘能力，本设计文档未展开为独立小节，仅登记来源以便未来按需查阅）**：
+  - https://code.claude.com/docs/en/deep-links — `claude-cli://` URL scheme 从 runbook / 告警直接拉起会话
+  - https://code.claude.com/docs/en/large-codebases — monorepo 与超大单仓的嵌套 CLAUDE.md + sparse worktree + 按包 skills
+  - https://code.claude.com/docs/en/gateways 与 `llm-gateway` / `llm-gateway-connect` / `llm-gateway-rollout` / `llm-gateway-protocol` — 自托管网关与 Anthropic 官方 Claude apps gateway
+  - https://code.claude.com/docs/en/third-party-integrations — Bedrock / Google Cloud Agent Platform / Microsoft Foundry / Claude Platform on AWS
+  - https://code.claude.com/docs/en/remote-control — 手机、平板、别处浏览器接管本地会话
+  - https://code.claude.com/docs/en/claude-projects — 相关任务串成一组并行云端会话共享 repo / 指令 / 记忆
+  - https://code.claude.com/docs/en/mobile — iOS / Android 起会话与观察进度
+  - https://code.claude.com/docs/en/slack — Slack `@Claude` 派活回 PR
+  - https://code.claude.com/docs/en/github-actions 与 `gitlab-ci-cd` — Actions / CI 流水线里跑 headless
+  - https://code.claude.com/docs/en/chrome — Chrome 扩展测试网页、看 console、自动填表
+  - https://code.claude.com/docs/en/computer-use — macOS 桌面控制（开应用、点击、看屏）
+  - https://code.claude.com/docs/en/vs-code 与 `jetbrains` — IDE 扩展（inline diff、`@`-mention、plan review）
+  - https://code.claude.com/docs/en/terminal-config — Shift+Enter / 终端 bell / tmux / Vim mode
+  - https://code.claude.com/docs/en/fullscreen — 无闪烁渲染 + 鼠标支持
+  - https://code.claude.com/docs/en/accessibility — VoiceOver / NVDA 屏幕阅读器、色盲主题、reduced motion
+  - https://code.claude.com/docs/en/voice-dictation — hold-to-record / tap-to-record 语音输入
+  - https://code.claude.com/docs/en/keybindings — `~/.claude/keybindings.json` 与热重载（`keybindingFlavor` 已废弃）
+  - https://code.claude.com/docs/en/statusline — 自定义状态栏（模型 / 分支 / 花费 / 上下文百分比）
 - https://code.claude.com/docs/llms.txt — 全站 129 个页面的权威索引，路径有疑问先查它
 
 **Aider**

@@ -136,6 +136,25 @@ stateDiagram-v2
 
 总闸也留了：设置里有一条"Disable agent view（`claude agents`、`--bg`、`/background`、on-demand daemon 一起关）"，等价于 `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`，通常在托管设置里下发。对不希望员工机器上冒出后台常驻进程的组织，这是一条能从上面统一关死的路。
 
+### 5.1 会话回收策略：什么时候杀进程，什么时候留着
+
+上面讲的是 daemon 自己的按需起停，但被它看着的**每个后台会话**也要有独立的回收规则，否则"关掉终端还在跑"就变成了"永远在跑、机器越用越慢"。真实 Claude Code 的规则值得原样抄（出处：https://code.claude.com/docs/en/agent-view ）：
+
+| 会话状态                                                | 回收行为                                                                                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `state=working` 或卡在权限对话框                        | **保留**，进程不死。用户在别处（手机、另一个终端）回来还能继续批                                                                        |
+| `state=done` 且未 attach 超过约 **1 小时**              | **停掉进程**。产物已经在 `~/.claude/jobs/<id>/state.json` 里，用户下次 `claude agents` 仍能看到"这条已 done 的会话"、可 attach 复活进程 |
+| `state=blocked / waiting` 且未 attach 超过约 **1 小时** | 同上，停进程但保留状态                                                                                                                  |
+| `Ctrl+T` **pin** 住的会话                               | **豁免 1 小时规则**，长跑过夜。UI 上"钉住"这个动作要显式、要一眼看到哪几个是钉住的                                                      |
+| 内存压力 + 空闲 30 分钟（macOS / Linux）                | **回收后台 Bash shell**（不是整个会话，只是它的子 shell），`CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` 可关                          |
+| 会话异常退出                                            | **自动重生**（走 §4.2 那套 `_respawn` 与 `_respawn_unconfirmed_bail` 确认）                                                             |
+| 用户主动 `←` 或 `/background` 结束                      | 标 `stopped` 不重启。异常退 vs 用户结束要区分开，这是"自动恢复"与"用户意图"两条路径的关键分岔                                           |
+| Supervisor 被外部 kill                                  | 各会话进程等约 **1 分钟**重连；重连成功后走 `_adopt` 认领回来，不视作异常退出                                                           |
+
+一条容易忽略的**detach 携带清单**：会话从终端摘到后台那一刻，所有 in-flight 的异步活必须一起搬过去，包括后台 shell、后台子 agent、dynamic workflows、`/loop` 定时任务、artifact 自动回复。只搬会话文本、丢下这些异步活不算真的 detach——用户会以为"关了终端它还在跑测试"，实际测试子 shell 已经随 shell 一起收到 SIGHUP。mod-agent 的 `detach()` 实现要显式遍历这五类，任何一类没搬干净就是 bug。
+
+对 mod-agent：会话状态表（`coding_tasks` 或新增的 `background_sessions`）要有 `pinned: boolean`、`last_attached_at: timestamp`、`reclaim_eligible_at: timestamp` 三列。回收器（一个 tick 循环）按这三列判"该停的停、该保的保"，与 §4.2 worker 生命周期解耦。1 小时阈值与 30 分钟空闲都是 settings 键，不是常量。
+
 ## 6. 同一片版图：子 agent 默认后台
 
 `/bg` 出去的是整会话；而在一个会话内部，主会话派出去的子 agent 默认也跑在后台。这层底座在快照源码里就能逐行读：

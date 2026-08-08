@@ -179,6 +179,24 @@ flowchart TD
 
 配套交互设计：每个快照点旁同时给 Compare（看本次 diff）与 Restore（三种退法见 §3.1 表），且**回退不可逆**要在按钮上写清楚（Windsurf 原话："Reverts are currently irreversible, so be careful!"）。
 
+### 3.5 Worktree 是一等工具，不只是一个 flag
+
+出处：Claude Code `worktrees.md` v2.1.300 实证（https://code.claude.com/docs/en/worktrees ）。§3.3 讲了"隔离会话期间要拦什么"，这一节讲"怎么进入与退出隔离"。真实 Claude Code 把 worktree 定为一等工具集，而不是仅由 `--worktree` CLI flag 触发的一次性行为：
+
+| 能力                              | 形态                 | 用途                                                                                                                         |
+| --------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `EnterWorktree`                   | 模型可调用的一等工具 | 让模型自己在需要"改一份、验一份"时进入隔离，比要求用户启动前就决定更灵活                                                     |
+| `ExitWorktree`                    | 模型可调用的一等工具 | 明确退出、把 diff 交回主检出、清理或保留 worktree                                                                            |
+| `isolation: worktree` frontmatter | 子代理配置字段       | 每个派生子代理有独立 worktree，配合 [verification-and-multiagent.md §5.5](./verification-and-multiagent.md) 的四层工具过滤   |
+| `--worktree` / `--no-worktree`    | 启动参数             | 会话级默认；关掉即"所有编辑直接改用户当前 checkout"                                                                          |
+| `WorktreeCreate` hook             | 生命周期钩子         | 创建时注入 `CLAUDE_OLD_WORKTREE_PATH` / `CLAUDE_NEW_WORKTREE_PATH` 环境变量，让项目自己的 `npm install` / 环境激活脚本跑起来 |
+| `WorktreeRemove` hook             | 生命周期钩子         | 清理前给用户脚本一次机会把 `.env.local` 之类的东西搬出来                                                                     |
+
+两条实现约束：
+
+- **`WorktreeCreate` / `WorktreeRemove` 是 bypass-immune 的**（[claude-code-guide.md §7.4](./claude-code-guide.md) 已列，官方文档明写"任何非零退出都算失败"）。这不是普通 hook 那种"exit 2 才阻断"的语义，而是"hook 挂了 → worktree 建立失败 → 整个动作失败"。这条要写进我们 hook 引擎的事件契约（[tools-and-extensions.md §6.5](./tools-and-extensions.md)），别按通用 hook 的宽容退出处理；
+- **worktree 生命周期要能被审计**。`task_checkpoints.workspace_snapshot_ref` 字段（[data-and-events.md §2](./data-and-events.md)）存的不只是路径，还应存 `worktree_branch` + `base_commit_sha`，这样恢复任务时能重新定位到那一份具体 worktree；孤儿 worktree（用户 rm 掉了目录但库里还在）走 §3.4 那条"外部改动或目录丢失"的 `worktree_resume_refused` 启动失败枚举，不静默重建。
+
 ## 4. 变更规模与范围保护
 
 - 配置每任务最大文件数、最大行数、可改目录与禁止目录；

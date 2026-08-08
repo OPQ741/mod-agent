@@ -283,6 +283,22 @@ memory/
 
 **异步预取（zero-wait）**：语义召回要花一次模型调用，同步执行会让用户多等一个往返。因此在用户提交输入的瞬间就启动召回，与首轮模型调用并行；主循环每轮做非阻塞轮询：召回没好就先不等、下一轮再看，好了就把记忆包成 `<system-reminder>` 注入。三道门控避免浪费调用：查询太短（单词）不召回、会话记忆预算已满不召回、没有记忆文件不召回。最差情况记忆晚到一轮，用户永远不需要专门等待。
 
+**子代理的独立记忆：三档作用域（Claude Code `sub-agents` frontmatter 实证）**：子代理不是只借用主代理的记忆，它可以有**自己独立的一份**，通过 frontmatter 的 `memory: user | project | local` 声明，对应落三个不同目录：
+
+| 作用域    | 真实 Claude Code 落盘位置                  | mod-agent 对应路径                                    | 典型用法                                                    |
+| --------- | ------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------- |
+| `user`    | `~/.claude/agent-memory/<agent-name>/`     | `~/.mod/agent-memory/<agent-name>/`                   | 跨项目共享：一个 code-reviewer 对所有仓库都要遵守的评审偏好 |
+| `project` | `.claude/agent-memory/<agent-name>/`       | `.mod/agent-memory/<agent-name>/`（可提交）           | 团队共享：这个仓库的 reviewer 学到"我们允许 X 但禁 Y"       |
+| `local`   | `.claude/agent-memory-local/<agent-name>/` | `.mod/agent-memory-local/<agent-name>/`（gitignored） | 个人临时：这台机器上 reviewer 已知的所有本地环境细节        |
+
+启用后有三条自动行为值得直接抄：
+
+- **索引自动注入前 200 行 / 25KB**（与 §5.4 主记忆同一份预算，两件套），子代理启动时把这份索引拼进它的 system prompt 末尾，不需要模型自己 `read` 才知道有什么；
+- **自动放开读写编辑三类工具**。这一档 memory 生效时，运行时**隐式**允许该子代理对它自己的记忆目录 read/write/edit，不用再走 `allowed-tools` 白名单——这是"记忆的自我演化"必要权限，不给就退化成静态提示词；
+- **不注入到父会话**。子代理的记忆是它自己的私有上下文，跑完只回摘要，父代理看不到那 200 行索引。这一条与 §5.5 压缩后存活清单里"auto memory 从磁盘重注入"是**不同层级**：主会话的 auto memory 在压缩时会重注入，子代理的 memory 只在**它自己被派生时**注入，不跨派生边界。
+
+对 mod-agent 的落地：`Agent({ memory: "project" })` 配置在 [verification-and-multiagent.md §5.5](./verification-and-multiagent.md) 的四层工具过滤之上再加一层——`memory` 字段决定"这个子代理有独立的记忆目录 + 隐式读写它"，与"能不能给父会话读"完全解耦。三档目录都要在 SQLite 的 `memories` 表上建独立 scope 键（`scope: agent:<name>:<level>`），保持 §5.4 的语义召回同一套 pipeline。
+
 > 上述记忆与召回机制参考了 [claude-code-from-scratch · Memory](https://diwang.info/claude-code-from-scratch/#/docs/08-memory) 对 Claude Code 的逆向实现。记忆、技能、子代理清单放在系统提示词动态块的末尾（近因效应），组装位置见 [system-prompt.md](./system-prompt.md)。
 
 ### 5.5 压缩后的存活清单（Claude Code v2.1.300 实证，出处：https://code.claude.com/docs/en/context-window ）

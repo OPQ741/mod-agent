@@ -149,6 +149,22 @@ flowchart LR
 
 > 比如，为了省存储，普通运行日志可以采样（比如只记 10%），但策略拒绝了一次越权、密钥被访问尝试这类安全事件一条都不能丢。采样是为了降噪，不能把安全证据采样掉。
 
+**一键关到骨头的总开关**（Claude Code `monitoring-usage` 与 `data-usage` 实证，出处：https://code.claude.com/docs/en/monitoring-usage ）：真实 Claude Code 提供七个独立环境变量分别关闭不同类流量，而不是一个 `telemetry: off` 一把梭：
+
+| 变量                              | 关的东西                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `DISABLE_TELEMETRY=1`             | OpenTelemetry 指标与 trace                                                |
+| `DISABLE_ERROR_REPORTING=1`       | Sentry 一类错误上报                                                       |
+| `DISABLE_FEEDBACK_COMMAND=1`      | `/feedback` 上传会话副本                                                  |
+| `DISABLE_SURVEY=1`                | 问卷弹窗与提交                                                            |
+| `DISABLE_NON_ESSENTIAL_TRAFFIC=1` | **一个变量把上面四个 + 版本检查 + 更新提示全关**（等价于批量 set 前四条） |
+| `DISABLE_AUTOUPDATER=1`           | 后台自动升级                                                              |
+| `DISABLE_UPDATES=1`               | 版本检查与升级提示（不影响手动 `claude update`）                          |
+
+这条设计的核心是**分层可控**：企业可以只关非必要流量（`DISABLE_NON_ESSENTIAL_TRAFFIC=1`）、保留指标（IT 部门还要看用量），也可以全关到零（HIPAA 就绪环境）。mod-agent 落地时对应四条：`MOD_DISABLE_TELEMETRY` / `MOD_DISABLE_ERROR_REPORTING` / `MOD_DISABLE_FEEDBACK` / `MOD_DISABLE_NON_ESSENTIAL_TRAFFIC`（后者批量 set 前三条 + 版本检查），全部在 managed settings 层可下发（[security.md §4.1](./security.md) 的 managed 键集合），且**只有当全部四个变量都是 false 时才允许向厂商 endpoint 发任何非必要 HTTP**。这样"用户装完第一次开机就默默上报了 200 个匿名事件"这类事故就不会发生，也方便用户按合规要求一键关到零。
+
+日志内容默认不落遥测这一条（§2.1 已经点出），配合这里的分层总开关，共同构成"默认保守、按需 opt-in"的可观测性基线。
+
 ## 4. 评测体系
 
 内部任务集应早于复杂 Agent 功能开发。每个用例包含：仓库与固定 commit、用户需求、预期验收条件、测试命令、允许修改范围、风险标签、参考结果 / 人工评分标准。先覆盖 30–50 个高质量可复现真实任务，再扩到更多仓库、语言、复杂需求与恶意输入。

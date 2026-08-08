@@ -58,8 +58,8 @@ flowchart TB
 
 ### Phase 5 · 团队与企业能力
 
-实现：多租户、RBAC、组织级策略、费用限额、仓库级配置、审计导出、团队评测看板、PR 工作流、可控模型路由（含 Web 控制台 + BFF + PostgreSQL + 队列）。**企业 managed 键集合**同步落地：`allowManagedPermissionRulesOnly` / `allowManagedHooksOnly` / `allowManagedMcpServersOnly` / `availableModels`（组织级模型 allowlist，见 [model-gateway.md §2.2](./model-gateway.md)）/ `requiredMinimumVersion` / `requiredMaximumVersion` / `blockedMarketplaces`；**managed 文件解析失败即拒绝启动**这条 fail-closed 行为也在此期定死（[security.md §6](./security.md) 验收清单）。
-验收：跨租户隔离与审计通过安全测试；团队可追踪成本、成功率、审批与模型版本；组织侧下发的模型 allowlist、hooks 白名单、MCP 白名单在个人配置里翻不了案。
+实现：多租户、RBAC、组织级策略、费用限额、仓库级配置、审计导出、团队评测看板、PR 工作流、可控模型路由（含 Web 控制台 + BFF + PostgreSQL + 队列）。**企业 managed 键集合**同步落地：`allowManagedPermissionRulesOnly` / `allowManagedHooksOnly` / `allowManagedMcpServersOnly` / `availableModels`（组织级模型 allowlist，见 [model-gateway.md §2.2](./model-gateway.md)）/ `requiredMinimumVersion` / `requiredMaximumVersion` / `blockedMarketplaces`；**managed 文件解析失败即拒绝启动**这条 fail-closed 行为也在此期定死（[security.md §6](./security.md) 验收清单）。**Artifact 分享与 Channels 事件驱动**同期落地：Artifact 从 MVP 的"本地产物 + 私有"扩到四态可见性（组织内 / 分享链接 / 公开）与 `&lt;artifact-reply&gt;` 交互回灌（[tools-and-extensions.md §3.1](./tools-and-extensions.md)）；Channels 把 CI 结果 / chat 消息 / 监控告警从外部推入正在跑的会话（[agent-loop.md §2.6](./agent-loop.md)），与 Artifact 一起构成"团队从会话外看进来 + 团队从会话外喊进来"两条通路。
+验收：跨租户隔离与审计通过安全测试；团队可追踪成本、成功率、审批与模型版本；组织侧下发的模型 allowlist、hooks 白名单、MCP 白名单在个人配置里翻不了案；Artifact 分享链接可撤销、`kind: "html"` 走独立子域 + CSP `sandbox`；Channels 事件不携带用户权威、未宣告的事件类型丢弃而不是崩溃。
 
 ### Phase 6 · 选择性多 Agent
 
@@ -67,14 +67,14 @@ flowchart TB
 
 ### Phase 7 · 自治与续跑
 
-在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（Stop hook 封装、独立评估器 JSON 三形状、判决走 API 层 schema、`impossible` 防死循环、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（解析三规则、`CronCreate` 固定间隔 7 天过期、Jitter 完整规则（recurring ≤ 半间隔 30 分钟、`*/5` 特例提前 15 秒、one-shot 遇 `:00`/`:30` 提前 ≤ 90 秒）、`ScheduleWakeup` 缓存感知 + `stop: true` 主动收尾、Esc 撤 wakeup、`CLAUDE_CODE_DISABLE_CRON` 与 `scheduled_tasks.json` 落盘、无新变化即停、headless 日志）、Auto Mode 动作自动批准（四规则桶、两段式 64/4096 裁决、reasoning-blind、不对称意图门槛、fail-closed、拒绝上限、权限传子代理）。**模型路由的两个正交轴**同期补齐：`speedTier: standard | fast`（fast mode 击缓存代价与限流自动降级，见 [model-gateway.md §2.2](./model-gateway.md)）与 `planPhase / executePhase` 双阶段别名（`opusplan` 语义，规划用强、执行用弱）。
-验收：评估器与执行分离、目标不可达时能 `impossible` 刹车、裁判不被主 agent 话术忽悠；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权、只读工具不触发分类器；cron 关闭时任务落到 `scheduled_tasks.json` 下次开机可续跑；会话内切 fast / model 击缓存有 UI 提示，切 advisor / effort 无提示。
+在权限、沙箱、验证、子代理全部可靠后，再做长时自治（见 [autonomy.md](./autonomy.md)）：`/goal` 目标追达（Stop hook 封装、独立评估器 JSON 三形状、判决走 API 层 schema、`impossible` 防死循环、停止条件回灌、迭代/成本上限）、`/loop` 定时与自排程续跑（解析三规则、`CronCreate` 固定间隔 7 天过期、Jitter 完整规则（recurring ≤ 半间隔 30 分钟、`*/5` 特例提前 15 秒、one-shot 遇 `:00`/`:30` 提前 ≤ 90 秒）、`ScheduleWakeup` 缓存感知 + `stop: true` 主动收尾、Esc 撤 wakeup、`CLAUDE_CODE_DISABLE_CRON` 与 `scheduled_tasks.json` 落盘、无新变化即停、headless 日志）、**Routines 三档触发**（`/loop` 会话内、`/schedule` 一次性脱离会话、Routines 支持定时 + API + GitHub 事件三种触发，权限按发起者而非部署者，见 [autonomy.md §2.5](./autonomy.md)）、Auto Mode 动作自动批准（四规则桶、两段式 64/4096 裁决、reasoning-blind、不对称意图门槛、fail-closed、拒绝上限、权限传子代理）。**模型路由的两个正交轴**同期补齐：`speedTier: standard | fast`（fast mode 击缓存代价与限流自动降级，见 [model-gateway.md §2.2](./model-gateway.md)）与 `planPhase / executePhase` 双阶段别名（`opusplan` 语义，规划用强、执行用弱）。
+验收：评估器与执行分离、目标不可达时能 `impossible` 刹车、裁判不被主 agent 话术忽悠；循环有硬性上限且幂等；分类器拿不准一律回落确认、deny 不可绕过、子代理权限不被提权、只读工具不触发分类器；cron 关闭时任务落到 `scheduled_tasks.json` 下次开机可续跑；Routines 三种触发路径都按发起者权限判定、部署者不能借道越权；会话内切 fast / model 击缓存有 UI 提示，切 advisor / effort 无提示。
 
 ### Phase 8 · 工作流、团队与后台舰队
 
 在 Phase 6 多 Agent 与 Phase 7 自治之上，再做三类高协作能力（均为可选项，按真实需求与评测驱动）：
 
-- **Dynamic Workflows（[dynamic-workflows.md](./dynamic-workflows.md)）**：确定性 JS 脚本编排，`agent/pipeline/parallel`、StructuredOutput、三道上限（并发 `min(16,CPU-2)` / 4096 item / 1000 agent）、预算、worktree 隔离、journal 断点续跑；先做最小版（3 个 hook + 1 道并发）；
+- **Dynamic Workflows（[dynamic-workflows.md](./dynamic-workflows.md)）**：确定性 JS 脚本编排，`agent/pipeline/parallel`、StructuredOutput、四道上限（并发 `min(16,CPU-2)` / 4096 item / 1000 agent / stall 重试 5 次）+ 25 agent / 1.5M token 软性警告、预算、worktree 隔离、journal 断点续跑；先做最小版（3 个 hook + 1 道并发）；
 - **Agent Teams（[agent-teams.md](./agent-teams.md)）**：对等组队、共享任务/记忆/产出、`SendMessage` 四种寻址；安全规则随通信一起上：跨会话消息不携带用户权威、转发被拒动作即权限洗白、跨机 bridge 为 bypass-immune 必问人、团队记忆跳过 secret；先做同进程对等，再跨会话；
 - **Background Fleet（[background-fleet.md](./background-fleet.md)）**：会话内子 agent 后台化（Phase 6 已含）、`/bg` 脱终端、`claude agents` 表、commit/push/draft PR 收尾；daemon 健康检查/重生/孤儿收养最后做，且 on-demand 不常驻。
 

@@ -187,6 +187,25 @@ CronCreate({"cron": "*/1 * * * *", "prompt": "…", "recurring": true})
   - 用户可通过 `Esc` 撤销尚未触发的 wakeup、通过 `ScheduleWakeup(stop: true)` 主动收尾，这两条退出路径要作为 `/loop` 契约的一等公民实现（对应 mod-agent 侧的 `ScheduleWakeup` 工具返回 `stopped: true` 而非仅"下次不排"）；
   - **`CLAUDE_CODE_DISABLE_CRON=1`** 一键关调度器；关闭时未过期的任务落到项目内 `.claude/scheduled_tasks.json`，下次开机接着跑——这一点值得抄：关调度不等于丢任务，只是把任务从"运行时状态"降级到"配置文件里的持久队列"（对应 mod-agent 的 `data-and-events.md §2`）。
 
+### 2.5 Routines：脱离会话的第三档调度
+
+`/loop` 会话内、`/schedule` 云端一次性（关会话也不停，但仍由用户主动触发），真实 Claude Code 还有第三档 **Routines**（出处：https://code.claude.com/docs/en/routines ）：跑在 Anthropic 云端、**关会话也不停**、**支持三种触发方式**。三档的边界要划清楚，不能混：
+
+| 档位         | 生命周期            | 触发方式                                | 适用                                               |
+| ------------ | ------------------- | --------------------------------------- | -------------------------------------------------- |
+| `/loop`      | 会话内              | 只有定时器（cron + wakeup）             | 交互式开发期间盯一个信号，任务本身短               |
+| `/schedule`  | 脱离会话、云 / 本地 | 只有定时器                              | 一次性提醒，或"明早九点跑一次"                     |
+| **Routines** | 脱离会话、云        | **三种：定时 + API 调用 + GitHub 事件** | 每天早上审 PR、每次 issue 打标就分诊、webhook 触发 |
+
+Routines 与 `/schedule` 的核心差别是**事件驱动**：`on pull_request.opened → 跑一次` / `on API call with payload X → 跑一次`。真实 Claude Code 的实现要点：
+
+- 定义文件放 `.claude/routines/*.yml`（或 `~/.claude/routines/`），一份 YAML 声明 `triggers`、`prompt`、`permissions`、`budget`；
+- GitHub 事件走仓库 webhook → Anthropic 侧一个统一接收端 → 匹配 routine 定义 → 起一次云端会话；
+- API 触发走 `POST /v1/routines/<id>/run`，鉴权用长期 token（`claude setup-token` 生成）；
+- **权限模型走"发起者"而非"部署者"**：谁触发的这次运行，权限与预算按那个人的 managed 层与个人 settings 决定，不能借道部署者给自己越权；这条与 [agent-teams.md §4](./agent-teams.md) 的"跨会话不携带用户权威"是同一条原则。
+
+对 mod-agent 的落地：Routines 是**Phase 7 自治与续跑**的一部分（见 [roadmap.md](./roadmap.md)），排在 `/loop` 与 `ScheduleWakeup` 之后。MVP 只做 `/loop`（会话内）与 `ScheduleWakeup`（一次性），Routines 三档触发留到 Phase 7 云端能力（或对应 [background-fleet.md](./background-fleet.md) daemon 稳定后）时再上。设计上先把 `Routine` 定义 schema 定死：`{ id, triggers[], prompt, permissions, budget, owner }`，允许 MVP 只用 timer 触发、后续加 API 与事件触发时不改 schema。
+
 ## 3. 动作自动批准：Auto Mode
 
 前两个能力解决"跑多久"，Auto Mode 解决"每个动作要不要按 y"。它是除 `default / plan / acceptEdits / bypassPermissions / dontAsk` 之外的第 6 种权限模式（前五种见 [security.md](./security.md)），核心是：**用一个分类器代替人的确认框，对"规则没命中、默认要问"的动作实时裁决**。

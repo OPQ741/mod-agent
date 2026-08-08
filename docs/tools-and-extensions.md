@@ -211,6 +211,26 @@ flowchart LR
 
 典型收益：模型一轮读 3–5 个文件时，并行通常带来 2–3 倍的提速，且文件读取（毫秒级）几乎能完全藏进模型流式生成（数秒到数十秒）的窗口里。
 
+### 2.5 工具输入的硬阈值是契约的一部分
+
+出处：Claude Code `tools-reference` v2.1.300 实证（https://code.claude.com/docs/en/tools-reference ）。工具的能力边界不只由"能不能调"决定，也由"单次能吃多少、返多少、跑多久"这三档数值决定。这些数值容易被当成"实现细节"随手写死，一旦这样就会产生两类事故：模型看不见限制、撞上去时以难以诊断的方式失败；或限制被随手改动、成本与延迟失控。mod-agent 把它们写进 `AgentTool` 契约的一等字段（`inputLimits` / `outputLimits` / `timeoutMs`），TUI 与错误提示都要显式引用。
+
+| 工具        | 数值上限                                                                                                   | 撞上时的行为                                                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `Read`      | 单次返回 **25,000 tokens**；整读文件 **256 KB** 硬顶，可传 `allow_large: true` 覆盖                        | 默认拒读、错误消息里给出"分段读"或"显式覆盖"两条建议，不静默截断                                                              |
+| `Read` PDF  | 超过 10 页必须传 `pages`；每次最多 **20 页**                                                               | 缺 `pages` 直接失败并回提示，不允许"隐式整本读"                                                                               |
+| `Glob`      | 结果按修改时间排序、截 **100 个文件**；**默认不遵循 `.gitignore`**（`globNoIgnore: false` 可改）           | 结果多于 100 时明确标"截断，请收窄 pattern"；不遵循 gitignore 是刻意设计（模型经常需要找到 `dist/` 之类），要写进 description |
+| `Grep`      | 基于 ripgrep 语法、**遵循 `.gitignore`**、默认 output mode `files_with_matches`                            | 与 Glob 保持"一个默认包含、一个默认排除"的互补，两个默认值本身要在提示词里说明                                                |
+| `Bash`      | 单次默认超时 **2 分钟**、硬顶 **10 分钟**；输出 inline 约 **30,000 字符**、失败约 10,000，硬顶 **150,000** | 超时的处理见下文"前台命令超时自动移入后台"；输出超 30K 落盘只留路径 + 预览（对齐 §2.2 第 6 步）                               |
+| 命令总量    | Bash 会话内输出总量超 **5 GB** 直接被 kill                                                                 | 防"一条 `yes > /dev/null` 类命令把机器与磁盘同时打死"，kill 前把已产生结果 flush 到文件                                       |
+| `WebSearch` | 交互会话**每会话 200 次**（`maxWebSearchesPerSession`）                                                    | 撞顶时返回稳定错误码 `SEARCH_QUOTA_EXCEEDED`，让模型知道换方案而不是继续调                                                    |
+
+三条实现约束值得单独点：
+
+- **数值必须可查、可改**。每一项都是 settings 键（kebab-case），文档里列一次、代码里读一处。避免 Claude Code 那种"改一个 `BASH_MAX_OUTPUT_LENGTH` 需要同步改三处默认值"的散落；
+- **撞顶错误要教模型下一步做什么**。`Read: file too large, pass allow_large:true or use offset+limit` 远比 `Read: 256KB limit` 有用，前者模型能立即自愈、后者只能瞎猜；这条与 [agent-loop.md §2.3](./agent-loop.md) "错误是数据"的自修复一脉相承；
+- **前台命令超时自动移入后台**（Claude Code `agent-view` 实证）。真实 Claude Code 的行为是：一条前台 Bash 命令跑到 `timeout` 前几秒，运行时给它一次机会——若它已经产出部分内容或看起来会跑很久，自动 `run_in_background: true` 化、把句柄回给模型，模型可选择继续等（用 `TaskOutput`）或走开做别的。这样"我以为是 30s 结果这条测试跑了 12 分钟"就不再阻塞整个 turn。mod-agent 落地时对应 [background-fleet.md §6](./background-fleet.md) 的会话内后台层：`CommandRequest.timeoutMs` 触发时不是简单 kill，而是按 `onTimeout: "kill" | "move-to-background"` 分派，默认对 `test.*` / `build.*` 这类前缀走 `move-to-background`，对一次性快速命令走 `kill`。
+
 ## 3. 统一执行结果
 
 ```ts
@@ -230,6 +250,21 @@ interface ToolExecutionResult<T = unknown> {
 
 - observation 一律标注 `truncated`，让模型知道结果不完整；
 - 错误对象必须有稳定 `error_code`，不靠匹配自然语言报错文案来判断分支。
+
+### 3.1 Artifact：一等输出类型，不只是"日志文件"
+
+`artifacts[]` 字段上面已经预留了位置，但真实 Claude Code 的实践值得单列一节，因为**多数 agent 只把产物当"落盘文件 + 路径回给模型"，丢掉了产物本身可以承载交互与分享语义**。
+
+Claude Code 的做法是把 artifact 定为一等公民（出处：https://code.claude.com/docs/en/artifacts ）：工具可以产出 `kind: "html" | "markdown" | "diff" | "chart" | "screenshot"` 的产物，平台负责四种可见性：**私有**（只有本会话看得到）、**组织内公开**（团队成员可访问）、**分享链接**（拿到 URL 的人可访问，可撤销）、**发外链**（永久公开）。产物本身可交互：HTML 里可以有脚本、可以填表、可以把用户点回来的动作以 `&lt;artifact-reply&gt;` 消息形式送回会话，形成"生成 → 让人在页面上标注 → 页面回灌到会话 → 修改"的闭环。
+
+对 mod-agent 的落地：
+
+- **不要把 artifact 只当"落盘 + 路径"**。`TaskArtifact` 表（见 [data-and-events.md §2](./data-and-events.md)）已经有 `sha256` 与 `uri`，再加三个字段：`kind`（受控枚举，不是自由字符串）、`visibility`（同上四态）、`share_token`（可空，撤销即置空）；
+- **产物类型必须白名单**。当前 MVP 支持 `diff` / `markdown` / `screenshot` 三类（都是本仓库现有能力的自然产物），`html` 与 `chart` 留到 Phase 5 团队与 Web 控制台阶段（见 [roadmap.md](./roadmap.md)）；
+- **HTML 类必须 iframe 沙箱隔离**。真实 Claude Code 的 artifact 页跑在 claude.ai 域下的独立沙箱 iframe，不给同源 cookie。我们如果 Phase 5 上 `kind: "html"`，也必须走独立子域 + CSP `sandbox` 属性，禁止 `allow-same-origin`。这一条与 [security.md §3](./security.md) 的沙箱基线同源，只是从"命令子进程"扩到"用户可打开的产物页"；
+- **回灌通道复用消息队列**。`&lt;artifact-reply&gt;` 事件与 [agent-loop.md §2.6](./agent-loop.md) Channels 事件走同一条 `pendingExternalEvents` 队列、同样受"跨来源不携带用户权威"约束（[agent-teams.md §4](./agent-teams.md)）。这是 artifact 从"能看"升级为"能对话"的关键：产物不再是终点，是一次交互的中间态。
+
+Phase 归属：MVP 只做本地产物 + `TaskArtifact` 表落盘，`visibility` 强制 `private`；公开分享与交互回灌留到 Phase 5 团队与企业能力。
 
 ## 4. 重试与幂等
 
