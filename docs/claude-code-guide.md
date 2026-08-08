@@ -1,6 +1,6 @@
 # Claude Code Guide · 对标产品实战教程
 
-> 本文记录 Claude Code 的公开能力、操作方式和实现限制，用于设计对标与事实核验。[coding-agents.md](./coding-agents.md) 用于横向比较，[usage.md](./usage.md) 描述 mod-agent 的目标交互，各机制专题定义本项目的设计。
+> 本文把 Claude Code 当作一个可核验的对标样本：记录公开能力、操作方式和实现限制，帮助我们做设计判断，而不是复制它的私有实现。[coding-agents.md](./coding-agents.md) 用于横向比较，[usage.md](./usage.md) 描述 mod-agent 的目标交互，各机制专题定义本项目的设计。
 >
 > Claude Code 更新频繁，本文不是替代官方文档的永久手册。涉及版本、数值、权限和命令时，应以文中标注的核验日期和官方链接为准；实现前再确认目标版本。
 
@@ -8,7 +8,7 @@
 
 ### 0.0 先说结论
 
-先建立三条判断，后续章节都围绕它们展开。
+先建立三条判断；后续章节都围绕它们展开。
 
 第一条，Claude Code 的产品形态是"模型外面那一层"。官方自己的措辞是三段式：gather context、take action、verify results，并且明确把外面这层叫 **agentic harness**：工具与模型可见的上下文都由它管理。同一个模型换一层外壳，能力差别可以非常大，这就是它值得逐条拆解的原因。
 

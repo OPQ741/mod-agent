@@ -1,8 +1,8 @@
 # Agent Teams · 对等组队与跨会话安全
 
-> 当消息可以在同级成员甚至不同会话之间横向流动时，需要回答一个基础问题：来自其他会话的消息是否能代表当前用户的授权？答案默认是否定的。
+> 团队协作让消息在同级成员甚至不同会话之间横向流动。最重要的边界只有一条：其他会话的消息可以提供信息，但默认不能代表当前用户授权。
 
-[verification-and-multiagent.md](./verification-and-multiagent.md) 的子 Agent、[autonomy.md](./autonomy.md) 的协调器、[dynamic-workflows.md](./dynamic-workflows.md) 的脚本，骨子里都是同一种关系：有一个主体在上面决定派谁、何时收，被派出去的是叶子，干完把结果交回就退场，彼此不通气。Agent Teams 换的是这层关系本身：
+[verification-and-multiagent.md](./verification-and-multiagent.md) 的子 Agent、[autonomy.md](./autonomy.md) 的协调器、[dynamic-workflows.md](./dynamic-workflows.md) 的脚本，都是由一个主体分派、汇总的关系：被派出去的成员完成工作后回传结果，彼此通常不直接通信。Agent Teams 改变的是这层关系：
 
 - 一个 team 里仍有一个固定的 **lead 会话**牵头协调、分派、汇总；
 - 但除它之外的成员不再是叶子，他们能用一个叫 **`SendMessage`** 的工具互相直接说话，共享一份任务列表和一份团队记忆；
