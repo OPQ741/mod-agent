@@ -6,13 +6,13 @@ Agent 会读取仓库、网页和工具输出，也会运行命令；这些内�
 
 ## 1. 威胁模型
 
-先认清要防谁、防什么。mod-agent 至少要考虑这些入口：恶意 / 误导用户输入、仓库内 prompt injection（比如藏在 README、issue、HTML 注释里的指令）、恶意依赖脚本、工具参数注入、路径穿越、符号链接逃逸、网络访问 / SSRF、密钥泄漏、资源耗尽、MCP Server 被攻陷、模型误生成危险命令、重试造成重复副作用。
+先把攻击面列清楚。mod-agent 至少要处理这些入口：恶意或误导性的用户输入、藏在 README、issue 或 HTML 注释里的 prompt injection、恶意依赖脚本、工具参数注入、路径穿越、符号链接逃逸、网络访问 / SSRF、密钥泄漏、资源耗尽、被攻陷的 MCP Server、模型生成的危险命令，以及重试造成的重复副作用。
 
 一条 2026 年才浮出水面、但代价极低的入口值得单列：**用户从网页、issue、聊天里复制粘贴的文本可能携带不可见字符**（零宽空格 U+200B / U+200D、双向控制符 U+202A–U+202E、Unicode Tag 字符 U+E0000 段），肉眼看不到但会改变模型对文本结构的解析，是 prompt injection 的一条"隐形"通道。真实 Claude Code 在输入框按 Enter 前会主动剥离这些字符并显示"Removed N invisible characters · review and press Enter to send"。mod-agent 的输入净化管线（详见 [context-engineering.md §6](./context-engineering.md#_6-输入注入与不可信内容)）从 Phase 1 就要接上这一条：不追求 100% 覆盖，只保证"复制粘贴携带"这一大类可预防攻击不再需要模型自觉。
 
 ## 2. 关键实证（为什么防护必须落框架层）
 
-这些真实数据说明一件事：光靠提示模型提高警惕挡不住攻击，必须在框架层硬拦。
+这些案例说明，仅靠提示模型提高警惕挡不住攻击；关键边界必须由运行时强制执行。
 
 - **IssueTrojanBench**：66.5% 的恶意 issue 穿透 Cursor / Claude Code / Codex 全部 agent 与模型层防护；且拒绝几乎都来自 LLM 自身而非框架。靠 prompt 提示模型警惕基本无效。
   > 比如，一条看似正常的 issue 标题里藏着指令，让 agent 改 CI 配置去偷凭证。三次里有两次能穿过主流 agent 的防线，这就是为什么不能赌模型自觉。
@@ -23,7 +23,7 @@ Agent 会读取仓库、网页和工具输出，也会运行命令；这些内�
 
 ## 3. 沙箱基线
 
-沙箱就是给每次任务隔出来的独立环境，agent 在里面干活，碰不到外面的系统。基线配置：
+沙箱为每次任务提供独立环境，让 Agent 尽量只接触被授权的资源。最低配置要求如下：
 
 - 每任务独立容器 / 更强隔离环境；工作目录只挂载该任务授权的工作区；
 - 非 root 用户；rootless Docker、只读根文件系统、默认 seccomp、去除多余 capabilities；
