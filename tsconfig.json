@@ -19,7 +19,9 @@
   },
   "include": [
     "src/**/*.ts",
+    "tests/**/*.ts",
     "scripts/**/*.ts",
+    "vitest.config.ts",
     "docs/.vitepress/**/*.ts",
     "docs/.vitepress/**/*.mts"
   ],

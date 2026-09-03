@@ -30,6 +30,21 @@
     "node": ">=22",
     "npm": ">=10"
   },
+  "bin": {
+    "mod": "dist/cli/main.js",
+    "mod-agent": "dist/cli/main.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "packageManager": "npm@10.9.2",
   "directories": {
     "doc": "docs"
@@ -37,6 +52,11 @@
   "scripts": {
     "docs": "vitepress dev docs --open",
     "docs:build": "vitepress build docs",
+    "build": "tsc -p tsconfig.build.json",
+    "cli": "node dist/cli/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run typecheck && npm run test",
     "lint": "npm run lint:eslint && npm run lint:md && npm run lint:links && npm run lint:agents && npm run format:check",
     "lint:eslint": "eslint .",
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
@@ -62,6 +82,11 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.71.2",
     "vitepress": "^1.6.4",
-    "vitepress-plugin-mermaid": "^2.0.17"
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "zod": "^3.25.76"
   }
 }
