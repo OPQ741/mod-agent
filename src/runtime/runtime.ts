@@ -58,11 +58,7 @@ import { createStore } from "../store/sqlite.js"
 import type { Store } from "../store/types.js"
 import { Logger, Metrics } from "../observability/logger.js"
 import { bundleRules } from "../context/rules.js"
-import {
-  buildDynamicContext,
-  buildRulesReminder,
-  buildStaticSystemPrompt,
-} from "../context/system-prompt.js"
+import { buildDynamicContext, buildStaticSystemPrompt } from "../context/system-prompt.js"
 import type { ValidationCheck } from "../validation/runner.js"
 import { discoverChecks } from "../tools/builtin/command.js"
 import { runTask, type LoopDeps, type LoopOptions, type LoopOutcome } from "./loop.js"
@@ -307,8 +303,10 @@ export class AgentRuntime {
       mode: input.mode ?? this.settings.mode ?? "plan",
       status: "queued",
       workspaceRoot: this.workspaceRoot,
-      // 默认值来自 BudgetSchema 本身（DEFAULT_BUDGET），不在此处另写一份
-      budget: { ...DEFAULT_BUDGET, ...input.budget },
+      // 三层来源，后者覆盖前者：schema 默认值 → 配置文件 budget → 调用方显式预算。
+      // 之前只合并了后两者，`settings.budget`（配置文件里写的 maxRounds / maxCostUsd）
+      // 从来没被读过，等于一份沉默的配置。
+      budget: { ...DEFAULT_BUDGET, ...this.settings.budget, ...input.budget },
       usage: createUsage(this.now().getTime()),
     })
     this.logger.info("task.created", { taskId, mode: input.mode })
@@ -326,16 +324,16 @@ export class AgentRuntime {
     if (!state) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
 
     // 规则只注入一次：审批后 `--resume` 会再次调用 run()，
-    // 若每次都 append 一份规则提醒，上下文里会攒出 N 份同样的 AGENTS.md。
+    // 若每次都拼一份规则提醒，上下文里会攒出 N 份同样的 AGENTS.md。
+    //
+    // 注意：这里**不能**先把规则写进 store 再交给循环 —— 循环用
+    // `state.messages.length === 0` 判断"是否全新任务"，一旦 store 里先有了
+    // 规则消息，它就再也不会 seed 用户请求，模型只看到规则、不知道要做什么。
+    // 所以规则作为参数传下去，由循环在种子消息里一起写入。
     const existingMessages = await this.store.getMessages(taskId)
     const isFirstRun = existingMessages.length === 0
     const wantRules = isFirstRun && options.skipProjectRules !== true
     const rules = wantRules ? await bundleRules(this.workspaceRoot) : { combined: "" }
-    if (wantRules && rules.combined.length > 0) {
-      await this.store.appendMessages(taskId, [
-        { role: "user", content: buildRulesReminder(rules.combined) },
-      ])
-    }
     const assembled = this.registry.assemble({
       taskMode: state.mode,
       permissionMode: this.settings.permissionMode ?? "default",
@@ -386,6 +384,7 @@ export class AgentRuntime {
         }),
       ...(options.signal ? { signal: options.signal } : {}),
       ...(validationChecks.length > 0 ? { validationChecks } : {}),
+      ...(rules.combined.length > 0 ? { projectRules: rules.combined } : {}),
       ...(options.compactionEnabled !== undefined
         ? { compactionEnabled: options.compactionEnabled }
         : {}),

@@ -90,6 +90,14 @@ export interface LoopOptions {
   validationChecks?: readonly ValidationCheck[]
   /** 是否开启压缩。 */
   compactionEnabled?: boolean
+  /**
+   * 仓库规则（AGENTS.md / CLAUDE.md 等）的合并文本。
+   *
+   * 必须由这里在**种子消息**里拼进去，而不是调用方先往 store 里写一条 ——
+   * 后者会让 `isFreshTask`（按 `state.messages.length === 0` 判断）变成 false，
+   * 于是用户请求永远不会被 seed，模型只看到规则、不知道要做什么。
+   */
+  projectRules?: string
 }
 
 export interface LoopOutcome {
@@ -231,6 +239,20 @@ export async function* runTask(
     if (latest && assertSafeTransition(from, status)) {
       await deps.store.updateTask(options.taskId, { status, usage }, latest.stateVersion)
       event = await sink.emit("task.status_changed", { from, to: status, subtype })
+    } else if (latest && from !== status) {
+      /**
+       * 拒绝转换必须留下痕迹。
+       *
+       * 之前这里是静默跳过：`executing → cancelled` 不在迁移表里（要经 `cancelling`），
+       * 于是内存里的 outcome 说 cancelled、库里却永远停在 executing ——
+       * 任务看起来"还在跑"，`--continue` 还会把它当成可恢复任务重新跑一遍。
+       * 静默的失败比崩溃更难查，所以这里至少留下一条可诊断的告警。
+       */
+      deps.logger.warn("task.status_transition_refused", {
+        taskId: options.taskId,
+        from,
+        to: status,
+      })
     }
     const outcome: LoopOutcome = {
       status,
@@ -275,12 +297,18 @@ export async function* runTask(
         reason: "cancelled",
         message: "Abort signal received",
       })
+      // 状态机里 `executing` 等运行态只能经 `cancelling` 到 `cancelled`；
+      // 跳过中间态会让终态写不进库（见 finish 里的告警）。
+      const toCancelling = await moveTo("cancelling")
+      if (toCancelling) yield toCancelling
       const settled = await finish("cancelled", "cancelled", "Cancelled by user or caller")
       if (settled.event) yield settled.event
       return settled.outcome
     }
     const latest = await deps.store.getTask(options.taskId)
     if (latest?.cancelRequestedAt) {
+      const toCancelling = await moveTo("cancelling")
+      if (toCancelling) yield toCancelling
       const settled = await finish("cancelled", "cancelled", "Cancel was requested")
       if (settled.event) yield settled.event
       return settled.outcome
@@ -556,25 +584,49 @@ export async function* runTask(
       retryCount: 0,
     })
 
-    const policyArgs = { ...argsRecord }
-    // 工具自己声明的"这次要跑哪条命令"：补默认值后交给策略引擎判断，
-    // 引擎只认结构化请求，不做任何文本猜测（ADR-8）。
-    const policyCommand = tool?.policyCommand?.(argsRecord)
+    /**
+     * 本次调用**自己**改了哪些文件。
+     *
+     * 必须与累计集合分开：进度守卫按"每次观测改了哪些文件"判断是否在反复churn，
+     * 若传累计集合，改过一次文件之后每个只读调用都会被算成"又改了一次"，
+     * 四次调用后就会误报"这个文件已被重写 4 次"，把模型推进无意义的重新规划。
+     */
+    const callChangedFiles = new Set<string>()
     const outcome = await deps.executor.execute({
       toolName: decided.toolName,
       args: argsRecord,
-      ctx: buildToolContext(deps, options, callId, changedFiles, state.workspaceRoot),
-      decide: async (args) =>
-        deps.policy.evaluate({
+      ctx: buildToolContext(
+        deps,
+        options,
+        callId,
+        (file) => {
+          callChangedFiles.add(file)
+          changedFiles.add(file)
+        },
+        state.workspaceRoot,
+      ),
+      /**
+       * 策略判定的输入**必须在工具校验之后**再求值。
+       *
+       * `policyCommand` / `policyPaths` 读的是工具入参，而有些工具会在 `validate`
+       * 阶段把入参补全（例如 `test.run` 省略 command 时从 package.json 自动发现）。
+       * 若在 `execute` 之前用原始 args 先算一遍，策略批准的是"猜出来的那条命令"、
+       * 真正执行的却是"发现出来的那条"，审批与执行就对不上了 ——
+       * 这正是 ADR-8 要求"判定只认结构化请求"要防的那类偏差。
+       */
+      decide: async (args) => {
+        const command = tool?.policyCommand?.(args)
+        return deps.policy.evaluate({
           toolName: decided.toolName,
           risk: tool?.risk ?? "read",
           args,
-          ...(policyCommand ? { command: normalizeCommandRequest(policyCommand) } : {}),
-          ...(tool?.policyPaths ? { paths: tool.policyPaths(argsRecord) } : {}),
-          ...(tool?.policyDomains ? { domains: tool.policyDomains(argsRecord) } : {}),
+          ...(command ? { command: normalizeCommandRequest(command) } : {}),
+          ...(tool?.policyPaths ? { paths: tool.policyPaths(args) } : {}),
+          ...(tool?.policyDomains ? { domains: tool.policyDomains(args) } : {}),
           permissionMode: options.permissionMode,
           taskMode: options.mode,
-        }),
+        })
+      },
       taskMode: options.mode,
       permissionMode: options.permissionMode,
     })
@@ -688,10 +740,10 @@ export async function* runTask(
     try {
       progressGuard.assertProgress({
         toolName: result.toolName,
-        argsFingerprint: sha256(stableStringify(policyArgs)),
+        argsFingerprint: sha256(stableStringify(argsRecord)),
         resultFingerprint: fingerprintResult(result.output ?? result.error),
         ok: result.status === "succeeded",
-        changedFiles: [...changedFiles],
+        changedFiles: [...callChangedFiles],
         ...(result.error ? { errorCode: result.error.code } : {}),
       })
     } catch (err) {
@@ -738,7 +790,6 @@ export async function* runTask(
       if (settled.event) yield settled.event
       return settled.outcome
     }
-    void policyArgs
   }
 
   const settled = await finish(currentStatus, "error_max_turns", "Loop exited")
@@ -780,18 +831,26 @@ function toolCallStatusFor(status: ToolExecutionResult["status"]): ToolCallStatu
 /** 首轮种子：用户请求包一层不可信标记（context-engineering.md §6）。 */
 async function seedMessages(
   _deps: LoopDeps,
-  _options: LoopOptions,
+  options: LoopOptions,
   userRequest: string,
 ): Promise<ModelMessage[]> {
-  const { buildUserRequest } = await import("../context/system-prompt.js")
-  return [{ role: "user", content: buildUserRequest(userRequest) }]
+  const { buildUserRequest, buildRulesReminder } = await import("../context/system-prompt.js")
+  const messages: ModelMessage[] = [{ role: "user", content: buildUserRequest(userRequest) }]
+  /**
+   * 规则跟在用户请求**之后**：先让模型知道"要做什么"，再给"这个仓库的约定"。
+   * 顺序反过来的话，长规则文件会把真正的任务挤到后面，模型更容易跑偏。
+   */
+  if (options.projectRules && options.projectRules.length > 0) {
+    messages.push({ role: "user", content: buildRulesReminder(options.projectRules) })
+  }
+  return messages
 }
 
 function buildToolContext(
   deps: LoopDeps,
   options: LoopOptions,
   callId: string,
-  changedFiles: Set<string>,
+  onWrite: (file: string) => void,
   workspaceRoot: string,
 ): ToolExecutionContext {
   const controller = new AbortController()
@@ -822,7 +881,7 @@ function buildToolContext(
       return record ? { read: true, mtimeMs: record.mtimeMs } : undefined
     },
     trackWrite: (p: string) => {
-      changedFiles.add(p)
+      onWrite(p)
     },
     persistArtifact: async (content: string, kind: string) =>
       persistArtifact(deps, options.taskId, content, kind),

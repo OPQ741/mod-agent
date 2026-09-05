@@ -212,13 +212,36 @@ export function createTestRunTool(deps: {
     policyPaths: (input) => [input.cwd],
     policyCommand: (input) => ({
       executable: input.command?.[0] ?? "npm",
-      args: input.command?.slice(1) ?? ["test"],
+      // filter 会被拼进真实 argv，判定时必须一起算上，否则"批准的命令"和
+      // "执行的命令"差一个参数，审批绑定就形同虚设。
+      args: [...(input.command?.slice(1) ?? ["test"]), ...(input.filter ? [input.filter] : [])],
       cwd: input.cwd,
       timeoutMs: input.timeoutMs,
       networkProfile: "none",
       reason: "Run project verification",
       onTimeout: "move-to-background",
     }),
+    /**
+     * 把"自动发现的命令"提前到校验阶段落定。
+     *
+     * `policyCommand` 是在校验之后求值的（见 runtime/loop.ts 的 decide），所以在这里
+     * 补全 `input.command`，策略层批准的就是**真正要执行的那条命令**。
+     * 若留在 execute 里才发现，无人值守模式下会出现"批准 npm test、实际跑 pnpm run test"。
+     */
+    async validate(input) {
+      if (input.command && input.command.length > 0) return
+      const packageJson = await deps.readPackageJson(input.cwd)
+      const checks = discoverChecks(packageJson).sort((a, b) => b.confidence - a.confidence)
+      const chosen = checks.find((c) => c.id === "test") ?? checks[0]
+      if (!chosen) {
+        throw new AppError(
+          "INVALID_INPUT",
+          "No test command could be discovered in package.json. " +
+            'Pass `command` explicitly, e.g. ["npm", "run", "test"].',
+        )
+      }
+      input.command = chosen.command
+    },
     async execute(input, ctx: ToolExecutionContext) {
       const cwd = deps.pathGuard.assertCwd(input.cwd)
 

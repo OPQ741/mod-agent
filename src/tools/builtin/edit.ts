@@ -152,9 +152,20 @@ export function createWriteFileTool(deps: EditToolDeps): AgentTool<WriteFileInpu
       }
 
       const before = exists ? await fs.readFile(guard.path, "utf8").catch(() => "") : ""
+      /**
+       * 走 `EditEngine.writeWhole` 而不是直接 `fs.writeFile`。
+       *
+       * 它对已存在的文件强制 read-before-edit 与 mtime 一致性校验，并拒绝整写超过
+       * maxBytes 的大文件。直接写会同时绕过这三道护栏，让"覆盖一个模型从没读过、
+       * 且期间被别人改过"的文件变成静默发生的破坏 —— 而 overwrite:true 正是
+       * 最容易被模型顺手用上的那条路径。
+       */
+      const outcome = await deps.editEngine.writeWhole(guard.path, input.content, {
+        maxBytes: input.maxBytes,
+      })
       await fs.mkdir(path.dirname(guard.path), { recursive: true })
-      await fs.writeFile(guard.path, input.content, "utf8")
-      await deps.editEngine.recordWrite(guard.path, input.content)
+      await fs.writeFile(guard.path, outcome.content, "utf8")
+      await deps.editEngine.recordWrite(guard.path, outcome.content)
       ctx.trackWrite(guard.path)
       deps.onFileChanged?.(guard.path, before, input.content)
 

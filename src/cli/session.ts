@@ -108,6 +108,7 @@ export class CliSession {
       // 不传求解器 = 停在审批点（fail-closed）；交互场景由调用方注入
       resolveApproval: options.resolveApproval ?? createDenyResolver(this.io),
       ...(options.noValidation ? { validationChecks: [] } : {}),
+      ...(options.skipProjectRules ? { skipProjectRules: true } : {}),
     })
     this.emitFinal(taskId, result)
     return result
