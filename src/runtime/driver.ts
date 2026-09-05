@@ -100,15 +100,17 @@ export async function driveTask(
   let pendingApproval: PendingApproval | undefined
 
   for (;;) {
-    const iterator = runtime
-      .run(taskId, {
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.validationChecks ? { validationChecks: options.validationChecks } : {}),
-        ...(options.compactionEnabled !== undefined
-          ? { compactionEnabled: options.compactionEnabled }
-          : {}),
-      })
-      [Symbol.asyncIterator]()
+    // 分两步写：`})` 后面紧跟 `[Symbol.asyncIterator]()` 会被 ASI 规则判成
+    // "意外换行"（no-unexpected-multiline），而且读起来也更容易看漏。
+    const generator = runtime.run(taskId, {
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.validationChecks ? { validationChecks: options.validationChecks } : {}),
+      ...(options.compactionEnabled !== undefined
+        ? { compactionEnabled: options.compactionEnabled }
+        : {}),
+      ...(options.skipProjectRules ? { skipProjectRules: true } : {}),
+    })
+    const iterator = generator[Symbol.asyncIterator]()
 
     pendingApproval = undefined
 

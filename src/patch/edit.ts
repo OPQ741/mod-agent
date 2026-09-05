@@ -52,11 +52,21 @@ export interface EditOutcome {
   deletions: number
 }
 
+/**
+ * 排版字符 → ASCII。
+ *
+ * **每一条替换都必须保持长度不变（1 字符 → 1 字符）**。
+ * `findOccurrences` 用规范化后的下标去切**原始**字符串，一旦某个替换把 1 个字符
+ * 变成 2 个（例如把 `—` 映射成 `--`），它之后的所有下标都会整体偏移，
+ * 替换就会落在错误的位置上 —— 表现为文件被静默改坏、工具却返回成功。
+ * 中文文档里 `——` 极常见，这条曾经把 `TODO: fix me` 改成 `TODO: fifixed`。
+ *
+ * 因此破折号统一映射成单个 `-`：`——` ↔ `--` 的互认仍然成立（两侧各映射一次）。
+ */
 const CURLY_TO_STRAIGHT: ReadonlyArray<[RegExp, string]> = [
   [/[‘’‛]/gu, "'"],
   [/[“”‟]/gu, '"'],
-  [/–/gu, "-"],
-  [/—/gu, "--"],
+  [/[–—]/gu, "-"],
   [/\u00a0/gu, " "],
 ]
 
@@ -65,6 +75,14 @@ export function normalizeForMatch(text: string): string {
   let out = text
   for (const [pattern, replacement] of CURLY_TO_STRAIGHT) {
     out = out.replace(pattern, replacement)
+  }
+  if (out.length !== text.length) {
+    // 长度变了就说明有替换破坏了下标对齐；宁可直接失败，也不要在错的位置写文件。
+    throw new AppError(
+      "EDIT_NOT_UNIQUE",
+      "Internal invariant broken: text normalization changed the string length, " +
+        "so match offsets can no longer be mapped back to the original file. Refusing to edit.",
+    )
   }
   return out
 }
@@ -205,7 +223,8 @@ export class EditEngine {
       )
     }
 
-    // oldLength 取规范化后的长度与原始长度一致（规范化只替换等长字符）
+    // 规范化保证等长（见 CURLY_TO_STRAIGHT 的注释），所以规范化下标可直接用于原始文本，
+    // oldString 的字符数也就是要替换掉的原始字符数。
     const oldLength = input.oldString.length
     const content = replaceAtPositions(before, positions, oldLength, input.newString)
 

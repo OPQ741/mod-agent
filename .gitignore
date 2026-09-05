@@ -53,6 +53,7 @@ docs/.vitepress/dist/
 
 # WorkBuddy 项目记忆（本地辅助数据，不入库）
 .workbuddy/
+.workbuddy-ai/
 
 # mod-agent 运行时产物（会话产物、交付报告落在这里）
 .mod/

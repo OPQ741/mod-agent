@@ -507,7 +507,11 @@ describe("tools/executor: 八阶段生命周期", () => {
       const executor = new ToolExecutor({
         registry,
         policyVersion: "v1",
-        hooks: { postToolUse: async ({ _result }) => ({ replaceOutput: "[scrubbed]" }) },
+        hooks: {
+          // 用真实结果做判断：既验证 hook 拿得到 result，也验证 replaceOutput 生效
+          postToolUse: async ({ result }) =>
+            String(result.output ?? "").includes("sk-") ? { replaceOutput: "[scrubbed]" } : {},
+        },
       })
       const result = await runTool(executor, "secret.tool", { message: "x" })
       expect(result.output).toBe("[scrubbed]")
