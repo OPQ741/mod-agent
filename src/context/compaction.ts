@@ -64,7 +64,7 @@ export function shouldCompact(
  *
  * 保序不变量：
  * - 第 0 条（system）永远保留；
- * - 首条 user（用户请求 + 规则）永远保留 —— 这是"目标漂移"的第一道防线；
+ * - 所有连续前置 user（环境块 + 用户请求 + 规则）永远保留 —— 这是"目标漂移"的第一道防线；
  * - 末尾若干轮完整保留；
  * - 中间部分按轮折叠，但**成对**处理：一次 tool_use 与它的 tool_result 同进同出。
  */
@@ -150,19 +150,15 @@ export async function compact(
  * 分段
  * ------------------------------------------------------------------ */
 
-/** 头部：system + 首条 user（用户请求与项目规则所在）。 */
+/** 头部：system + 所有连续前置 user（环境块、用户请求、项目规则所在）。 */
 function takeHead(messages: readonly ModelMessage[]): { messages: ModelMessage[]; count: number } {
   const out: ModelMessage[] = []
   let count = 0
   for (const message of messages) {
-    if (message.role === "system") {
+    if (message.role === "system" || message.role === "user") {
       out.push(message)
       count += 1
       continue
-    }
-    if (message.role === "user" && out.every((m) => m.role === "system")) {
-      out.push(message)
-      count += 1
     }
     break
   }

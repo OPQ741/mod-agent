@@ -267,9 +267,10 @@ describe("context/compaction: 只在 turn boundary 压缩且不破坏配对", ()
     expect(shouldCompact(messages, { contextWindowTokens: 1_000_000, threshold: 0.8 })).toBe(false)
   })
 
-  it("压缩后第一条 user（用户请求）与 system 仍然在", async () => {
+  it("压缩后 system、环境块与用户请求仍然在（生产装配顺序）", async () => {
     const messages: ModelMessage[] = [
       { role: "system", content: "system prompt" },
+      { role: "user", content: "<environment>\ncwd: /repo\n</environment>" },
       { role: "user", content: "ORIGINAL REQUEST" },
       { role: "assistant", content: bigText(4_000) },
       { role: "user", content: bigText(4_000) },
@@ -278,7 +279,8 @@ describe("context/compaction: 只在 turn boundary 压缩且不破坏配对", ()
     const result = await compact(messages, { contextWindowTokens: 2_000 })
     expect(result.compacted).toBe(true)
     expect(result.messages[0]?.content).toBe("system prompt")
-    expect(result.messages[1]?.content).toBe("ORIGINAL REQUEST")
+    expect(result.messages[1]?.content).toContain("<environment>")
+    expect(result.messages[2]?.content).toBe("ORIGINAL REQUEST")
   })
 
   it("旧 observation 被折叠成一行，但 tool_use / tool_result 成对处理", async () => {
@@ -305,10 +307,11 @@ describe("context/compaction: 只在 turn boundary 压缩且不破坏配对", ()
     }
   })
 
-  it("规则式压缩不够时用摘要器兜底，并把摘要写成续接提示", async () => {
+  it("摘要器压缩后 system、环境块与用户请求仍在（生产装配顺序）", async () => {
     const messages: ModelMessage[] = [
       { role: "system", content: "sys" },
-      { role: "user", content: "REQUEST" },
+      { role: "user", content: "<environment>\ncwd: /repo\n</environment>" },
+      { role: "user", content: "ORIGINAL REQUEST" },
       ...Array.from({ length: 8 }, (_, i): ModelMessage => ({
         role: i % 2 === 0 ? "assistant" : "tool",
         ...(i % 2 === 1 ? { toolCallId: `c${i}` } : {}),
@@ -327,7 +330,10 @@ describe("context/compaction: 只在 turn boundary 压缩且不破坏配对", ()
     })
     expect(summarized.length).toBeGreaterThan(0)
     expect(result.summary).toBe("SUMMARY TEXT")
-    expect(JSON.stringify(result.messages)).toContain("SUMMARY TEXT")
+    const text = JSON.stringify(result.messages)
+    expect(text).toContain("SUMMARY TEXT")
+    expect(text).toContain("ORIGINAL REQUEST")
+    expect(text).toContain("<environment>")
     expect(result.droppedRounds).toBeGreaterThan(0)
     expect(result.afterTokens).toBeLessThan(result.beforeTokens)
   })

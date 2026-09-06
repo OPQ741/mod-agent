@@ -253,7 +253,7 @@ describe("model/openai-compat: 请求与响应映射", () => {
     })
   })
 
-  it("Retry-After 头被解析并用于退避", () => {
+  it("Retry-After 头被解析成毫秒（秒数与非法值）", () => {
     const response = new Response("", { status: 429, headers: { "retry-after": "3" } })
     expect(parseRetryAfter(response)).toBe(3_000)
     expect(parseRetryAfter(new Response("", { status: 429 }))).toBeUndefined()
@@ -452,6 +452,34 @@ describe("model/gateway: 重试、退避、记账", () => {
     expect(retries.length).toBe(2)
     expect(gateway.usage.calls).toBe(1)
     expect(gateway.usage.retries).toBe(2)
+  })
+
+  it("429 的 Retry-After 优先于指数退避（sleep 收到服务端建议时长）", async () => {
+    const sleeps: number[] = []
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("rate limited", { status: 429, headers: { "retry-after": "3" } }),
+      )
+      .mockResolvedValueOnce(
+        okResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: {} }),
+      )
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://api.test/v1",
+      fetchImpl: fetchImpl as never,
+    })
+    const gateway = new ModelGateway({
+      provider,
+      maxRetries: 3,
+      baseBackoffMs: 10,
+      random: () => 0,
+      sleep: async (ms) => {
+        sleeps.push(ms)
+      },
+    })
+    const response = await gateway.generate(baseRequest())
+    expect(response.text).toBe("ok")
+    expect(sleeps).toEqual([3_000])
   })
 
   it("不可重试错误（鉴权/参数）立刻抛出，不浪费重试预算", async () => {

@@ -97,7 +97,7 @@ export class OpenAICompatProvider implements ModelProvider {
 
     if (!response.ok) {
       const detail = await safeReadBody(response)
-      throw classifyHttpError(response.status, detail)
+      throw classifyHttpError(response.status, detail, parseRetryAfter(response))
     }
 
     const json: unknown = await response.json()
@@ -300,14 +300,15 @@ export function parseArgsSafely(
  * 错误分类（model-gateway.md §6.2）
  * ------------------------------------------------------------------ */
 
-export function classifyHttpError(status: number, detail: string): AppError {
+export function classifyHttpError(status: number, detail: string, retryAfterMs?: number): AppError {
   const brief = detail.slice(0, 200)
+  const retryDetails = retryAfterMs !== undefined ? { details: { retryAfterMs } } : undefined
   switch (status) {
     case 401:
     case 403:
       return new AppError("MODEL_AUTH_FAILED", `Authentication failed (HTTP ${status}): ${brief}`)
     case 429:
-      return new AppError("MODEL_RATE_LIMIT", `Rate limited (HTTP 429): ${brief}`)
+      return new AppError("MODEL_RATE_LIMIT", `Rate limited (HTTP 429): ${brief}`, retryDetails)
     case 400:
     case 404:
     case 422:
@@ -317,7 +318,11 @@ export function classifyHttpError(status: number, detail: string): AppError {
       return new AppError("MODEL_TIMEOUT", `Request timed out upstream (HTTP ${status}): ${brief}`)
     default:
       if (status >= 500) {
-        return new AppError("MODEL_NETWORK", `Upstream error (HTTP ${status}): ${brief}`)
+        return new AppError(
+          "MODEL_NETWORK",
+          `Upstream error (HTTP ${status}): ${brief}`,
+          retryDetails,
+        )
       }
       return new AppError("MODEL_INVALID_OUTPUT", `Unexpected HTTP status ${status}: ${brief}`)
   }

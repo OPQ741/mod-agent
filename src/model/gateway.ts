@@ -135,9 +135,13 @@ export class ModelGateway {
           throw appError
         }
 
-        // 退避 + 抖动：把重试散开，避免重试风暴
+        // 退避 + 抖动：把重试散开，避免重试风暴。
+        // 服务端给了 Retry-After 就优先遵守（不加抖动），否则走指数退避。
+        const retryAfter = readRetryAfterMs(appError)
         const jitter = Math.floor(this.random() * delayMs * 0.5)
-        const wait = Math.min(delayMs + jitter, this.maxBackoffMs)
+        const exponentialWait = Math.min(delayMs + jitter, this.maxBackoffMs)
+        const wait =
+          retryAfter !== undefined ? Math.min(retryAfter, this.maxBackoffMs) : exponentialWait
         this.totals.retries += 1
         const retryEvent: RetryEvent = {
           attempt: attempt + 1,
@@ -195,6 +199,11 @@ export class ModelGateway {
 function extractStatus(err: AppError): number | undefined {
   const match = /HTTP (\d{3})/.exec(err.message)
   return match?.[1] ? Number(match[1]) : undefined
+}
+
+function readRetryAfterMs(err: AppError): number | undefined {
+  const value = err.details?.retryAfterMs
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
 function defaultSleep(ms: number): Promise<void> {
