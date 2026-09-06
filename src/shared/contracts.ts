@@ -285,12 +285,19 @@ export type ToolUseDecision = z.infer<typeof ToolUseDecisionSchema>
  * 事件（data-and-events.md §1）
  * ------------------------------------------------------------------ */
 
+/**
+ * 事件类型白名单。
+ *
+ * 这里只列**真的会 emit** 的类型：契约是系统对外的承诺，列出永远发不出来的
+ * 事件等于给消费端一个假的接口。`agent.message_delta` 与 `tool.progress`
+ * 是流式阶段的设计项，等 `generateStream` 与长命令增量输出落地时再加回来 ——
+ * 在那之前它们留在 [data-and-events.md](../docs/data-and-events.md) 的设计描述里，
+ * 不进这个数组。
+ */
 export const TASK_EVENT_TYPES = [
   "task.status_changed",
   "task.plan_ready",
-  "agent.message_delta",
   "tool.started",
-  "tool.progress",
   "tool.completed",
   "approval.required",
   "approval.decided",

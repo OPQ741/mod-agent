@@ -22,10 +22,10 @@ import type {
 } from "../shared/contracts.js"
 import { DEFAULT_BUDGET } from "../shared/contracts.js"
 import { AppError } from "../shared/errors.js"
-import { newTaskId, shortId } from "../shared/ids.js"
+import { newTaskId } from "../shared/ids.js"
 import { sha256 } from "../shared/hash.js"
 import { DEFAULT_SETTINGS, type Settings } from "../config/settings.js"
-import { PathGuard } from "../policy/pathguard.js"
+import { PathGuard, loadGitignorePatterns } from "../policy/pathguard.js"
 import { PolicyEngine } from "../policy/engine.js"
 import { EditEngine } from "../patch/edit.js"
 import { ToolRegistry } from "../tools/registry.js"
@@ -116,7 +116,13 @@ export class AgentRuntime {
   private readonly sandboxSelection: SandboxSelection
   private readonly sandbox: SandboxBackend
   private readonly activatedDeferred = new Set<string>()
-  private readonly planFiles = new Map<string, string>()
+  /**
+   * 计划模式是否激活。
+   *
+   * 会话级状态（不是任务级）：`plan.enter_plan_mode` 是模型在任务中途调用的，
+   * 激活后主循环下一轮装配工具就按只读档过滤，`exit` 时解除。
+   */
+  private planModeActive = false
   private readonly storeDegradedReason: string | undefined
   private readonly now: () => Date
 
@@ -184,12 +190,21 @@ export class AgentRuntime {
       assertCwd: (cwd) =>
         new PathGuard({ workspaceRoot: path.resolve(options.workspaceRoot) }).assertCwd(cwd),
     })
-    return new AgentRuntime(options, {
+    const runtime = new AgentRuntime(options, {
       store: storeResult.store,
       settings,
       sandboxSelection,
       ...(storeResult.degradedReason ? { degradedReason: storeResult.degradedReason } : {}),
     })
+    /**
+     * gitignore 规则必须在这里补进去：`PathGuard` 的构造是同步的，
+     * 读 `.gitignore` 是异步的，只能分两步。
+     * `respectGitignore` 关掉时不必读盘 —— 读来的规则也不会被用到。
+     */
+    if (settings.respectGitignore) {
+      runtime.pathGuard.setGitignorePatterns(await loadGitignorePatterns(runtime.workspaceRoot))
+    }
+    return runtime
   }
 
   private registerBuiltinTools(): void {
@@ -243,28 +258,17 @@ export class AgentRuntime {
   private planController(): PlanController {
     return {
       enter: () => {
-        const taskId = "session"
-        const planFilePath = path.join(
-          this.workspaceRoot,
-          ".mod",
-          "plans",
-          `plan-${taskId}-${shortId(6)}.md`,
-        )
-        this.planFiles.set(taskId, planFilePath)
-        return { planFilePath }
+        this.planModeActive = true
+        this.logger.info("plan.entered", { workspaceRoot: this.workspaceRoot })
+        return { active: true as const }
       },
       exit: (plan: ExecutionPlan) => {
-        const existing = this.planFiles.get("session")
-        if (!existing) throw new AppError("INVALID_INPUT", "Not in plan mode")
+        if (!this.planModeActive) throw new AppError("INVALID_INPUT", "Not in plan mode")
+        this.planModeActive = false
         this.logger.info("plan.submitted", { steps: plan.steps.length })
-        return { status: "submitted" as const, planFilePath: existing }
+        return { status: "submitted" as const, steps: plan.steps.length }
       },
-      isActive: () => {
-        return this.planFiles.has("session")
-      },
-      planFilePath: () => {
-        return this.planFiles.get("session") ?? ""
-      },
+      isActive: () => this.planModeActive,
     }
   }
 
@@ -362,7 +366,7 @@ export class AgentRuntime {
       logger: this.logger,
       metrics: this.metrics,
       runCommand: (req) => this.sandbox.exec(normalize(req), options.signal),
-      planFilePath: () => this.planFiles.get("session"),
+      isPlanModeActive: () => this.planModeActive,
     }
 
     const loopOptions: LoopOptions = {
@@ -376,9 +380,10 @@ export class AgentRuntime {
           workspaceRoot: this.workspaceRoot,
           platform: process.platform,
           mode: state.mode,
-          // round 是**本次 run 内**的轮次；恢复续跑时 state.usage.rounds 才是总账，
-          // 两者相加，否则每次 resume 都会把"还剩多少轮"重新报满。
-          roundsLeft: Math.max(0, state.budget.maxRounds - (state.usage.rounds + round)),
+          // `round` 是**累计**轮次（主循环从 `state.usage.rounds` 接着数），
+          // 所以这里不能再加一遍 `state.usage.rounds`：那会把剩余轮次算少一半，
+          // 恢复续跑时表现为"模型突然觉得只剩几轮了"，开始草率收尾。
+          roundsLeft: Math.max(0, state.budget.maxRounds - round),
           changedFiles: this.editEngine.trackedFiles,
           now: this.now().toISOString(),
         }),
@@ -527,6 +532,11 @@ export class AgentRuntime {
       command: check.command,
       required: check.id === "test" || check.id === "typecheck",
       cwd: this.workspaceRoot,
+      /**
+       * 来源必须标出来。这些命令来自仓库里的 `package.json`，属于**仓库内容**，
+       * 不能自己授权自己去执行 —— 判定见 `PolicyEngine.evaluateValidation`。
+       */
+      source: "discovered" as const,
     }))
   }
 

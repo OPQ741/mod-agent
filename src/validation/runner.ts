@@ -17,6 +17,14 @@ import { extractFailureSummary } from "../tools/builtin/command.js"
 
 export type CheckKind = "format" | "typecheck" | "lint" | "test" | "build"
 
+/**
+ * 单条验证命令的超时。
+ *
+ * 一处定义：判定（策略需要知道超时值）与执行（真正 kill 的时间）必须一致，
+ * 否则"批准 300s、执行 120s"这类偏差会在事后完全看不出来。
+ */
+export const VALIDATION_TIMEOUT_MS = 300_000
+
 export interface ValidationCheck {
   id: string
   kind: CheckKind
@@ -25,10 +33,23 @@ export interface ValidationCheck {
   required: boolean
   /** 工作目录。 */
   cwd: string
+  /**
+   * 命令的来源，决定它能不能自我授权。
+   *
+   * - `user`（默认）：调用方显式给出（CLI `--check`、SDK），视为已授权；
+   * - `discovered`：从仓库内容（`package.json` scripts）里发现的，
+   *   **不能自我授权** —— 仓库内容不该有能力让 agent 执行它自己写的命令。
+   */
+  source?: "user" | "discovered"
 }
 
 export interface RunCheckContext {
   runCommand: (req: CommandRequestInput) => Promise<CommandResult>
+  /**
+   * 执行前的授权检查（策略判定）。抛错即视为**没能验证**，记为 `blocked`，
+   * 不记为 `failed` —— 后者会推着模型去改代码、甚至换一条命令绕过策略。
+   */
+  authorize?: (check: ValidationCheck) => Promise<void>
   /** 大结果落盘，返回可引用的 URI。 */
   persistArtifact: (content: string, kind: string) => Promise<{ uri: string; sha256: string }>
 }
@@ -87,11 +108,13 @@ export async function runChecks(
 
     const startedAt = Date.now()
     try {
+      // 授权先于执行：被策略挡住的命令连沙箱都不该进
+      if (ctx.authorize) await ctx.authorize(check)
       const result = await ctx.runCommand({
         executable,
         args: check.command.slice(1),
         cwd: check.cwd,
-        timeoutMs: 300_000,
+        timeoutMs: VALIDATION_TIMEOUT_MS,
         networkProfile: "none",
         reason: `Validation check: ${check.kind}`,
         onTimeout: "move-to-background",
@@ -164,13 +187,22 @@ export async function runChecks(
     }
   }
 
+  /**
+   * `requiredBlocked` 单独判 `partial`，不再等到"至少跑过一条"才生效。
+   *
+   * 全部检查都被策略挡住时 `anyRan` 为 false，旧逻辑会落到 `not_run` ——
+   * 交付报告里那行就变成"没有跑验证命令"，而真相是"跑了，但没被授权"。
+   * 这两种情况的补救动作完全不同（一个是"没配验证"，一个是"去加 allow 规则"）。
+   */
   report.status = requiredFailed
     ? "failed"
-    : !anyRan
-      ? "not_run"
-      : anyFailed || requiredBlocked
-        ? "partial"
-        : "passed"
+    : requiredBlocked
+      ? "partial"
+      : !anyRan
+        ? "not_run"
+        : anyFailed
+          ? "partial"
+          : "passed"
   return report
 }
 

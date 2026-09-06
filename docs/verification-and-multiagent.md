@@ -68,6 +68,12 @@ AGENTS.md 规范 FAQ 明确（出处：https://agents.md ）：在 AGENTS.md 里
 
 从 `package.json`、workspace 配置、README、CI 配置与现有脚本推断检查命令，形成候选列表并记录来源与置信度。命令必须过 Policy；检测到 monorepo 时优先定位受影响 package，不默认跑全仓库命令。
 
+"过 Policy" 的强度按**来源**区分，因为 `package.json` 的 `scripts.test` 属于仓库内容，仓库内容不该有能力让 agent 执行它自己写的命令：
+
+- 用户显式给出的命令（`--check`、SDK 入参）视为已授权，仍受 bypass-immune 与 deny 规则约束；
+- 从仓库内容发现的命令必须有显式 `permissions.allow` 规则、或命中本会话的审批记录才放行；
+- 被挡住时该检查记为 `blocked`、报告状态为 `partial`（不是 `failed`，也不是 `not_run`）—— 前者会推着模型去改代码甚至绕过策略，后者会让人误以为"没配验证"。
+
 ## 3. 错误分类
 
 统一错误码，分类后才能采取不同恢复策略：

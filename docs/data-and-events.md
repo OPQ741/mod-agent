@@ -36,7 +36,9 @@ interface TaskEvent<T = unknown> {
 }
 ```
 
-事件类型：`task.status_changed`、`task.plan_ready`、`agent.message_delta`、`tool.started`、`tool.progress`、`tool.completed`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`。
+事件类型：`task.status_changed`、`task.plan_ready`、`tool.started`、`tool.completed`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`、`retry.api`。
+
+`agent.message_delta`（流式增量）与 `tool.progress`（长命令增量输出）是流式阶段的设计项，当前**未实现、也不在** `TASK_EVENT_TYPES` 里：契约只列真的会发出来的类型，列一个永远发不出来的事件等于给消费端一个假接口。等 `generateStream` 与长命令增量输出落地时再把它们加回来。
 
 一次真实任务在流水账上长什么样（这几行合起来就是当时到底发生了什么的全部证据）：
 

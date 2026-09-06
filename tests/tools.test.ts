@@ -998,13 +998,12 @@ describe("tools/builtin: command / test", () => {
 })
 
 describe("tools/builtin: plan / tool_search", () => {
-  it("plan.enter_plan_mode 返回计划文件路径", async () => {
+  it("plan.enter_plan_mode 返回激活状态与下一步提示", async () => {
     await withWorkspace(async (ws) => {
       const controller = {
-        enter: () => ({ planFilePath: ws.abs("plan.md") }),
-        exit: () => ({ status: "submitted" as const, planFilePath: ws.abs("plan.md") }),
+        enter: () => ({ active: true as const }),
+        exit: () => ({ status: "submitted" as const, steps: 0 }),
         isActive: () => true,
-        planFilePath: () => ws.abs("plan.md"),
       }
       const tool = createEnterPlanModeTool(controller)
       expect(tool.deferred).toBe(true)
@@ -1012,7 +1011,9 @@ describe("tools/builtin: plan / tool_search", () => {
         { reason: "multi-file change" },
         makeToolContext({ workspace: ws }),
       )
-      expect(out).toMatchObject({ planFilePath: expect.stringContaining("plan.md") })
+      expect(out).toMatchObject({ active: true })
+      // 描述必须与现实一致：它承诺"写工具不可用"，那就不能只是"不建议使用"
+      expect(tool.description).toMatch(/removed from your tool list/)
     })
   })
 
@@ -1020,13 +1021,12 @@ describe("tools/builtin: plan / tool_search", () => {
     await withWorkspace(async (ws) => {
       const submitted: unknown[] = []
       const controller = {
-        enter: () => ({ planFilePath: ws.abs("plan.md") }),
+        enter: () => ({ active: true as const }),
         exit: (plan: unknown) => {
           submitted.push(plan)
-          return { status: "submitted" as const, planFilePath: ws.abs("plan.md") }
+          return { status: "submitted" as const, steps: 1 }
         },
         isActive: () => true,
-        planFilePath: () => ws.abs("plan.md"),
       }
       const { registry, executor } = makeToolRuntime({ workspace: ws })
       registry.registerWithLengthCheck(createExitPlanModeTool(controller), "builtin")

@@ -24,6 +24,14 @@ export const ERROR_CODES = [
   "TOOL_NOT_FOUND",
   "TOOL_CANCELLED",
   "TOOL_FAILED",
+  /**
+   * 累计拒绝达到上限（`maxCumulativeDenials`）。
+   *
+   * 独立成一个错误码而不是复用 `TOOL_PERMISSION_DENIED`：前者是"这一次被拒，
+   * 换个做法还能继续"，后者是"该停了"。混用会让主循环无法区分
+   * "模型再试一次"与"必须终止任务"。
+   */
+  "DENIAL_LIMIT_REACHED",
   // 补丁 / 编辑
   "PATCH_CONFLICT",
   "PATCH_PARSE_ERROR",

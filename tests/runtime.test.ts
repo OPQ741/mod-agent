@@ -484,7 +484,7 @@ describe("验证流水线：按成本递增、按退出码判定", () => {
     expect(report.checks).toEqual([])
   })
 
-  it("运行器抛错 → blocked；权限被拒不算'任务失败'，不该让模型换命令绕过", async () => {
+  it("运行器抛错 → blocked；权限被拒不算'任务失败'，也不许报成'没跑验证'", async () => {
     const denied = new AppError("TOOL_PERMISSION_DENIED", "command not allowed")
     const report = await runChecks([check({ id: "t" })], {
       runCommand: async () => {
@@ -495,7 +495,32 @@ describe("验证流水线：按成本递增、按退出码判定", () => {
     expect(report.checks[0]?.status).toBe("blocked")
     expect(report.checks[0]?.summary).toContain("TOOL_PERMISSION_DENIED")
     // 权限挡住 ≠ 代码有问题：required 也不判 failed
-    expect(report.status).toBe("not_run")
+    expect(report.status).not.toBe("failed")
+    /**
+     * 但也不能报 `not_run`。
+     *
+     * `not_run` 的意思是"没有验证命令可跑"，补救动作是"去配验证"；
+     * 而这里是"有命令、没被授权"，补救动作是"去加 allow 规则"。
+     * 两者混成一个状态，用户就不知道该修哪一头 —— 这正是 partial 存在的意义。
+     */
+    expect(report.status).toBe("partial")
+  })
+
+  it("授权回调抛错 → 该检查根本不进沙箱，且记为 blocked", async () => {
+    let ran = false
+    const report = await runChecks([check({ id: "t" })], {
+      authorize: async () => {
+        throw new AppError("TOOL_PERMISSION_DENIED", "not authorized")
+      },
+      runCommand: async () => {
+        ran = true
+        throw new Error("should not run")
+      },
+      persistArtifact: async () => ({ uri: "u", sha256: "s" }),
+    })
+    expect(ran).toBe(false)
+    expect(report.checks[0]?.status).toBe("blocked")
+    expect(report.status).toBe("partial")
   })
 
   it("非权限类异常（如沙箱不可用）判 failed", async () => {

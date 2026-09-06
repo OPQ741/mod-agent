@@ -43,12 +43,7 @@ import {
   isCodeLikePath,
   matchSimpleIgnore,
 } from "../src/policy/pathguard.js"
-import {
-  DenialLimitExceeded,
-  PolicyEngine,
-  evaluateOnce,
-  indexRules,
-} from "../src/policy/engine.js"
+import { PolicyEngine, evaluateOnce, indexRules } from "../src/policy/engine.js"
 import { AppError } from "../src/shared/errors.js"
 import { normalizeCommandRequest } from "../src/shared/contracts.js"
 import { createTempWorkspace, settingsWith } from "./helpers.js"
@@ -696,11 +691,11 @@ describe("policy/engine: 会话级放行与拒绝追踪", () => {
     expect(engine.hasSessionAllow("Bash", { c: "npm test" })).toBe(false)
   })
 
-  it("累计拒绝到上限后中止任务", async () => {
+  it("累计拒绝到上限后判定结果带上 denialLimitReached（而不是抛异常）", async () => {
     const engine = policy({ permissions: { deny: ["Read(**)"] } }, { maxCumulativeDenials: 3 })
-    let exceeded: unknown
-    try {
-      for (let i = 0; i < 5; i += 1) {
+    const decisions = []
+    for (let i = 0; i < 5; i += 1) {
+      decisions.push(
         await engine.evaluate({
           toolName: "Read",
           risk: "read",
@@ -708,12 +703,17 @@ describe("policy/engine: 会话级放行与拒绝追踪", () => {
           paths: ["D:/w/a.ts"],
           permissionMode: "default",
           taskMode: "edit",
-        })
-      }
-    } catch (err) {
-      exceeded = err
+        }),
+      )
     }
-    expect(exceeded).toBeInstanceOf(DenialLimitExceeded)
+
+    // 判定引擎是纯函数式的：它不中止任务，只报告"该停了"。
+    // 抛异常会让拒绝从"数据"变成"控制流"，执行器与主循环的容错设计就全失效了。
+    expect(decisions.slice(0, 2).every((d) => d.denialLimitReached === undefined)).toBe(true)
+    expect(decisions.slice(2).every((d) => d.effect === "deny")).toBe(true)
+    expect(decisions.slice(2).every((d) => d.denialLimitReached === true)).toBe(true)
+    expect(decisions[4]?.reason).toMatch(/cumulative denial limit/)
+    expect(engine.denialStats.cumulative).toBe(5)
   })
 
   it("evaluateOnce 便捷入口返回同样的三态结果", async () => {
@@ -759,5 +759,132 @@ describe("policy/engine: 错误着装 AppError code", () => {
     const err = new AppError("COMMAND_DENIED", "denied")
     expect(err.code).toBe("COMMAND_DENIED")
     expect(err.message).toBe("denied")
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 回归：多路径 allow 的量化方向
+ * ------------------------------------------------------------------ */
+
+describe("policy/engine: 多路径 allow 必须 every 而不是 some", () => {
+  it("allow 规则只覆盖部分路径时，整次调用不放行", async () => {
+    const engine = policy({ permissions: { allow: ["Edit(src/**)"] } })
+    const decision = await engine.evaluate({
+      toolName: "Edit",
+      risk: "workspace_write",
+      args: {},
+      // 第一条命中规则、第二条完全在规则之外 —— 用 some 的话整次调用会被放行，
+      // 等于一条规则把没被覆盖的路径也一起批了。
+      paths: ["D:/w/src/a.ts", "D:/w/etc/passwd"],
+      permissionMode: "default",
+      taskMode: "edit",
+    })
+    expect(decision.effect).not.toBe("allow")
+  })
+
+  it("每条路径都命中时正常放行", async () => {
+    const engine = policy({ permissions: { allow: ["Edit(src/**)"] } })
+    const decision = await engine.evaluate({
+      toolName: "Edit",
+      risk: "workspace_write",
+      args: {},
+      paths: ["D:/w/src/a.ts", "D:/w/src/b.ts"],
+      permissionMode: "default",
+      taskMode: "edit",
+    })
+    expect(decision.effect).toBe("allow")
+  })
+
+  it("deny 仍然用 some：任一路径命中就拒", async () => {
+    const engine = policy({ permissions: { deny: ["Edit(src/**)"] } })
+    const decision = await engine.evaluate({
+      toolName: "Edit",
+      risk: "workspace_write",
+      args: {},
+      paths: ["D:/w/src/a.ts", "D:/w/ok.ts"],
+      permissionMode: "default",
+      taskMode: "edit",
+    })
+    expect(decision.effect).toBe("deny")
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 回归：验证命令的授权
+ * ------------------------------------------------------------------ */
+
+describe("policy/engine: evaluateValidation 的来源裁决", () => {
+  const validationRequest = (command: string) => ({
+    toolName: "test.run",
+    risk: "command" as const,
+    args: { command: [command] },
+    command: normalizeCommandRequest({
+      executable: command,
+      args: ["run", "test"],
+      cwd: "D:/w",
+      timeoutMs: 300_000,
+      networkProfile: "none" as const,
+      reason: "Validation check: test",
+      onTimeout: "kill" as const,
+    }),
+    paths: ["D:/w"],
+    permissionMode: "default" as const,
+    taskMode: "edit" as const,
+  })
+
+  it("仓库内容发现的命令不能自我授权", async () => {
+    const engine = policy({})
+    const decision = await engine.evaluateValidation(validationRequest("npm"), {
+      userProvided: false,
+    })
+    expect(decision.effect).toBe("deny")
+    expect(decision.reason).toMatch(/not covered by an allow rule/)
+  })
+
+  it("用户显式给出的命令视为已授权", async () => {
+    const engine = policy({})
+    const decision = await engine.evaluateValidation(validationRequest("npm"), {
+      userProvided: true,
+    })
+    expect(decision.effect).toBe("allow")
+  })
+
+  it("显式 allow 规则可以授权发现出来的命令", async () => {
+    // 规则里的工具名必须写**真实工具名**：本仓库的命令工具是 `test.run` / `command.run`，
+    // 写成文档示例里的 `Bash(...)` 不会命中任何东西（那是另一个待修的一致性问题）。
+    const engine = policy({ permissions: { allow: ["test.run(npm run *)"] } })
+    const decision = await engine.evaluateValidation(validationRequest("npm"), {
+      userProvided: false,
+    })
+    expect(decision.effect).toBe("allow")
+  })
+
+  it("deny 规则对验证命令同样生效（用户显式给也不行）", async () => {
+    const engine = policy({ permissions: { deny: ["test.run(npm run test)"] } })
+    const decision = await engine.evaluateValidation(validationRequest("npm"), {
+      userProvided: true,
+    })
+    expect(decision.effect).toBe("deny")
+  })
+
+  it("bypass-immune 命令连用户显式授权都不放过", async () => {
+    const engine = policy({})
+    const decision = await engine.evaluateValidation(
+      {
+        ...validationRequest("rm"),
+        command: normalizeCommandRequest({
+          executable: "rm",
+          args: ["-rf", "/"],
+          cwd: "D:/w",
+          timeoutMs: 300_000,
+          networkProfile: "none" as const,
+          reason: "Validation check: test",
+          onTimeout: "kill" as const,
+        }),
+      },
+      { userProvided: true },
+    )
+    expect(decision.effect).toBe("deny")
+    expect(decision.bypassImmune).toBe(true)
   })
 })

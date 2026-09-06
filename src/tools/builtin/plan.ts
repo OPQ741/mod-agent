@@ -13,10 +13,9 @@ import { ExecutionPlanSchema, type ExecutionPlan } from "../../shared/contracts.
 
 /** 规划模式控制器：由 runtime 提供，工具本身不持有状态。 */
 export interface PlanController {
-  enter(): { planFilePath: string }
-  exit(plan: ExecutionPlan): { status: "submitted"; planFilePath: string }
+  enter(): { active: true }
+  exit(plan: ExecutionPlan): { status: "submitted"; steps: number }
   isActive(): boolean
-  planFilePath(): string
 }
 
 /* ------------------------------------------------------------------ *
@@ -32,7 +31,7 @@ export function createEnterPlanModeTool(controller: PlanController): AgentTool<E
   return {
     name: "plan.enter_plan_mode",
     description:
-      "Enter plan mode: all write and command tools become unavailable (not merely discouraged), and you may only read, search, and write the plan file. Use this before a multi-file change.",
+      "Enter plan mode: write and command tools are removed from your tool list for the next turn (not merely discouraged), so you can only read and search. Use this before a multi-file change. Submit the plan with plan.exit_plan_mode.",
     inputSchema: EnterPlanModeInput,
     risk: "read",
     idempotency: "safe",
@@ -41,14 +40,13 @@ export function createEnterPlanModeTool(controller: PlanController): AgentTool<E
     isReadOnly: true,
     isConcurrencySafe: () => true,
     async execute(input, _ctx: ToolExecutionContext) {
-      const { planFilePath } = controller.enter()
+      controller.enter()
       return {
         active: true,
-        planFilePath,
         reason: input.reason,
         note:
-          `Plan mode is active. Write tools are no longer registered (you cannot request them). ` +
-          `Write your plan to ${planFilePath}, then call plan.exit_plan_mode.`,
+          "Plan mode is active. From your next turn on, write and command tools are not registered — " +
+          "you cannot request them. Read and search freely, then submit the plan via plan.exit_plan_mode.",
       }
     },
   }
@@ -67,7 +65,7 @@ export function createExitPlanModeTool(controller: PlanController): AgentTool<Ex
   return {
     name: "plan.exit_plan_mode",
     description:
-      "Submit the plan for human review and leave plan mode. The user picks one of four outcomes: clear the plan and execute directly, execute as planned, handle it manually, or keep planning.",
+      "Submit the plan (structured steps with ids and dependencies) and leave plan mode. The plan is recorded as a task.plan_ready event for review.",
     inputSchema: ExitPlanModeInput,
     risk: "read",
     idempotency: "keyed",
@@ -98,12 +96,12 @@ export function createExitPlanModeTool(controller: PlanController): AgentTool<Ex
       }
     },
     async execute(input, _ctx: ToolExecutionContext) {
-      const { status, planFilePath } = controller.exit(input.plan)
+      const { status, steps } = controller.exit(input.plan)
       return {
         status,
-        planFilePath,
-        steps: input.plan.steps.length,
-        note: "Plan submitted. Awaiting the user's decision before any files are modified.",
+        steps,
+        plan: input.plan,
+        note: "Plan submitted and recorded. Plan mode is off; write tools are available again.",
       }
     },
   }

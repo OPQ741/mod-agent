@@ -24,7 +24,25 @@ import {
   type ModelUsage,
 } from "./types.js"
 
-export type ScriptStep = Decision | ((request: ModelRequest, stepIndex: number) => Decision)
+/**
+ * 一次响应里带多个 `tool_use`（并行工具调用）。
+ *
+ * 真实的模型会这么干（一次读三个文件），而 `Decision` 只能表达单个调用，
+ * 所以单独开一个脚本步类型 —— 否则"并行调用"这条路径在离线测试里根本走不到。
+ */
+export interface ParallelToolUseStep {
+  type: "parallel_tool_use"
+  calls: ReadonlyArray<{
+    toolName: string
+    args: Record<string, unknown>
+    callId?: string
+  }>
+}
+
+export type ScriptStep =
+  | Decision
+  | ParallelToolUseStep
+  | ((request: ModelRequest, stepIndex: number) => Decision | ParallelToolUseStep)
 
 export interface ScriptedProviderOptions {
   /** 每步产生的"输出 token 数"，用于让预算测试可复现。 */
@@ -93,7 +111,7 @@ export class ScriptedProvider implements ModelProvider {
     return this.render(decision, input)
   }
 
-  private render(decision: Decision, input: ModelRequest): ModelResponse {
+  private render(decision: Decision | ParallelToolUseStep, input: ModelRequest): ModelResponse {
     const promptTokens = input.messages.reduce(
       (sum, m) => sum + estimateTokens(messageToText(m)),
       0,
@@ -102,6 +120,21 @@ export class ScriptedProvider implements ModelProvider {
       inputTokens: promptTokens,
       outputTokens: this.tokensPerStep,
       totalTokens: promptTokens + this.tokensPerStep,
+    }
+
+    if (decision.type === "parallel_tool_use") {
+      return {
+        text: "",
+        toolCalls: decision.calls.map((call) => ({
+          id: call.callId || newCallId(),
+          name: call.toolName,
+          args: call.args,
+        })),
+        stopReason: "tool_use",
+        usage,
+        model: this.modelName,
+        costUsd: estimateCost(usage, DEFAULT_PRICING),
+      }
     }
 
     switch (decision.type) {
@@ -166,4 +199,11 @@ export function final(summary: string): Decision {
 
 export function ask(question: string): Decision {
   return { type: "ask", question }
+}
+
+/** 便捷构造器：一次响应里请求多个工具（验证并行调用链路）。 */
+export function parallelToolUse(
+  ...calls: ReadonlyArray<{ toolName: string; args: Record<string, unknown>; callId?: string }>
+): ParallelToolUseStep {
+  return { type: "parallel_tool_use", calls }
 }

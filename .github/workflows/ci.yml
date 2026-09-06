@@ -43,6 +43,58 @@ jobs:
       - name: Prettier check
         run: npm run format:check
 
+  # 测试与构建必须是独立 job：lint 只证明"能读"，这里才证明"能跑"。
+  # 之前 ci.yml 只有 lint 与 docs-build，`npm test` 从未被任何 workflow 或
+  # Git 钩子调用过 —— 417 条用例是仓库最大的资产，却没有一道门禁。
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 主循环依赖进程组 kill、realpath、路径分隔符等平台差异，
+        # 只在 Linux 上跑会漏掉一整类回归（sandbox/process-runner、policy/pathguard）。
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Smoke test the CLI entrypoint
+        # 编译通过不等于能启动：入口是 ESM + node: 前缀导入，
+        # 少了 .js 后缀这类问题只有真跑一次才会暴露。
+        run: node dist/cli/main.js --version
+
   docs-build:
     name: VitePress Build
     runs-on: ubuntu-latest

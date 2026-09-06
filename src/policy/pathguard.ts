@@ -71,7 +71,7 @@ export class PathGuard {
   private readonly workspaceRoot: string
   private readonly additionalReadRoots: readonly string[]
   private readonly respectGitignore: boolean
-  private readonly gitignorePatterns: readonly string[]
+  private gitignorePatterns: readonly string[]
 
   constructor(options: PathGuardOptions) {
     this.workspaceRoot = path.resolve(options.workspaceRoot)
@@ -82,6 +82,18 @@ export class PathGuard {
 
   get root(): string {
     return this.workspaceRoot
+  }
+
+  /**
+   * 注入 gitignore 规则。
+   *
+   * 构造是同步的、读 `.gitignore` 是异步的，所以规则只能在构造之后补进来。
+   * 之前这里根本没有调用方 —— `respectGitignore` 写着 `true`、文档说它会拦，
+   * 而 `gitignorePatterns` 恒为空数组，`isGitignored` 恒返回 false。
+   * "看起来有防护"比"没有防护"更危险，因为没人会再去补它。
+   */
+  setGitignorePatterns(patterns: readonly string[]): void {
+    this.gitignorePatterns = [...patterns]
   }
 
   /**
@@ -220,20 +232,52 @@ export class PathGuard {
   }
 }
 
-/** 极简 gitignore 匹配：支持 `dir/`、`*.ext`、`name`、路径前缀。 */
+/** 极简 gitignore 匹配：支持 `dir/`、`*.ext`、`name`、路径前缀、`**\/` 前缀。 */
 export function matchSimpleIgnore(relPath: string, pattern: string): boolean {
-  const p = pattern.trim().replace(/^\/+/, "").replace(/\/+$/, "")
+  const p = pattern
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    // `**/dist` 与 `dist` 在这里等价：本函数不做完整的 gitignore 语义，
+    // 只做"是否被排除"的粗筛，过度精确反而会引入一堆边角 bug。
+    .replace(/^\*\*\//, "")
   if (p.length === 0) return false
   const segments = relPath.split("/")
 
   if (p.includes("/")) {
-    return relPath === p || relPath.startsWith(`${p}/`)
+    return relPath === p || relPath.startsWith(`${p}/`) || relPath.includes(`/${p}/`)
   }
   if (p.startsWith("*")) {
     const suffix = p.slice(1)
     return relPath.endsWith(suffix) || segments.some((s) => s.endsWith(suffix))
   }
   return segments.includes(p)
+}
+
+/**
+ * 读取工作区根目录的 `.gitignore` 与 `.git/info/exclude`，解析成扁平规则列表。
+ *
+ * 刻意**不支持**否定规则（`!foo`）：`matchSimpleIgnore` 没有"后匹配覆盖先匹配"
+ * 的语义，硬塞进去会把"排除"变成"随机排除"。跳过否定行的后果是可能多拦一点，
+ * 落在"多打扰"那一侧 —— 与元数据默认值 fail-closed 的取向一致。
+ */
+export async function loadGitignorePatterns(root: string): Promise<string[]> {
+  const sources = [".gitignore", path.join(".git", "info", "exclude")]
+  const patterns: string[] = []
+  for (const relative of sources) {
+    let text: string
+    try {
+      text = await fs.readFile(path.join(root, relative), "utf8")
+    } catch {
+      continue
+    }
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (line.length === 0 || line.startsWith("#") || line.startsWith("!")) continue
+      patterns.push(line)
+    }
+  }
+  return patterns
 }
 
 export function defaultHome(): string {

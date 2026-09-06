@@ -104,8 +104,16 @@ export class ModelGateway {
    *
    * 只有 `isRetryableCode` 为 true 的错误会重试（限流 / 过载 / 网络 / 超时）。
    * 参数错误与鉴权失败重试只会重复报错，直接抛。
+   *
+   * `options.onRetry` 是**按次**的退避回调：构造期的 `onRetry` 只够写日志，
+   * 而主循环要把每次退避变成一条 `retry.api` 事件（事件流属于某一次任务，
+   * 网关是跨任务的单例，所以不能只在构造期绑）。
    */
-  async generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+  async generate(
+    input: ModelRequest,
+    signal?: AbortSignal,
+    options?: { onRetry?: (event: RetryEvent) => void },
+  ): Promise<ModelResponse> {
     let lastError: AppError | undefined
     let delayMs = this.baseBackoffMs
 
@@ -131,7 +139,7 @@ export class ModelGateway {
         const jitter = Math.floor(this.random() * delayMs * 0.5)
         const wait = Math.min(delayMs + jitter, this.maxBackoffMs)
         this.totals.retries += 1
-        this.onRetry?.({
+        const retryEvent: RetryEvent = {
           attempt: attempt + 1,
           maxRetries: this.maxRetries,
           retryDelayMs: wait,
@@ -139,7 +147,9 @@ export class ModelGateway {
           ...(extractStatus(appError) !== undefined
             ? { errorStatus: extractStatus(appError) }
             : {}),
-        })
+        }
+        this.onRetry?.(retryEvent)
+        options?.onRetry?.(retryEvent)
         await this.sleepFn(wait)
         delayMs = Math.min(delayMs * 2, this.maxBackoffMs)
       }

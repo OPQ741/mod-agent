@@ -33,6 +33,7 @@ import type {
 import type { Checkpoint, ToolCallStatus } from "../store/types.js"
 import {
   DecisionSchema,
+  ToolUseDecisionSchema,
   isTerminalStatus,
   normalizeCommandRequest,
   type TaskStatus,
@@ -40,8 +41,8 @@ import {
 import { AppError, toAppError } from "../shared/errors.js"
 import { newCallId, newCheckpointId } from "../shared/ids.js"
 import { parameterHash, sha256, stableStringify } from "../shared/hash.js"
-import type { ModelMessage, ModelResponse } from "../model/types.js"
-import type { ModelGateway } from "../model/gateway.js"
+import type { ContentBlock, ModelMessage, ModelResponse } from "../model/types.js"
+import type { ModelGateway, RetryEvent } from "../model/gateway.js"
 import type { Store } from "../store/types.js"
 import type { ToolExecutor } from "../tools/executor.js"
 import type { ToolRegistry } from "../tools/registry.js"
@@ -55,7 +56,12 @@ import { ProgressGuard, fingerprintResult } from "./progress.js"
 import { assertTransition } from "./state-machine.js"
 import { compact, dedupeMessages } from "../context/compaction.js"
 import type { ValidationCheck } from "../validation/runner.js"
-import { runChecks, mapAcceptance, summarizeReport } from "../validation/runner.js"
+import {
+  VALIDATION_TIMEOUT_MS,
+  runChecks,
+  mapAcceptance,
+  summarizeReport,
+} from "../validation/runner.js"
 import { diffText, summarize } from "../patch/diff.js"
 
 export interface LoopDeps {
@@ -71,8 +77,16 @@ export interface LoopDeps {
   metrics: Metrics
   /** 命令运行器（沙箱注入）。 */
   runCommand: (req: CommandRequestInput) => Promise<CommandResult>
-  /** 计划模式的当前计划文件路径；未进入计划模式为 undefined。 */
-  planFilePath: () => string | undefined
+  /**
+   * 计划模式是否处于激活状态。
+   *
+   * 计划模式**不是一个 flag 摆设**：激活期间本轮装配工具时按 `taskMode: "plan"`
+   * 过滤，写工具与命令工具根本不会出现在下发的 schema 里（模型请求不到的工具，
+   * 才真的请求不到），策略判定也按 plan 档兜一层。
+   * 之前这里只留了一个 `planFilePath`，`enter()` 记个路径就算"进入了"，
+   * 写工具照样可用、文件照样被写 —— 而工具描述在告诉模型"写工具已不可用"。
+   */
+  isPlanModeActive?: () => boolean
   now?: () => Date
 }
 
@@ -117,6 +131,15 @@ export interface LoopOutcome {
   permissionDenials: Array<{ toolName: string; reason: string }>
   validation?: ValidationReport
   changedFiles: string[]
+}
+
+/** 本轮要执行的一次工具调用（已补齐 id、已通过字段校验）。 */
+interface PreparedCall {
+  callId: string
+  toolName: string
+  args: Record<string, unknown>
+  /** 模型给的参数不是合法 JSON 时的原因；有值则不执行。 */
+  argsParseError?: string
 }
 
 /* ------------------------------------------------------------------ *
@@ -192,10 +215,33 @@ export async function* runTask(
   /** 已发过 file.changed 事件的文件，避免恢复后重复播报。 */
   const emittedChangedFiles = new Set<string>(resumedCheckpoint?.changedFiles ?? [])
   const isFreshTask = state.messages.length === 0
-  let turns = 0
+  /**
+   * 轮次从**库里已用的轮次**接着数，不是从 0 开始。
+   *
+   * 之前是 `let turns = 0` + `usage.rounds = turns`，于是每次 `--resume` 都把
+   * 累计轮次清零：历史跑了 10 轮、续跑 2 轮，落库的 `rounds` 是 2。
+   * `maxRounds` 是最基本的成本护栏，可被反复 resume 无限绕过。
+   */
+  let turns = state.usage.rounds
   const messages: ModelMessage[] = isFreshTask
     ? await seedMessages(deps, options, state.userRequest)
     : [...state.messages]
+
+  /**
+   * 修补"只有 tool_use、没有 tool_result"的历史。
+   *
+   * 进程在"assistant 已落库、结果还没落库"之间被杀时会留下这种历史，
+   * 而两家后端都要求 tool_use 必须配对 —— 不修的话恢复后第一次请求就 400，
+   * 任务永远续不起来。这里补的是**失败结果**，不是假装执行过：
+   * 模型看到"这次调用没有拿到结果"，会自己决定重试还是换路。
+   *
+   * 修补可能改动已落库的那条消息，所以下面用 `replaceMessages` 整体回写，
+   * 而不是走增量 append。
+   */
+  const repairedDangling = !isFreshTask && closeDanglingToolUses(messages)
+  if (repairedDangling) {
+    deps.logger.warn("loop.dangling_tool_use_repaired", { taskId: options.taskId })
+  }
 
   /**
    * 消息落库水位线：只把**新增**的消息 append 进 store。
@@ -216,6 +262,10 @@ export async function* runTask(
     const pending = messages.slice(persisted)
     await deps.store.appendMessages(options.taskId, pending)
     persisted = messages.length
+  }
+  if (repairedDangling) {
+    // 修补动的是已落库的那条消息，append 补不上，必须整体回写
+    await deps.store.replaceMessages(options.taskId, messages)
   }
   // 恢复场景下 store 里已有历史；全新任务要把种子消息也补写进去
   await flushMessages()
@@ -290,6 +340,17 @@ export async function* runTask(
     return sink.emit("task.status_changed", { from: latest.status, to })
   }
 
+  /**
+   * 本轮生效的任务模式。
+   *
+   * 计划模式**不是任务创建时的一个静态属性**：模型可以在任务中途
+   * `plan.enter_plan_mode`，那一刻起本轮的装配就必须按只读档过滤。
+   * 之前计划模式只往 map 里存了个文件路径，装配照旧按 `options.mode`，
+   * 于是写工具一直可用 —— 而工具描述在告诉模型"写工具已不可用"。
+   */
+  const effectiveTaskMode = (): TaskMode =>
+    options.mode === "plan" || deps.isPlanModeActive?.() === true ? "plan" : options.mode
+
   while (!isTerminalStatus(currentStatus)) {
     /* ---- ① 取消与预算 ---- */
     if (options.signal?.aborted) {
@@ -332,7 +393,7 @@ export async function* runTask(
 
     /* ---- ② 上下文装配（含压缩） ---- */
     const assembled = deps.registry.assemble({
-      taskMode: options.mode,
+      taskMode: effectiveTaskMode(),
       permissionMode: options.permissionMode,
     })
     const contextMessages: ModelMessage[] = [
@@ -363,6 +424,15 @@ export async function* runTask(
     /* ---- ③ 模型决策 ---- */
     turns += 1
     usage.rounds = turns
+    /**
+     * 退避重试是**可观测事件**，不是只进日志的内部细节。
+     *
+     * `retry.api` 在契约里挂了很久却从未 emit：恢复时"据此判断退避时长"
+     * 那条注释等于没有依据。这里把网关的 `onRetry` 收进缓冲，
+     * 请求结束后按序补发 —— 退避期间生成器正在 await，发不出去；
+     * 但事件流里必须有这条记录，否则事后无法解释"那 30 秒在干什么"。
+     */
+    const retryBuffer: RetryEvent[] = []
     let response: ModelResponse
     try {
       response = await deps.gateway.generate(
@@ -377,8 +447,12 @@ export async function* runTask(
           maxTokens: 8_192,
         },
         options.signal,
+        { onRetry: (event) => retryBuffer.push(event) },
       )
     } catch (err) {
+      for (const retry of retryBuffer.splice(0, retryBuffer.length)) {
+        yield await sink.emit("retry.api", { ...retry })
+      }
       const appError = toAppError(err, "MODEL_INVALID_OUTPUT")
       deps.metrics.increment("model.error")
       yield await sink.emit("task.failed", { code: appError.code, message: appError.message })
@@ -386,63 +460,79 @@ export async function* runTask(
       if (settled.event) yield settled.event
       return settled.outcome
     }
+    for (const retry of retryBuffer.splice(0, retryBuffer.length)) {
+      yield await sink.emit("retry.api", { ...retry })
+    }
 
     usage.inputTokens += response.usage.inputTokens
     usage.outputTokens += response.usage.outputTokens
     usage.costUsd = Number((usage.costUsd + (response.costUsd ?? 0)).toFixed(6))
 
     /* ---- ④ 解析决策 ---- */
-    let decision
+    /**
+     * 一轮响应里可能带**多个** tool_use（并行工具调用）。
+     *
+     * 之前这里只取 `toolCalls[0]`，其余既不执行也不告知 —— 更糟的是
+     * assistant 历史里也只写入了第一个 `tool_use`，模型自己的操作记录被改写：
+     * 它下一轮看到的历史里"自己只请求了一个文件"，于是会以为另一个文件
+     * 已经处理过（或者根本没意识到自己请求过）。这不是性能问题，
+     * 是"模型对世界的认知被系统篡改"的正确性问题。
+     */
+    const batch: PreparedCall[] = []
+    let invalidCall: string | undefined
     if (response.toolCalls.length > 0) {
-      const call = response.toolCalls[0]
-      if (!call) {
-        const fallback: Decision = { type: "final", summary: "" }
-        decision = fallback
-      } else {
-        decision = {
-          type: "tool_use" as const,
-          callId: call.id,
+      for (const call of response.toolCalls) {
+        const callId = call.id || newCallId()
+        const check = ToolUseDecisionSchema.safeParse({
+          type: "tool_use",
+          callId,
           toolName: call.name,
           args: call.args,
-          ...(call.argsParseError ? {} : {}),
+        })
+        if (!check.success) {
+          invalidCall = check.error.message
+          break
         }
+        batch.push({
+          callId,
+          toolName: call.name,
+          args: call.args,
+          ...(call.argsParseError ? { argsParseError: call.argsParseError } : {}),
+        })
       }
-    } else if (response.decisionHint === "ask") {
-      // 只有后端显式标注"这是提问"才走 ask 分支；猜文本里有没有问号是靠不住的
-      decision = { type: "ask" as const, question: response.text }
-    } else {
-      decision = { type: "final" as const, summary: response.text }
     }
 
-    const parsed = DecisionSchema.safeParse(decision)
-    if (!parsed.success) {
-      // 格式错误是模型自己能纠的，不该终止：回喂一条纠错消息，并把重试计入步数
+    let decided: Decision | undefined
+    if (response.toolCalls.length === 0) {
+      const single: Decision =
+        response.decisionHint === "ask"
+          ? // 只有后端显式标注"这是提问"才走 ask 分支；猜文本里有没有问号是靠不住的
+            { type: "ask" as const, question: response.text }
+          : { type: "final" as const, summary: response.text }
+      const parsed = DecisionSchema.safeParse(single)
+      if (!parsed.success) {
+        // 格式错误是模型自己能纠的，不该终止：回喂一条纠错消息，并把重试计入步数
+        messages.push({
+          role: "user",
+          content: `Your last output could not be parsed: ${parsed.error.message}. Reply with a single tool call or a final summary.`,
+        })
+        deps.metrics.increment("model.format_error")
+        continue
+      }
+      decided = parsed.data
+    } else if (invalidCall !== undefined) {
       messages.push({
         role: "user",
-        content: `Your last output could not be parsed: ${parsed.error.message}. Reply with a single tool call or a final summary.`,
+        content:
+          `Your last output contained a malformed tool call: ${invalidCall}. ` +
+          "Nothing was executed. Reply with well-formed tool calls or a final summary.",
       })
       deps.metrics.increment("model.format_error")
       continue
     }
-    const decided = parsed.data
-
-    // 记录 assistant 这一步（含 tool_use 块），保证后续 tool_result 能配对
-    if (decided.type === "tool_use") {
-      messages.push({
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: decided.callId,
-            name: decided.toolName,
-            input: decided.args as Record<string, unknown>,
-          },
-        ],
-      })
-    }
 
     /* ---- ⑤ final：验证并交付 ---- */
-    if (decided.type === "final") {
+    if (decided?.type === "final") {
       messages.push({ role: "assistant", content: decided.summary })
       await flushMessages()
 
@@ -455,6 +545,53 @@ export async function* runTask(
           checks: options.validationChecks.map((c) => c.id),
         })
         validation = await runChecks(options.validationChecks, {
+          /**
+           * 验证命令**必须过策略**。
+           *
+           * 之前这里直接把 `deps.runCommand`（沙箱）交下去，验证流水线因此成为
+           * 整个策略体系之外唯一一条执行通道：`rm -rf` 明明被判为 bypass-immune
+           * deny，验证阶段照样执行并报 `passed`；而验证命令默认还是从仓库的
+           * `package.json` 自动发现的 —— 仓库内容于是能指挥 agent 执行任意命令。
+           *
+           * 判定规则见 `PolicyEngine.evaluateValidation`：bypass-immune 与 deny
+           * 规则永远生效；仓库内容发现的命令不能自我授权（必须有显式 allow 规则
+           * 或本会话审批记录），用户显式给出的命令视为已授权。
+           */
+          authorize: async (check) => {
+            const executable = check.command[0]
+            if (!executable) return
+            const decision = await deps.policy.evaluateValidation(
+              {
+                // 与 `test.run` 同名同形，这样"模型跑过一次并获批"能直接复用
+                // 会话放行记录，不必在验证阶段再问一遍。
+                toolName: "test.run",
+                risk: "command",
+                args: {
+                  cwd: check.cwd,
+                  command: check.command,
+                  timeoutMs: VALIDATION_TIMEOUT_MS,
+                },
+                command: normalizeCommandRequest({
+                  executable,
+                  args: check.command.slice(1),
+                  cwd: check.cwd,
+                  timeoutMs: VALIDATION_TIMEOUT_MS,
+                  networkProfile: "none",
+                  reason: `Validation check: ${check.kind}`,
+                  onTimeout: "move-to-background",
+                }),
+                paths: [check.cwd],
+                permissionMode: options.permissionMode,
+                taskMode: effectiveTaskMode(),
+              },
+              { userProvided: check.source !== "discovered" },
+            )
+            if (decision.effect !== "allow") {
+              throw new AppError("TOOL_PERMISSION_DENIED", decision.reason, {
+                details: { matchedRule: decision.matchedRule },
+              })
+            }
+          },
           runCommand: deps.runCommand,
           persistArtifact: async (content, kind) =>
             persistArtifact(deps, options.taskId, content, kind),
@@ -538,7 +675,7 @@ export async function* runTask(
     }
 
     /* ---- ⑥ ask：暂等人 ---- */
-    if (decided.type === "ask") {
+    if (decided?.type === "ask") {
       messages.push({ role: "assistant", content: decided.question })
       await flushMessages()
       yield await sink.emit("task.warning", {
@@ -550,229 +687,350 @@ export async function* runTask(
       return settled.outcome
     }
 
-    /* ---- ⑦ 工具执行 ---- */
-    const tool = deps.registry.get(decided.toolName)
-    const callId = decided.callId || newCallId()
-    const argsRecord = (decided.args ?? {}) as Record<string, unknown>
-
-    yield await sink.emit("tool.started", {
-      callId,
-      tool: decided.toolName,
-      risk: tool?.risk ?? "read",
-    })
-    const startedAt = now()
-    deps.metrics.increment(`tool.invoked`)
-    deps.metrics.increment(`tool.${decided.toolName}.invoked`)
-
+    /* ---- ⑦ 工具执行：本轮所有 tool_use 按序执行 ---- */
     /**
-     * 调用开始前先落一条 `started` 记录（ADR-2）。
+     * assistant 消息**一次写入全部 tool_use**，再逐条执行。
      *
-     * 这条记录是**崩溃恢复**唯一的判据：进程被杀时它仍是 started，恢复方据此
-     * 决定"重跑 / 查证 / 标记未知"（development-guide.md §5 第四件）。
-     * 不写它，`openToolCalls()` 永远为空，`outcome_unknown` 那条分支就是死代码 ——
-     * 恢复时会把一个"可能已经执行过、也可能没有"的非幂等动作当成没发生过。
+     * 配对是硬约束：N 个 `tool_use` 必须对应 N 个 `tool_result`，缺一个后端就报错。
+     * 所以"提前退出"的每一条路径（审批、进度守卫、拒绝上限）都必须先把
+     * 未执行的那几条补成失败结果，否则这一批历史就永久损坏了。
      */
-    await deps.store.startToolCall({
-      id: callId,
-      taskId: options.taskId,
-      toolName: decided.toolName,
-      inputHash: sha256(stableStringify(argsRecord)),
-      idempotencyKey: parameterHash({ tool: decided.toolName, args: argsRecord }),
-      idempotency: tool?.idempotency ?? "non_idempotent",
-      status: "started",
-      startedAt: startedAt.toISOString(),
-      retryCount: 0,
+    messages.push({
+      role: "assistant",
+      content: batch.map((call) => ({
+        type: "tool_use" as const,
+        id: call.callId,
+        name: call.toolName,
+        input: call.args,
+      })),
     })
 
+    const batchResults: ContentBlock[] = []
     /**
-     * 本次调用**自己**改了哪些文件。
+     * 本批要额外对模型说的话（进度守卫的诊断、参数格式提示……）。
      *
-     * 必须与累计集合分开：进度守卫按"每次观测改了哪些文件"判断是否在反复churn，
-     * 若传累计集合，改过一次文件之后每个只读调用都会被算成"又改了一次"，
-     * 四次调用后就会误报"这个文件已被重写 4 次"，把模型推进无意义的重新规划。
+     * 必须单独攒着、**在结果之后**追加成 text 块，不能塞成 `tool_result`：
+     * 一个 `tool_use` 只能有一个 `tool_result`，多补一条会让配对关系失效
+     * （后端按 id 找结果，看到两条会直接报错）。
      */
-    const callChangedFiles = new Set<string>()
-    const outcome = await deps.executor.execute({
-      toolName: decided.toolName,
-      args: argsRecord,
-      ctx: buildToolContext(
-        deps,
-        options,
-        callId,
-        (file) => {
-          callChangedFiles.add(file)
-          changedFiles.add(file)
-        },
-        state.workspaceRoot,
-      ),
-      /**
-       * 策略判定的输入**必须在工具校验之后**再求值。
-       *
-       * `policyCommand` / `policyPaths` 读的是工具入参，而有些工具会在 `validate`
-       * 阶段把入参补全（例如 `test.run` 省略 command 时从 package.json 自动发现）。
-       * 若在 `execute` 之前用原始 args 先算一遍，策略批准的是"猜出来的那条命令"、
-       * 真正执行的却是"发现出来的那条"，审批与执行就对不上了 ——
-       * 这正是 ADR-8 要求"判定只认结构化请求"要防的那类偏差。
-       */
-      decide: async (args) => {
-        const command = tool?.policyCommand?.(args)
-        return deps.policy.evaluate({
-          toolName: decided.toolName,
-          risk: tool?.risk ?? "read",
-          args,
-          ...(command ? { command: normalizeCommandRequest(command) } : {}),
-          ...(tool?.policyPaths ? { paths: tool.policyPaths(args) } : {}),
-          ...(tool?.policyDomains ? { domains: tool.policyDomains(args) } : {}),
-          permissionMode: options.permissionMode,
-          taskMode: options.mode,
+    const batchNotes: string[] = []
+
+    /** 把 `from` 之后（含）尚未执行的调用补成失败结果，保证配对完整。 */
+    const closeBatch = (from: number, reason: string): void => {
+      for (let j = from; j < batch.length; j += 1) {
+        const rest = batch[j]
+        if (!rest) continue
+        batchResults.push({
+          type: "tool_result",
+          toolUseId: rest.callId,
+          content: reason,
+          isError: true,
         })
-      },
-      taskMode: options.mode,
-      permissionMode: options.permissionMode,
-    })
+      }
+    }
 
-    usage.toolCalls += 1
-
-    /* ---- ⑦-a 需要审批：存下请求就退出，不阻塞 ---- */
-    if (outcome.kind === "approval") {
-      const approvalId = `apr_${sha256(`${options.taskId}:${callId}`).slice(0, 12)}`
-      await deps.store.createApproval({
-        id: approvalId,
-        taskId: options.taskId,
-        toolCallId: callId,
-        toolName: outcome.approval.toolName,
-        requestSummary: outcome.approval.reason,
-        parameterHash: outcome.approval.parameterHash,
-        policyVersion: outcome.approval.policyVersion,
-        status: "pending",
-        requestedAt: startedAt.toISOString(),
-        expiresAt: new Date(startedAt.getTime() + 30 * 60_000).toISOString(),
+    /** 一次性写回整批结果：同一条 user 消息里的 N 个 tool_result 才是合法形状。 */
+    const flushBatch = async (): Promise<void> => {
+      if (batchResults.length === 0 && batchNotes.length === 0) return
+      messages.push({
+        role: "user",
+        content: [
+          ...batchResults.splice(0, batchResults.length),
+          ...batchNotes.splice(0, batchNotes.length).map((text) => ({
+            type: "text" as const,
+            text,
+          })),
+        ],
       })
       await flushMessages()
-      const awaiting = await saveCheckpoint(
-        deps,
-        options,
-        "awaiting_approval",
-        messages,
-        changedFiles,
-        sink,
-      )
-      yield awaiting
-      yield await sink.emit("approval.required", {
-        approvalId,
-        tool: outcome.approval.toolName,
-        parameterHash: outcome.approval.parameterHash,
-        reason: outcome.approval.reason,
-      })
-      deps.metrics.increment("policy.decision.ask")
-
-      const latestState = await deps.store.getTask(options.taskId)
-      if (latestState) {
-        await deps.store.updateTask(
-          options.taskId,
-          { status: "awaiting_approval", usage },
-          latestState.stateVersion,
-        )
-      }
-      const settled = await finish(
-        "awaiting_approval",
-        "approval_required",
-        outcome.approval.reason,
-      )
-      if (settled.event) yield settled.event
-      return settled.outcome
     }
 
-    const result = outcome.result
-    yield await sink.emit("tool.completed", {
-      callId,
-      tool: result.toolName,
-      status: result.status,
-      durationMs: result.durationMs,
-      errorCode: result.error?.code,
-      truncated: result.truncated,
-    })
-    deps.metrics.recordTiming("tool.duration_ms", result.durationMs)
+    for (let index = 0; index < batch.length; index += 1) {
+      const call = batch[index]
+      if (!call) continue
+      const callId = call.callId
+      const tool = deps.registry.get(call.toolName)
 
-    // 闭合调用记录：未闭合 = 恢复时要按 outcome_unknown 处理
-    await deps.store.finishToolCall(callId, {
-      status: toolCallStatusFor(result.status),
-      finishedAt: now().toISOString(),
-      durationMs: result.durationMs,
-      ...(result.error ? { errorCode: result.error.code } : {}),
-    })
-
-    // file.changed：事件流里必须能看到"改了哪个文件"，否则消费端只能等到最后
-    // 从 outcome.changedFiles 里一次性知道，中途无法做任何增量展示或拦截。
-    for (const file of changedFiles) {
-      if (emittedChangedFiles.has(file)) continue
-      emittedChangedFiles.add(file)
-      yield await sink.emit("file.changed", { path: file }, callId)
-    }
-
-    if (result.status === "succeeded") deps.metrics.increment("tool.succeeded")
-    else deps.metrics.increment("tool.failed")
-
-    if (result.error?.code === "TOOL_PERMISSION_DENIED") {
-      permissionDenials.push({ toolName: result.toolName, reason: result.error.message })
-      deps.metrics.increment("policy.decision.deny")
-    } else {
-      deps.metrics.increment("policy.decision.allow")
-    }
-
-    /* ---- ⑧ 结果回灌（错误也是数据） ---- */
-    const resultText = renderToolResultForModel(result)
-    messages.push({
-      role: "user",
-      content: [
-        {
+      /**
+       * 参数 JSON 解析失败：**不执行**，回一条可读的错误。
+       *
+       * 之前这里是一句 `...(call.argsParseError ? {} : {})` —— 恒等空展开，
+       * 解析错误被完全丢弃，于是"参数是坏 JSON"的调用会拿着空对象去执行。
+       */
+      if (call.argsParseError) {
+        batchResults.push({
           type: "tool_result",
           toolUseId: callId,
-          content: resultText,
-          isError: result.status !== "succeeded",
-        },
-      ],
-    })
-    // 把 assistant 的 tool_use 与本轮的 tool_result 一起落库（配对关系不能拆开）
-    await flushMessages()
-
-    /* ---- ⑨ 进度守卫 ---- */
-    try {
-      progressGuard.assertProgress({
-        toolName: result.toolName,
-        argsFingerprint: sha256(stableStringify(argsRecord)),
-        resultFingerprint: fingerprintResult(result.output ?? result.error),
-        ok: result.status === "succeeded",
-        changedFiles: [...callChangedFiles],
-        ...(result.error ? { errorCode: result.error.code } : {}),
-      })
-    } catch (err) {
-      const appError = toAppError(err, "NO_PROGRESS")
-      const diagnosis = progressGuard.buildDiagnosis()
-      if (appError.details?.action === "stop-and-escalate") {
-        yield await sink.emit("task.warning", { reason: "no_progress", diagnosis })
-        yield await sink.emit("task.failed", {
-          code: appError.code,
-          message: appError.message,
-          diagnosis,
+          content:
+            `Your tool call arguments were not valid JSON: ${call.argsParseError}. ` +
+            "Nothing was executed. Re-issue the call with valid JSON.",
+          isError: true,
         })
+        deps.metrics.increment("tool.invalid_args")
+        continue
+      }
+
+      const argsRecord = call.args
+
+      yield await sink.emit("tool.started", {
+        callId,
+        tool: call.toolName,
+        risk: tool?.risk ?? "read",
+      })
+      const startedAt = now()
+      deps.metrics.increment(`tool.invoked`)
+      deps.metrics.increment(`tool.${call.toolName}.invoked`)
+
+      /**
+       * 调用开始前先落一条 `started` 记录（ADR-2）。
+       *
+       * 这条记录是**崩溃恢复**唯一的判据：进程被杀时它仍是 started，恢复方据此
+       * 决定"重跑 / 查证 / 标记未知"（development-guide.md §5 第四件）。
+       * 不写它，`openToolCalls()` 永远为空，`outcome_unknown` 那条分支就是死代码 ——
+       * 恢复时会把一个"可能已经执行过、也可能没有"的非幂等动作当成没发生过。
+       */
+      await deps.store.startToolCall({
+        id: callId,
+        taskId: options.taskId,
+        toolName: call.toolName,
+        inputHash: sha256(stableStringify(argsRecord)),
+        idempotencyKey: parameterHash({ tool: call.toolName, args: argsRecord }),
+        idempotency: tool?.idempotency ?? "non_idempotent",
+        status: "started",
+        startedAt: startedAt.toISOString(),
+        retryCount: 0,
+      })
+
+      /**
+       * 本次调用**自己**改了哪些文件。
+       *
+       * 必须与累计集合分开：进度守卫按"每次观测改了哪些文件"判断是否在反复churn，
+       * 若传累计集合，改过一次文件之后每个只读调用都会被算成"又改了一次"，
+       * 四次调用后就会误报"这个文件已被重写 4 次"，把模型推进无意义的重新规划。
+       */
+      const callChangedFiles = new Set<string>()
+      const outcome = await deps.executor.execute({
+        toolName: call.toolName,
+        args: argsRecord,
+        ctx: buildToolContext(
+          deps,
+          options,
+          callId,
+          (file) => {
+            callChangedFiles.add(file)
+            changedFiles.add(file)
+          },
+          state.workspaceRoot,
+        ),
+        /**
+         * 策略判定的输入**必须在工具校验之后**再求值。
+         *
+         * `policyCommand` / `policyPaths` 读的是工具入参，而有些工具会在 `validate`
+         * 阶段把入参补全（例如 `test.run` 省略 command 时从 package.json 自动发现）。
+         * 若在 `execute` 之前用原始 args 先算一遍，策略批准的是"猜出来的那条命令"、
+         * 真正执行的却是"发现出来的那条"，审批与执行就对不上了 ——
+         * 这正是 ADR-8 要求"判定只认结构化请求"要防的那类偏差。
+         *
+         * 另外执行器会把 PreToolUse 钩子放在判定**之前**跑，
+         * 所以这里拿到的 `args` 已经是钩子改过、并重新校验过的最终入参。
+         */
+        decide: async (args) => {
+          const command = tool?.policyCommand?.(args)
+          return deps.policy.evaluate({
+            toolName: call.toolName,
+            risk: tool?.risk ?? "read",
+            args,
+            ...(command ? { command: normalizeCommandRequest(command) } : {}),
+            ...(tool?.policyPaths ? { paths: tool.policyPaths(args) } : {}),
+            ...(tool?.policyDomains ? { domains: tool.policyDomains(args) } : {}),
+            permissionMode: options.permissionMode,
+            taskMode: effectiveTaskMode(),
+          })
+        },
+        taskMode: effectiveTaskMode(),
+        permissionMode: options.permissionMode,
+      })
+
+      usage.toolCalls += 1
+
+      /* ---- ⑦-a 需要审批：存下请求就退出，不阻塞 ---- */
+      if (outcome.kind === "approval") {
+        const approvalId = `apr_${sha256(`${options.taskId}:${callId}`).slice(0, 12)}`
+        await deps.store.createApproval({
+          id: approvalId,
+          taskId: options.taskId,
+          toolCallId: callId,
+          toolName: outcome.approval.toolName,
+          requestSummary: outcome.approval.reason,
+          parameterHash: outcome.approval.parameterHash,
+          policyVersion: outcome.approval.policyVersion,
+          status: "pending",
+          requestedAt: startedAt.toISOString(),
+          expiresAt: new Date(startedAt.getTime() + 30 * 60_000).toISOString(),
+        })
+        batchResults.push({
+          type: "tool_result",
+          toolUseId: callId,
+          content: `Approval required: ${outcome.approval.reason}. The task is paused pending a decision.`,
+          isError: true,
+        })
+        closeBatch(
+          index + 1,
+          "Not executed: an earlier tool call in this batch is awaiting approval. Re-issue it after the decision.",
+        )
+        await flushBatch()
+        const awaiting = await saveCheckpoint(
+          deps,
+          options,
+          "awaiting_approval",
+          messages,
+          changedFiles,
+          sink,
+        )
+        yield awaiting
+        yield await sink.emit("approval.required", {
+          approvalId,
+          tool: outcome.approval.toolName,
+          parameterHash: outcome.approval.parameterHash,
+          reason: outcome.approval.reason,
+        })
+        deps.metrics.increment("policy.decision.ask")
+
+        const latestState = await deps.store.getTask(options.taskId)
+        if (latestState) {
+          await deps.store.updateTask(
+            options.taskId,
+            { status: "awaiting_approval", usage },
+            latestState.stateVersion,
+          )
+        }
         const settled = await finish(
-          "failed",
-          "error_no_progress",
-          `${appError.message}\n\n${diagnosis}`,
+          "awaiting_approval",
+          "approval_required",
+          outcome.approval.reason,
         )
         if (settled.event) yield settled.event
         return settled.outcome
       }
-      // 压成诊断重新规划，而不是放任它原地空转
-      messages.push({
-        role: "user",
-        content: `[progress-guard] ${appError.message}\n\n${diagnosis}\n\nForm a new hypothesis and change your approach.`,
+
+      const result = outcome.result
+      yield await sink.emit("tool.completed", {
+        callId,
+        tool: result.toolName,
+        status: result.status,
+        durationMs: result.durationMs,
+        errorCode: result.error?.code,
+        truncated: result.truncated,
       })
-      progressGuard.reset()
-      deps.metrics.increment("loop.no_progress")
-      yield await sink.emit("task.warning", { reason: "no_progress_compressed", diagnosis })
+      deps.metrics.recordTiming("tool.duration_ms", result.durationMs)
+
+      // 闭合调用记录：未闭合 = 恢复时要按 outcome_unknown 处理
+      await deps.store.finishToolCall(callId, {
+        status: toolCallStatusFor(result.status),
+        finishedAt: now().toISOString(),
+        durationMs: result.durationMs,
+        ...(result.error ? { errorCode: result.error.code } : {}),
+      })
+
+      // file.changed：事件流里必须能看到"改了哪个文件"，否则消费端只能等到最后
+      // 从 outcome.changedFiles 里一次性知道，中途无法做任何增量展示或拦截。
+      for (const file of changedFiles) {
+        if (emittedChangedFiles.has(file)) continue
+        emittedChangedFiles.add(file)
+        yield await sink.emit("file.changed", { path: file }, callId)
+      }
+
+      if (result.status === "succeeded") deps.metrics.increment("tool.succeeded")
+      else deps.metrics.increment("tool.failed")
+
+      if (
+        result.error?.code === "TOOL_PERMISSION_DENIED" ||
+        result.error?.code === "DENIAL_LIMIT_REACHED"
+      ) {
+        permissionDenials.push({ toolName: result.toolName, reason: result.error.message })
+        deps.metrics.increment("policy.decision.deny")
+      } else {
+        deps.metrics.increment("policy.decision.allow")
+      }
+
+      // 计划提交成功 → 对外发一条可审计的 `task.plan_ready`
+      if (call.toolName === "plan.exit_plan_mode" && result.status === "succeeded") {
+        const submitted = result.output as { steps?: number; plan?: unknown } | undefined
+        yield await sink.emit("task.plan_ready", {
+          steps: submitted?.steps ?? 0,
+          plan: submitted?.plan ?? null,
+        })
+      }
+
+      /* ---- ⑧ 结果回灌（错误也是数据） ---- */
+      batchResults.push({
+        type: "tool_result",
+        toolUseId: callId,
+        content: renderToolResultForModel(result),
+        isError: result.status !== "succeeded",
+      })
+
+      /**
+       * 累计拒绝到上限：**这是唯一一条"不许再试"的终止信号**。
+       *
+       * 它必须在这里收口，不能只把结果回喂给模型 —— 模型的合理反应是"换个做法
+       * 再试"，于是拒绝数继续涨，任务无限空转。也不能像之前那样从策略层抛异常：
+       * 那会抛穿生成器，任务死在 `executing`，库里状态再也不会更新。
+       */
+      if (result.error?.code === "DENIAL_LIMIT_REACHED") {
+        closeBatch(index + 1, "Not executed: the cumulative denial limit was reached.")
+        await flushBatch()
+        yield await sink.emit("task.warning", {
+          reason: "denial_limit_reached",
+          message: result.error.message,
+          denials: permissionDenials.length,
+        })
+        const settled = await finish("failed", "error_during_execution", result.error.message)
+        if (settled.event) yield settled.event
+        return settled.outcome
+      }
+
+      /* ---- ⑨ 进度守卫 ---- */
+      try {
+        progressGuard.assertProgress({
+          toolName: result.toolName,
+          argsFingerprint: sha256(stableStringify(argsRecord)),
+          resultFingerprint: fingerprintResult(result.output ?? result.error),
+          ok: result.status === "succeeded",
+          changedFiles: [...callChangedFiles],
+          ...(result.error ? { errorCode: result.error.code } : {}),
+        })
+      } catch (err) {
+        const appError = toAppError(err, "NO_PROGRESS")
+        const diagnosis = progressGuard.buildDiagnosis()
+        if (appError.details?.action === "stop-and-escalate") {
+          closeBatch(index + 1, "Not executed: the task stopped because it made no progress.")
+          await flushBatch()
+          yield await sink.emit("task.warning", { reason: "no_progress", diagnosis })
+          yield await sink.emit("task.failed", {
+            code: appError.code,
+            message: appError.message,
+            diagnosis,
+          })
+          const settled = await finish(
+            "failed",
+            "error_no_progress",
+            `${appError.message}\n\n${diagnosis}`,
+          )
+          if (settled.event) yield settled.event
+          return settled.outcome
+        }
+        // 压成诊断重新规划，而不是放任它原地空转
+        batchNotes.push(
+          `[progress-guard] ${appError.message}\n\n${diagnosis}\n\nForm a new hypothesis and change your approach.`,
+        )
+        progressGuard.reset()
+        deps.metrics.increment("loop.no_progress")
+        yield await sink.emit("task.warning", { reason: "no_progress_compressed", diagnosis })
+      }
     }
+
+    await flushBatch()
 
     /* ---- ⑩ 检查点 ---- */
     currentStatus = (await deps.store.getTask(options.taskId))?.status ?? currentStatus
@@ -810,6 +1068,76 @@ function assertSafeTransition(from: TaskStatus, to: TaskStatus): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * 把"有 tool_use 但缺 tool_result"的历史补齐。
+ *
+ * 只处理**最后一条**含 tool_use 的 assistant 消息：更早的缺口属于历史数据损坏，
+ * 不在运行期悄悄改写（那样会把真正的 bug 掩盖成"看起来正常"）。
+ *
+ * 补的是 `is_error` 结果而不是空成功：模型必须知道"这次调用没有拿到结果"，
+ * 它才会决定重试；谎报成功会让它基于不存在的事实继续往下做。
+ *
+ * @returns 是否发生了修补（调用方据此决定要不要整体回写存储）
+ */
+export function closeDanglingToolUses(messages: ModelMessage[]): boolean {
+  let lastAssistant = -1
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (
+      message?.role === "assistant" &&
+      Array.isArray(message.content) &&
+      message.content.some((block) => block.type === "tool_use")
+    ) {
+      lastAssistant = i
+      break
+    }
+  }
+  if (lastAssistant < 0) return false
+
+  const assistant = messages[lastAssistant]
+  if (!assistant || !Array.isArray(assistant.content)) return false
+  const requested = assistant.content
+    .filter(
+      (block): block is Extract<ContentBlock, { type: "tool_use" }> => block.type === "tool_use",
+    )
+    .map((block) => block.id)
+
+  const answered = new Set<string>()
+  for (let i = lastAssistant + 1; i < messages.length; i += 1) {
+    const message = messages[i]
+    if (!message || !Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (block.type === "tool_result") answered.add(block.toolUseId)
+    }
+  }
+
+  const missing = requested.filter((id) => !answered.has(id))
+  if (missing.length === 0) return false
+
+  const blocks: ContentBlock[] = missing.map((id) => ({
+    type: "tool_result" as const,
+    toolUseId: id,
+    content:
+      "This tool call did not complete: the process stopped before a result was recorded. " +
+      "It may or may not have taken effect; verify the actual state before retrying.",
+    isError: true,
+  }))
+
+  // 后端要求角色交替：能并进最后一条 tool_result 消息就并进去，否则另起一条
+  const last = messages[messages.length - 1]
+  if (
+    last &&
+    last.role === "user" &&
+    Array.isArray(last.content) &&
+    last.content.some((block) => block.type === "tool_result")
+  ) {
+    last.content = [...last.content, ...blocks]
+  } else {
+    messages.push({ role: "user", content: blocks })
+  }
+  return true
 }
 
 /** 工具的 `ToolExecutionStatus` → 存储的 `ToolCallStatus`。 */

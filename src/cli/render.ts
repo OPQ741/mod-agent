@@ -40,8 +40,6 @@ export function renderEventText(event: TaskEvent): string | undefined {
     }
     case "tool.started":
       return `[工具] ${String(payload.tool ?? "?")} 开始`
-    case "tool.progress":
-      return `[工具] ${String(payload.tool ?? "?")} ${String(payload.message ?? "")}`.trimEnd()
     case "tool.completed": {
       const status = String(payload.status ?? "?")
       const ms = payload.durationMs ? ` · ${String(payload.durationMs)}ms` : ""
@@ -63,10 +61,15 @@ export function renderEventText(event: TaskEvent): string | undefined {
       return `[检查点] v${String(payload.version ?? "?")}`
     case "task.warning":
       return `[警告] ${describeWarning(payload)}`
+    /**
+     * 字段名必须与 `RetryEvent` 对齐（`retryDelayMs` / `error`）。
+     * 之前这里读的是 `delayMs` / `reason` —— 两个都不存在，
+     * 而这条分支又因为事件从未 emit 而永远走不到，所以一直没人发现。
+     */
     case "retry.api":
-      return `[重试] 第 ${String(payload.attempt ?? "?")} 次 · 等待 ${String(payload.delayMs ?? "?")}ms · ${String(payload.reason ?? "")}`
-    case "agent.message_delta":
-      return String(payload.delta ?? "")
+      return `[重试] 第 ${String(payload.attempt ?? "?")}/${String(payload.maxRetries ?? "?")} 次 · 等待 ${String(payload.retryDelayMs ?? "?")}ms · ${String(payload.error ?? "")}`
+    case "task.plan_ready":
+      return `[计划] 已提交 ${String(payload.steps ?? 0)} 个步骤`
     case "task.completed":
       return undefined
     case "task.failed":

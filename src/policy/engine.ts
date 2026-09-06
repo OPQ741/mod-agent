@@ -49,6 +49,19 @@ export interface PolicyDecision {
   timeoutMs: number
   networkProfile: CommandRequest["networkProfile"]
   parameterHash: string
+  /**
+   * 累计拒绝已达上限（`maxCumulativeDenials`）。
+   *
+   * 这个标志是**判定结果的一部分**，不是异常：判定引擎是纯函数式的，
+   * 它没有能力"中止任务"，只能把"该停了"这件事如实写进返回值。
+   * 由调用方（执行器 → 主循环）决定怎么收场。
+   *
+   * 之前这里是 `recordDenial()` 直接 `throw DenialLimitExceeded`，
+   * 而 `executor.execute` 与主循环都没有捕获它 —— 生成器一路抛穿，
+   * 任务死在 `executing` 状态、库里的状态永远不再更新，
+   * 同时绕开了"工具错误是数据不是异常"这条整个设计赖以成立的前提。
+   */
+  denialLimitReached?: boolean
 }
 
 /** 判定的核心三要素：档位裁决函数只产出这些字段，超时/网络/hash 由调用方补齐。 */
@@ -72,15 +85,8 @@ export interface PolicyEngineOptions {
   classifier?: AutoClassifier
   /** 连续被拒多少次后回落到交互式确认（security.md §4.2 拒绝追踪）。 */
   consecutiveDenyFallback?: number
-  /** 累计拒绝上限，达到即中止任务。 */
+  /** 累计拒绝上限，达到即在判定结果里打 `denialLimitReached`，由调用方中止任务。 */
   maxCumulativeDenials?: number
-}
-
-export class DenialLimitExceeded extends Error {
-  constructor(readonly denials: number) {
-    super(`Cumulative denial limit reached (${denials}); aborting task`)
-    this.name = "DenialLimitExceeded"
-  }
 }
 
 export class PolicyEngine {
@@ -166,8 +172,7 @@ export class PolicyEngine {
     // ① deny —— 最高优先级，任何模式（含 bypassPermissions）都不能翻案
     const denied = this.evaluateDeny(request)
     if (denied) {
-      this.recordDenial()
-      return { ...base, ...denied, bypassImmune: denied.bypassImmune ?? false }
+      return this.asDenial(base, denied, denied.bypassImmune ?? false)
     }
 
     // ② allow —— 显式放行（含会话级放行）
@@ -179,17 +184,132 @@ export class PolicyEngine {
 
     // ③ 按权限档位裁决
     const decided = await this.decideByMode(request)
-    if (decided.effect === "deny") this.recordDenial()
-    else this.consecutiveDenials = 0
+    if (decided.effect === "deny") {
+      return this.asDenial(base, decided, false)
+    }
+    this.consecutiveDenials = 0
     return { ...base, ...decided, bypassImmune: false }
   }
 
-  private recordDenial(): void {
+  /**
+   * 验证命令的判定入口（verification-and-multiagent.md §1）。
+   *
+   * 与 `evaluate` 的差别只有一条：**来源决定默认值**。
+   *
+   * - `bypass-immune` 与配置里的 deny 规则**永远生效**，与来源无关 ——
+   *   这正是之前那个洞：验证流水线直接调沙箱，`rm -rf` 明明被判定为
+   *   bypass-immune deny，却照样执行并报 `passed`。
+   * - `无法静态解析的形状` 只拒"从仓库内容里发现的"命令：那条启发式是为
+   *   模型生成的命令设计的，用户自己写进 `--check` 的命令不适用。
+   * - 兜底：用户显式给的命令视为已授权；仓库内容发现的命令**不能自我授权**，
+   *   必须命中显式 allow 规则或本会话审批记录才放行。
+   *
+   * 最后这条是这套判定的核心：`package.json` 的 `scripts.test` 是仓库内容，
+   * 仓库内容不该有能力让 agent 去执行它自己写的命令。
+   */
+  async evaluateValidation(
+    request: PolicyRequest,
+    options: { userProvided: boolean },
+  ): Promise<PolicyDecision> {
+    const base = {
+      timeoutMs: this.settings.limits.commandTimeoutMs,
+      networkProfile: (request.command?.networkProfile ??
+        "none") as CommandRequest["networkProfile"],
+      parameterHash: parameterHash(request.args),
+    }
+
+    const immune = this.checkBypassImmune(request)
+    if (immune) {
+      return this.asDenial(base, { effect: "deny", reason: immune }, true)
+    }
+
+    if (!options.userProvided && request.command) {
+      for (const segment of parseCommandSegments(request.command)) {
+        const shape = isUnresolvableShape(segment)
+        if (shape.unresolvable) {
+          return this.asDenial(
+            base,
+            {
+              effect: "deny",
+              reason: `Refusing a discovered command that cannot be statically analyzed: ${shape.reason ?? "unknown"}`,
+            },
+            true,
+          )
+        }
+      }
+    }
+
+    const denyRule = this.matchAgainst(this.denyRules, request, "deny")
+    if (denyRule) {
+      return this.asDenial(
+        base,
+        {
+          effect: "deny",
+          reason: `Denied by policy rule: ${denyRule.raw}`,
+          matchedRule: denyRule.raw,
+        },
+        false,
+      )
+    }
+
+    const allowed = this.evaluateAllow(request)
+    if (allowed) {
+      this.consecutiveDenials = 0
+      return { ...base, ...allowed, bypassImmune: false }
+    }
+
+    if (options.userProvided) {
+      this.consecutiveDenials = 0
+      return {
+        ...base,
+        effect: "allow",
+        reason: "Validation command was explicitly provided by the caller",
+        bypassImmune: false,
+      }
+    }
+
+    return this.asDenial(
+      base,
+      {
+        effect: "deny",
+        reason:
+          "Discovered from repository content and not covered by an allow rule; " +
+          "add an explicit permissions.allow entry (or approve the same command once) to authorize it",
+      },
+      false,
+    )
+  }
+
+  /**
+   * 收口一次拒绝：记账、判断是否到累计上限，并保证**不抛异常**。
+   *
+   * 判定引擎不中止任务，只报告"该停了"。抛异常会让拒绝从"数据"变成"控制流"，
+   * 执行器与主循环的容错设计就全部失效。
+   */
+  private asDenial(
+    base: Pick<PolicyDecision, "timeoutMs" | "networkProfile" | "parameterHash">,
+    core: DecisionCore,
+    bypassImmune: boolean,
+  ): PolicyDecision {
+    const limitReached = this.recordDenial()
+    return {
+      ...base,
+      ...core,
+      bypassImmune,
+      ...(limitReached
+        ? {
+            denialLimitReached: true,
+            reason: `${core.reason} (cumulative denial limit ${this.maxCumulativeDenials} reached; stop retrying and report)`,
+          }
+        : {}),
+    }
+  }
+
+  /** 返回是否已到累计上限。**不抛异常**，见 `asDenial`。 */
+  private recordDenial(): boolean {
     this.consecutiveDenials += 1
     this.cumulativeDenials += 1
-    if (this.cumulativeDenials >= this.maxCumulativeDenials) {
-      throw new DenialLimitExceeded(this.cumulativeDenials)
-    }
+    return this.cumulativeDenials >= this.maxCumulativeDenials
   }
 
   /* ---------------- ① deny ---------------- */
@@ -412,7 +532,19 @@ export class PolicyEngine {
 
     // 路径类
     if (request.paths && request.paths.length > 0) {
-      return request.paths.some((p) => matchPath(rule, p, effect, this.pathCtx))
+      /**
+       * 多路径的量化方向**随效应而变**，不能一律 `.some()`：
+       * - deny / ask：任一路径命中就成立（`some`）；
+       * - allow：**每一条**路径都要命中（`every`）。用 `some` 的话，
+       *   `allow: ["Edit(src/**)"]` 会让 `[src/a.ts, ../../etc/passwd]`
+       *   整体放行 —— 一条规则把没被规则覆盖的路径也一起批了。
+       *
+       * 今天只有只读工具会一次给出多个路径，所以这是潜伏缺陷；
+       * 但等第一个多路径写工具出现，它就变成 P0。
+       */
+      const matches = (candidate: string): boolean =>
+        matchPath(rule, candidate, effect, this.pathCtx)
+      return effect === "allow" ? request.paths.every(matches) : request.paths.some(matches)
     }
 
     // 兜底：把参数序列化成文本做前缀/精确匹配
