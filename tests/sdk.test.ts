@@ -106,7 +106,7 @@ describe("SDK · query()", () => {
       provider: new ScriptedProvider([
         toolUse("command.run", {
           executable: process.execPath,
-          args: ["-e", "0"],
+          args: ["--version"],
           cwd: ws.root,
           reason: "smoke",
           timeoutMs: 120_000,
@@ -128,7 +128,7 @@ describe("SDK · query()", () => {
       provider: new ScriptedProvider([
         toolUse("command.run", {
           executable: process.execPath,
-          args: ["-e", "0"],
+          args: ["--version"],
           cwd: ws.root,
           reason: "smoke",
           timeoutMs: 120_000,

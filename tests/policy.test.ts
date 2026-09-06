@@ -56,7 +56,7 @@ function cmd(executable: string, args: string[] = []) {
 const policy = (overrides: any = {}, extra: any = {}) =>
   new PolicyEngine({
     settings: settingsWith(overrides),
-    cwd: "D:/w",
+    cwd: process.cwd(),
     hasTty: true,
     ...extra,
   })
@@ -145,6 +145,7 @@ describe("policy/command: 只能精确匹配 / 无法静态解析", () => {
       "bash -c rm -rf /",
       "xargs -I{} rm {}",
       "node -e console.log(1)",
+      "node.exe -e console.log(1)",
       "python -c print(1)",
       "perl -e 'print 1'",
       "awk 'BEGIN { system(\"rm -rf /\") }'",
@@ -775,7 +776,7 @@ describe("policy/engine: 多路径 allow 必须 every 而不是 some", () => {
       args: {},
       // 第一条命中规则、第二条完全在规则之外 —— 用 some 的话整次调用会被放行，
       // 等于一条规则把没被覆盖的路径也一起批了。
-      paths: ["D:/w/src/a.ts", "D:/w/etc/passwd"],
+      paths: [path.join(process.cwd(), "src", "a.ts"), path.join(process.cwd(), "etc", "passwd")],
       permissionMode: "default",
       taskMode: "edit",
     })
@@ -788,7 +789,7 @@ describe("policy/engine: 多路径 allow 必须 every 而不是 some", () => {
       toolName: "Edit",
       risk: "workspace_write",
       args: {},
-      paths: ["D:/w/src/a.ts", "D:/w/src/b.ts"],
+      paths: [path.join(process.cwd(), "src", "a.ts"), path.join(process.cwd(), "src", "b.ts")],
       permissionMode: "default",
       taskMode: "edit",
     })
@@ -801,7 +802,7 @@ describe("policy/engine: 多路径 allow 必须 every 而不是 some", () => {
       toolName: "Edit",
       risk: "workspace_write",
       args: {},
-      paths: ["D:/w/src/a.ts", "D:/w/ok.ts"],
+      paths: [path.join(process.cwd(), "src", "a.ts"), path.join(process.cwd(), "ok.ts")],
       permissionMode: "default",
       taskMode: "edit",
     })

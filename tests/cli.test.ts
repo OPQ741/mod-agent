@@ -378,7 +378,7 @@ describe("CLI · 审批", () => {
         toolName: "command.run",
         args: {
           executable: process.execPath,
-          args: ["-e", "0"],
+          args: ["--version"],
           cwd,
           reason: "smoke",
           timeoutMs: 120_000,
@@ -416,7 +416,7 @@ describe("CLI · 审批", () => {
     const { cwd, homeDir } = await setup()
     const args = {
       executable: process.execPath,
-      args: ["-e", "process.stdout.write('APPROVED-RAN')"],
+      args: ["--version"],
       cwd,
       reason: "smoke",
       timeoutMs: 120_000,
@@ -456,7 +456,7 @@ describe("CLI · 审批", () => {
         toolName: "command.run",
         args: {
           executable: process.execPath,
-          args: ["-e", "0"],
+          args: ["--version"],
           cwd,
           reason: "smoke",
           timeoutMs: 120_000,

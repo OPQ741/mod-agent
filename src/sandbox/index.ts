@@ -224,6 +224,11 @@ export async function selectSandbox(options: {
   settings: Settings
   workspaceRoot: string
   assertCwd: (cwd: string) => string
+  /**
+   * 可注入的 Docker 可用性探针。默认探测真实 `docker info`；
+   * 测试里用它把 Docker 固定为"不可用"，避免结果依赖宿主是否装了 Docker。
+   */
+  probeDocker?: () => Promise<boolean>
 }): Promise<SandboxSelection> {
   const { settings, workspaceRoot, assertCwd } = options
   const restricted = new RestrictedSubprocessBackend({
@@ -251,7 +256,7 @@ export async function selectSandbox(options: {
     maxOutputChars: settings.limits.commandMaxOutputChars,
     maxTotalOutputBytes: settings.limits.commandMaxTotalOutputBytes,
   })
-  const available = await docker.isAvailable()
+  const available = options.probeDocker ? await options.probeDocker() : await docker.isAvailable()
   if (available) {
     return {
       backend: docker,

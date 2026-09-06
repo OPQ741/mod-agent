@@ -291,6 +291,8 @@ describe("sandbox/index: fail-closed 选择与能力声明", () => {
           settings: settingsWith({ sandbox: { enabled: true, failIfUnavailable: true } }),
           workspaceRoot: ws.root,
           assertCwd: (cwd) => new PathGuard({ workspaceRoot: ws.root }).assertCwd(cwd),
+          // Docker 是否可用由探针决定，不依赖 CI 宿主环境
+          probeDocker: async () => false,
         }),
       ).rejects.toMatchObject({ code: "SANDBOX_UNAVAILABLE" })
     } finally {
@@ -305,6 +307,8 @@ describe("sandbox/index: fail-closed 选择与能力声明", () => {
         settings: settingsWith({ sandbox: { enabled: true, failIfUnavailable: false } }),
         workspaceRoot: ws.root,
         assertCwd: (cwd) => new PathGuard({ workspaceRoot: ws.root }).assertCwd(cwd),
+        // Docker 是否可用由探针决定，不依赖 CI 宿主环境
+        probeDocker: async () => false,
       })
       expect(selection.degraded).toBe(true)
     } finally {

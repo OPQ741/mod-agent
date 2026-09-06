@@ -110,9 +110,11 @@ function flakyCheck(marker: string, cwd: string): ValidationCheck {
   }
 }
 
-const commandArgs = (ws: TempWorkspace, script = "0") => ({
+const commandArgs = (ws: TempWorkspace, variant = "") => ({
   executable: process.execPath,
-  args: ["-e", script],
+  // 用 `--version` 而不是 `-e`：`node -e` 会被策略判为"无法静态解析"直接 deny，
+  // 审批类用例需要的是一个会走到"问一次"的命令，`--version` 正好满足且跨平台。
+  args: variant ? ["--version", variant] : ["--version"],
   cwd: ws.root,
   reason: "smoke test",
   timeoutMs: 120_000,
@@ -421,15 +423,12 @@ describe("主循环 · 审批分支", () => {
     const ws = await workspace()
     const { runtime, taskId } = await boot({
       ws,
-      script: [toolUse("command.run", commandArgs(ws, "process.stdout.write('ran')"))],
+      script: [toolUse("command.run", commandArgs(ws))],
       settings: settingsWith({ mode: "edit", permissionMode: "default" }),
       hasTty: true,
     })
     // 审批之后模型接着跑：重放同一条命令（这次已获会话放行），再 final
-    runtime.provider.append(
-      toolUse("command.run", commandArgs(ws, "process.stdout.write('ran')")),
-      final("done after approval"),
-    )
+    runtime.provider.append(toolUse("command.run", commandArgs(ws)), final("done after approval"))
 
     const seen: TaskEvent[] = []
     const result = await driveTask(runtime, taskId, {
@@ -443,7 +442,7 @@ describe("主循环 · 审批分支", () => {
     expect(stored.some((e) => e.type === "approval.decided")).toBe(true)
     expect(seen.some((e) => e.type === "task.completed")).toBe(true)
     const messages = await runtime.store.getMessages(taskId)
-    expect(JSON.stringify(messages)).toContain("ran")
+    expect(JSON.stringify(messages)).toContain(process.version)
   })
 
   it("拒绝审批 → 停在审批点，退出码 2（被人挡住，不是失败）", async () => {
@@ -466,7 +465,7 @@ describe("主循环 · 审批分支", () => {
     const ws = await workspace()
     const { runtime, taskId } = await boot({
       ws,
-      script: [toolUse("command.run", commandArgs(ws, "process.stdout.write('SHOULD-NOT-RUN')"))],
+      script: [toolUse("command.run", commandArgs(ws, "SHOULD-NOT-RUN"))],
       settings: settingsWith({ mode: "edit", permissionMode: "default" }),
       hasTty: true,
     })
@@ -494,8 +493,8 @@ describe("主循环 · 审批分支", () => {
     // 补两步：每次参数都要不同（批准是按参数哈希记的，同参数第二次会被会话放行表放过），
     // 让第 3 次真的撞上审批上限
     runtime.provider.append(
-      toolUse("command.run", commandArgs(ws, "process.exit(0)")),
-      toolUse("command.run", commandArgs(ws, "process.exit(1)")),
+      toolUse("command.run", commandArgs(ws, "exit0")),
+      toolUse("command.run", commandArgs(ws, "exit1")),
     )
     let asked = 0
     const result = await driveTask(runtime, taskId, {

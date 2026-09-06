@@ -379,15 +379,17 @@ export function usesSudo(segment: CommandSegment): boolean {
 const UNRESOLVABLE_EXECUTABLES: ReadonlySet<string> = new Set(["eval", "exec", "source", "."])
 
 const UNRESOLVABLE_PATTERNS: ReadonlyArray<RegExp> = [
-  /\b(sh|bash|zsh|fish|pwsh|powershell|cmd)\s+(-c|-\/c|\/c)\b/i,
+  /\b(sh|bash|zsh|fish|pwsh|powershell|cmd)(?:\.exe)?\s+(-c|-\/c|\/c)\b/i,
   // `-I{}` 与 `-I {}` 都要覆盖：写成 `\s+(-I|-J)` 只能抓住后者，
   // 而 `-I{}` 恰恰是最常见的写法。
   /\bxargs\s+-[A-Za-z0-9]*(?:[IJR]|n[0-9]?)[A-Za-z0-9]*/,
   /\bawk\b[^\n]*\bsystem\s*\(/,
-  /\bperl\b\s+-e/,
-  /\bruby\b\s+-e/,
-  /\bpython[0-9.]*\b\s+-c/,
-  /\bnode\b\s+(-e|--eval|-p)/,
+  /\bperl(?:\.exe)?\b\s+-e/,
+  /\bruby(?:\.exe)?\b\s+-e/,
+  /\bpython[0-9.]*(?:\.exe)?\b\s+-c/,
+  // `.exe` 后缀要一并覆盖：`node -e` 与 `node.exe -e` 语义相同，
+  // 只写 `\bnode\b` 会让 Windows 上的 `node.exe -e` 绕过"不可解析"判定。
+  /\bnode(?:\.exe)?\b\s+(-e|--eval|-p)/,
 ]
 
 export function isUnresolvableShape(segment: CommandSegment): {
