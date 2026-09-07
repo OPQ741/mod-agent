@@ -8,7 +8,7 @@
  *    venv 解释器、`.git` 元数据、CI 配置）—— 它们被沙箱外的受信任程序读取即逃逸。
  */
 
-import { promises as fs } from "node:fs"
+import { promises as fs, realpathSync } from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { AppError } from "../shared/errors.js"
@@ -99,21 +99,94 @@ export class PathGuard {
   /**
    * 解析路径并判断是否在工作区内。
    *
-   * 文件不存在时 realpath 会抛错，此时退化为 lexical resolve —— 新建文件是合法场景，
-   * 不能因为文件不存在就拒绝，但**父目录必须存在且落在工作区内**。
+   * 三条纪律（缺一条都能绕过）：
+   * 1. **存在的路径**用 `fs.realpath`，符号链接看解析结果，不看写法；
+   * 2. **不存在的路径**（新建文件的合法场景）也要解析：向上找到最近存在的祖先
+   *    做 realpath，再把缺失的尾段拼回去。否则"父目录是逃出工作区的符号链接"
+   *    永远识别不出来 —— 之前所有 realpath 异常一律退化成 lexical 路径，
+   *    而注释里那句"调用方会再校验父目录"并没有任何调用方在做；
+   * 3. **其他错误**（EACCES / EIO / ELOOP）必须 fail-closed：把它们当成
+   *    "文件不存在"放行，等于让一次读盘失败变成一次策略失效。
    */
   async resolve(target: string): Promise<ResolvedPath> {
     const lexical = path.resolve(this.workspaceRoot, target)
-    let real: string
-    try {
-      real = await fs.realpath(lexical)
-    } catch {
-      // 文件不存在：用 lexical 路径，调用方会再校验父目录
-      real = lexical
-    }
+    const real = await this.realPathOf(lexical)
     const insideWorkspace = this.isInsideRoot(real)
     const symlinkEscape = !insideWorkspace && real !== lexical
     return { real, insideWorkspace, symlinkEscape }
+  }
+
+  /** 解析真实路径：存在直接解析，缺失走祖先 + dangling 链接，其余错误 fail-closed。 */
+  private async realPathOf(lexical: string, depth = 0): Promise<string> {
+    try {
+      return await fs.realpath(lexical)
+    } catch (err) {
+      const code = errnoCode(err)
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new AppError(
+          "PATH_POLICY_VIOLATION",
+          `Cannot resolve path (${code ?? "unknown error"}): ${lexical}`,
+          { details: { path: lexical, code: code ?? null } },
+        )
+      }
+      /**
+       * dangling 符号链接：链接本身存在、目标不存在。`realpath` 报 ENOENT，
+       * 但写入时内核会沿链接去创建目标文件 —— 若目标在工作区外，就是一条真实逃逸。
+       * 所以先看它是不是链接，是就解析到目标再判定（限深，防链接环）。
+       */
+      if (depth < MAX_LINK_DEPTH) {
+        const linkTarget = await this.readLinkTarget(lexical)
+        if (linkTarget) return await this.realPathOf(linkTarget, depth + 1)
+      }
+      return await this.realPathOfNearestAncestor(lexical)
+    }
+  }
+
+  /** 若 `lexical` 是符号链接，返回其**绝对**目标路径；否则 undefined。 */
+  private async readLinkTarget(lexical: string): Promise<string | undefined> {
+    try {
+      const stat = await fs.lstat(lexical)
+      if (!stat.isSymbolicLink()) return undefined
+      const target = await fs.readlink(lexical)
+      return path.resolve(path.dirname(lexical), target)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 目标不存在时：向上找最近存在的祖先目录，realpath 后再拼回缺失的尾段。
+   * 这样 `.gitignore` 里刚被排除的新目录、新建的深层文件都能正确判定；
+   * 而祖先若是逃出工作区的链接，拼出来的结果自然落在工作区外。
+   */
+  private async realPathOfNearestAncestor(lexical: string): Promise<string> {
+    const tail: string[] = []
+    let current = lexical
+    for (;;) {
+      const parent = path.dirname(current)
+      if (parent === current) {
+        throw new AppError(
+          "PATH_POLICY_VIOLATION",
+          `No existing ancestor directory could be resolved for: ${lexical}`,
+          { details: { path: lexical } },
+        )
+      }
+      tail.push(path.basename(current))
+      current = parent
+      try {
+        const real = await fs.realpath(current)
+        return path.join(real, ...tail.reverse())
+      } catch (err) {
+        const code = errnoCode(err)
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          throw new AppError(
+            "PATH_POLICY_VIOLATION",
+            `Cannot resolve ancestor directory (${code ?? "unknown error"}): ${current}`,
+            { details: { path: current, code: code ?? null } },
+          )
+        }
+      }
+    }
   }
 
   private isInsideRoot(candidate: string): boolean {
@@ -211,14 +284,24 @@ export class PathGuard {
     return { path: resolved.real, needsApproval: false }
   }
 
-  /** 命令 cwd 校验（code-editing.md §3.3 规则 ②：cwd 不得落回主检出）。 */
+  /**
+   * 命令 cwd 校验（code-editing.md §3.3 规则 ②：cwd 不得落回主检出）。
+   *
+   * 必须走 realpath：只做 `path.resolve` + 字符串前缀比较时，工作区内一个
+   * 指向工作区外的符号链接目录能直接过关，命令随后就在那个真实目录里执行 ——
+   * 而 `assertWritable` 是拦 symlinkEscape 的，两处判定不对称。
+   * 这里用同步 realpath：调用频率是"每条命令一次"，不值得为它改成异步签名。
+   */
   assertCwd(cwd: string): string {
     const resolved = path.resolve(cwd)
-    if (!this.isSubPath(this.workspaceRoot, resolved)) {
+    const real = realpathSyncOrMissing(resolved)
+    // cwd 不存在时命令自己会失败，此时按 lexical 判定即可（不新增拒绝理由）
+    const candidate = real ?? resolved
+    if (!this.isSubPath(this.workspaceRoot, candidate)) {
       throw new AppError(
         "PATH_POLICY_VIOLATION",
         `Command cwd must be inside the authorized workspace: ${cwd}`,
-        { details: { resolved, workspaceRoot: this.workspaceRoot } },
+        { details: { resolved, real: candidate, workspaceRoot: this.workspaceRoot } },
       )
     }
     return resolved
@@ -282,4 +365,34 @@ export async function loadGitignorePatterns(root: string): Promise<string[]> {
 
 export function defaultHome(): string {
   return os.homedir()
+}
+
+/* ------------------------------------------------------------------ *
+ * 路径解析辅助
+ * ------------------------------------------------------------------ */
+
+/** 符号链接解析的最大深度，防 `a → b → a` 这类环把判定挂死。 */
+const MAX_LINK_DEPTH = 8
+
+function errnoCode(err: unknown): string | undefined {
+  const code = (err as NodeJS.ErrnoException | null | undefined)?.code
+  return typeof code === "string" ? code : undefined
+}
+
+/**
+ * 同步 realpath：只在"目标确实不存在"时返回 undefined。
+ * 其他错误（权限、IO、链接环）一律上抛 —— 拿不准就拒绝，不猜。
+ */
+function realpathSyncOrMissing(target: string): string | undefined {
+  try {
+    return realpathSync(target)
+  } catch (err) {
+    const code = errnoCode(err)
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined
+    throw new AppError(
+      "PATH_POLICY_VIOLATION",
+      `Cannot resolve command cwd (${code ?? "unknown error"}): ${target}`,
+      { details: { path: target, code: code ?? null } },
+    )
+  }
 }

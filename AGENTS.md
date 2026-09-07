@@ -29,7 +29,7 @@
 
 ## 1. 项目当前阶段
 
-TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于设计阶段**：仓库主体是 VitePress 文档站（`docs/`，24 篇源文档，约 8200 行），尚无运行时代码。修改前请先确认你面对的是「文档站阶段的仓库」还是「未来代码阶段的仓库」，两者约束不同。
+TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于代码阶段**：`src/` 下已有可运行的 Agent Runtime（`runtime/loop.ts` 唯一主循环 → `tools/executor.ts` → `policy/` → `sandbox/` → `store/`），`tests/` 有 440+ 条离线用例（`npm test` 不联网、不烧 API 额度）；`docs/`（24 篇源文档）与实现并行维护，文档写目标架构，代码是它的落地。判断"某能力是否存在"一律以 `src/` 为准，不要只读文档下结论。
 
 ## 2. 开始任何任务前
 
@@ -51,6 +51,11 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 - `npm run lint:fix` — 自动修复 ESLint / markdownlint / Prettier 问题。
 - `npm run format:check` — 仅检查格式，不写文件。
 - `npm run typecheck` — TypeScript strict 类型检查（`tsc --noEmit`）。
+- `npm run build` — 编译到 `dist/`（`tsc -p tsconfig.build.json`）。
+- `npm run test` — 全量离线测试（`vitest run`，440+ 用例，不联网、不需要 API Key）。
+- `npm run test:watch` — 监听模式，改一处跑相关用例时用。
+- `npm run cli` — 跑编译产物 `node dist/cli/main.js`（需先 `npm run build`）。
+- `npm run verify` — `typecheck` + `test`；改代码后至少跑这一条。
 
 跨语言协作者或脚本可以用根目录 `Makefile` 的统一目标：`make install` / `make docs` / `make lint` / `make typecheck` / `make check`（= lint + typecheck，CI 的最小子集）。
 
@@ -58,19 +63,25 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 
 拿到一条明确的修改请求时，先看这张表定位入口，再决定改动范围与必跑校验。表里没有的场景，回到 §2 与 §5 兜底。
 
-| 任务                                                  | 入口                                                                                                   | 完成后必跑                             |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| 改某篇文档正文                                        | `docs/<name>.md`                                                                                       | `npm run lint:links` → `npm run lint`  |
-| 加 / 删 / 重命名一篇文档                              | `docs/` 新增文件 + `docs/.vitepress/config.mts` sidebar + `docs/index.md` 导航表，三处同步             | `npm run lint:links` → `npm run lint`  |
-| 改侧栏编号 / 顺序                                     | `docs/.vitepress/config.mts`；侧栏 `text` 前缀使用连续两位数 `01`–`24`，不用 `03-1` 之类的连字符子编号 | `npm run lint:links` → `npm run lint`  |
-| 改 VitePress 站点配置（主题、导航、构建）             | `docs/.vitepress/config.mts`；主题/静态资源在 `docs/public/`                                           | `npm run docs:build`                   |
-| 修本文件里引用的命令是否还存在                        | `scripts/verify-agents-md-commands.mjs`；改 `package.json` scripts 或本文件后必跑                      | `npm run lint:agents`                  |
-| 修 ESLint / Prettier / commitlint / markdownlint 规则 | 分别对应 `eslint.config.mjs`、`.prettierrc.json`、`commitlint.config.mjs`、`.markdownlint-cli2.jsonc`  | `npm run lint`                         |
-| 改 Git 钩子                                           | `.husky/pre-commit`、`.husky/commit-msg`；配 `lint-staged.config.mjs` 决定哪些文件跑哪些命令           | 本地 `git commit` 空提交一次自测       |
-| 改 CI / GitHub Actions                                | `.github/workflows/*.yml`；`.nvmrc` 决定 Node 版本；`dependabot.yml` 决定依赖更新节奏                  | `actionlint`（可选），推送后看 Actions |
-| 改文档站的对外发布                                    | `.github/workflows/deploy-docs.yml`（GitHub Pages），站点根 `https://opq741.github.io/mod-agent/`      | 推送 `master` 后看 Pages 部署日志      |
-| 改 Issue / PR 模板                                    | `.github/ISSUE_TEMPLATE/*.yml`、`.github/pull_request_template.md`；表单字段变更影响 AI 生成信号采集   | GitHub Settings → Issues 预览          |
-| 改贡献者指引 / 治理文件                               | `README.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`AGENTS.md`、`CHANGELOG.md`       | `npm run lint:md`                      |
+| 任务                                                  | 入口                                                                                                   | 完成后必跑                                      |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
+| 改某篇文档正文                                        | `docs/<name>.md`                                                                                       | `npm run lint:links` → `npm run lint`           |
+| 加 / 删 / 重命名一篇文档                              | `docs/` 新增文件 + `docs/.vitepress/config.mts` sidebar + `docs/index.md` 导航表，三处同步             | `npm run lint:links` → `npm run lint`           |
+| 改侧栏编号 / 顺序                                     | `docs/.vitepress/config.mts`；侧栏 `text` 前缀使用连续两位数 `01`–`24`，不用 `03-1` 之类的连字符子编号 | `npm run lint:links` → `npm run lint`           |
+| 改 VitePress 站点配置（主题、导航、构建）             | `docs/.vitepress/config.mts`；主题/静态资源在 `docs/public/`                                           | `npm run docs:build`                            |
+| 修本文件里引用的命令是否还存在                        | `scripts/verify-agents-md-commands.mjs`；改 `package.json` scripts 或本文件后必跑                      | `npm run lint:agents`                           |
+| 修 ESLint / Prettier / commitlint / markdownlint 规则 | 分别对应 `eslint.config.mjs`、`.prettierrc.json`、`commitlint.config.mjs`、`.markdownlint-cli2.jsonc`  | `npm run lint`                                  |
+| 改 Git 钩子                                           | `.husky/pre-commit`、`.husky/commit-msg`；配 `lint-staged.config.mjs` 决定哪些文件跑哪些命令           | 本地 `git commit` 空提交一次自测                |
+| 改 CI / GitHub Actions                                | `.github/workflows/*.yml`；`.nvmrc` 决定 Node 版本；`dependabot.yml` 决定依赖更新节奏                  | `actionlint`（可选），推送后看 Actions          |
+| 改文档站的对外发布                                    | `.github/workflows/deploy-docs.yml`（GitHub Pages），站点根 `https://opq741.github.io/mod-agent/`      | 推送 `master` 后看 Pages 部署日志               |
+| 改 Issue / PR 模板                                    | `.github/ISSUE_TEMPLATE/*.yml`、`.github/pull_request_template.md`；表单字段变更影响 AI 生成信号采集   | GitHub Settings → Issues 预览                   |
+| 改贡献者指引 / 治理文件                               | `README.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`AGENTS.md`、`CHANGELOG.md`       | `npm run lint:md`                               |
+| 改主循环 / 循环边界行为（截断、取消、预算、审批）     | `src/runtime/loop.ts`；状态迁移在 `src/runtime/state-machine.ts`，驱动在 `driver.ts`                   | `npm run typecheck` → `npm run test`            |
+| 新增 / 修改内置工具                                   | `src/tools/builtin/*`；工具契约（`AgentTool` / `ToolExecutionContext`）在 `src/shared/contracts.ts`    | `npm run test`（`tests/tools.test.ts`）         |
+| 改权限、路径守卫、命令判定                            | `src/policy/engine.ts`、`pathguard.ts`、`command.ts`、`rules.ts`；含符号链接与穿越用例                 | `npm run test`（`tests/policy.test.ts`）        |
+| 改编辑引擎 / read-before-edit                         | `src/patch/edit.ts`（`EditEngine`）；已读表**按任务**装配，见 `src/runtime/runtime.ts` 的 `run()`      | `npm run test`（`tests/patch.test.ts`）         |
+| 改模型适配 / 网关重试与记账                           | `src/model/*`；统一契约在 `types.ts`，重试退避在 `gateway.ts`                                          | `npm run test`（`tests/model.test.ts`）         |
+| 改持久化 / 检查点 / 恢复                              | `src/store/sqlite.ts`、`memory.ts`、`src/store/types.ts`                                               | `npm run test`（`tests/sandbox-store.test.ts`） |
 
 原则：能一次改一处就一次改一处，不掺入与任务无关的重构或格式化。真要跨多文件才能改对，走 PR 模板，把改动动机与影响面写清楚。
 
@@ -90,16 +101,22 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 ## 6. 完成任何改动前
 
 - 文档改动：先跑 `npm run lint:links` 确认没断链，再跑 `npm run lint`。
-- 代码改动（未来）：先跑 `npm run typecheck` 与 `npm run lint`；新增行为应有对应测试。
+- 代码改动：先跑 `npm run typecheck` 与 `npm run test`，再跑 `npm run lint`；新增行为应有对应测试。
+- 修缺陷时优先补一条**断言用户可观察结果**的回归用例（存库状态、磁盘内容、事件流、模型收到什么），而不是断言内部实现 —— `tests/regression.test.ts` 就是按这个规矩积累起来的。
 - 检查 `git diff`，确认没有与任务无关的改动、没有覆盖用户已有修改。
 - 汇报实际跑了哪些校验、结果如何；没跑的不要声称跑过。
 - 无法验证的项，明确说明原因与剩余风险，不要留白。
 
-## 7. 何时启用代码阶段规则
+## 7. 代码阶段的硬约束
+
+这些约束已经生效（不是"将来启用"）：
 
 - 核心模块不得直接 import 具体模型 SDK，只能经统一的模型适配接口调用。
 - 所有外部工具入参必须校验、返回必须处理错误与超时；有副作用的操作走权限分级。
 - 高风险操作（写文件、执行 Shell、Git 推送）需要显式审批，不允许只靠 Prompt 约束模型。
+- 策略判定必须发生在 PreToolUse 钩子**之后**：钩子能改写入参，先判定后执行会让"批准 A、执行 B"。
+- 路径判定用 realpath，且目标不存在时也要解析最近存在的祖先 —— 否则符号链接父目录会变成写路径逃逸。
+- 能力声明必须与实现一致：`ModelCapabilities.streaming` 在真正实现 `stream()` 之前只能是 `false`。
 - 任务状态持久化、错误重试上限、变更范围与验收证据链，见 `docs/architecture.md` 与 `docs/security.md`。
 
 ## 8. 参考

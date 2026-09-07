@@ -7,7 +7,7 @@
  * - ACI 纪律：强制绝对路径、空输出固定文案、搜索默认只给文件+命中计数。
  */
 
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { z } from "zod"
 import path from "node:path"
 
@@ -581,7 +581,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       await ws.write("src/a.ts", "x")
       const tool = createListFilesTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: ["node_modules"],
       })
       expect(tool.inputSchema.safeParse({ path: "./src" }).success).toBe(false)
@@ -594,7 +593,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       await ws.write("src/b.log", "noise")
       const tool = createListFilesTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       const out = (await tool.execute(
@@ -611,7 +609,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       for (let i = 0; i < 20; i += 1) await ws.write(`src/f${i}.ts`, "x")
       const tool = createListFilesTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       const out = (await tool.execute(
@@ -629,19 +626,20 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
         "src/a.ts",
         Array.from({ length: 10 }, (_, i) => `line${i}`).join("\n"),
       )
-      const trackRead = vi.fn()
+      // 已读记录现在只走 ctx 的编辑会话（任务级），不再有 runtime 级回调
+      const engine = new EditEngine()
       const tool = createReadFileTool(
-        { pathGuard: makePathGuard(ws), trackRead, excludeDirs: [] },
+        { pathGuard: makePathGuard(ws), excludeDirs: [] },
         { maxBytes: 256 * 1024, maxOutputTokens: 25_000 },
       )
       const out = (await tool.execute(
         { path: file, offset: 2, limit: 3, allowLarge: false },
-        makeToolContext({ workspace: ws }),
+        makeToolContext({ workspace: ws, readTracker: engine }),
       )) as { content: string; startLine: number }
       expect(out.startLine).toBe(3)
       expect(out.content).toContain("line2")
       expect(out.content).not.toContain("line9")
-      expect(trackRead).toHaveBeenCalledTimes(1)
+      expect(engine.hasRead(file)).toBe(true)
     })
   })
 
@@ -649,7 +647,7 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
     await withWorkspace(async (ws) => {
       const file = await ws.write("big.txt", "x".repeat(2000))
       const tool = createReadFileTool(
-        { pathGuard: makePathGuard(ws), trackRead: () => undefined, excludeDirs: [] },
+        { pathGuard: makePathGuard(ws), excludeDirs: [] },
         { maxBytes: 100, maxOutputTokens: 1_000 },
       )
       await expect(
@@ -665,7 +663,7 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
     await withWorkspace(async (ws) => {
       const file = await ws.write("blob.bin", "\u0000\u0001\u0002\u0003binary\u0000\u0001")
       const tool = createReadFileTool(
-        { pathGuard: makePathGuard(ws), trackRead: () => undefined, excludeDirs: [] },
+        { pathGuard: makePathGuard(ws), excludeDirs: [] },
         { maxBytes: 10 * 1024, maxOutputTokens: 1_000 },
       )
       await expect(
@@ -683,7 +681,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       await ws.write("src/b.ts", "needle three\n")
       const tool = createSearchTextTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       const out = (await tool.execute(
@@ -708,7 +705,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       await ws.write("src/a.ts", "needle here\n")
       const tool = createSearchTextTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       const out = (await tool.execute(
@@ -730,7 +726,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       for (let i = 0; i < 60; i += 1) await ws.write(`src/f${i}.ts`, "needle\n")
       const tool = createSearchTextTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       const out = (await tool.execute(
@@ -754,7 +749,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       const runner = fakeCommandRunner({ stdout: " M src/a.ts\n", exitCode: 0 })
       const tool = createGitStatusTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       const out = await tool.execute(
@@ -772,7 +766,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
     await withWorkspace(async (ws) => {
       const tool = createGitStatusTool({
         pathGuard: makePathGuard(ws),
-        trackRead: () => undefined,
         excludeDirs: [],
       })
       expect(tool.inputSchema.safeParse({ path: "./" }).success).toBe(false)
@@ -785,7 +778,6 @@ describe("tools/builtin: repo 工具（ACI 纪律）", () => {
       try {
         const tool = createListFilesTool({
           pathGuard: makePathGuard(ws),
-          trackRead: () => undefined,
           excludeDirs: [],
         })
         await expect(
@@ -811,7 +803,7 @@ describe("tools/builtin: edit / write", () => {
         (await import("node:fs")).statSync(file).mtimeMs,
         "const value = 1\n",
       )
-      const tool = createEditFileTool({ pathGuard: makePathGuard(ws), editEngine })
+      const tool = createEditFileTool({ pathGuard: makePathGuard(ws) })
       const out = (await tool.execute(
         {
           path: file,
@@ -833,7 +825,7 @@ describe("tools/builtin: edit / write", () => {
     await withWorkspace(async (ws) => {
       const file = await ws.write("src/a.ts", "const value = 1\n")
       const editEngine = new EditEngine()
-      const tool = createEditFileTool({ pathGuard: makePathGuard(ws), editEngine })
+      const tool = createEditFileTool({ pathGuard: makePathGuard(ws) })
       const result = await runToolVia(
         tool,
         { path: file, oldString: "const value = 1", newString: "x", allowMultiple: false },
@@ -853,7 +845,7 @@ describe("tools/builtin: edit / write", () => {
         (await import("node:fs")).statSync(file).mtimeMs,
         "original\n",
       )
-      const tool = createWriteFileTool({ pathGuard: makePathGuard(ws), editEngine })
+      const tool = createWriteFileTool({ pathGuard: makePathGuard(ws) })
       await expect(
         tool.execute(
           { path: file, content: "new", overwrite: false, maxBytes: 64_000 },
@@ -865,8 +857,7 @@ describe("tools/builtin: edit / write", () => {
 
   it("write_file 新建文件无需先读", async () => {
     await withWorkspace(async (ws) => {
-      const editEngine = new EditEngine()
-      const tool = createWriteFileTool({ pathGuard: makePathGuard(ws), editEngine })
+      const tool = createWriteFileTool({ pathGuard: makePathGuard(ws) })
       const out = await tool.execute(
         {
           path: ws.abs("src/new.ts"),
@@ -890,7 +881,7 @@ describe("tools/builtin: edit / write", () => {
         (await import("node:fs")).statSync(file).mtimeMs,
         '{ "a": 1 }',
       )
-      const tool = createEditFileTool({ pathGuard: makePathGuard(ws), editEngine })
+      const tool = createEditFileTool({ pathGuard: makePathGuard(ws) })
       await expect(
         tool.execute(
           { path: file, oldString: '{ "a": 1 }', newString: '{ "a": 1, }', allowMultiple: false },
@@ -1109,7 +1100,7 @@ describe("tools: 路径与 ci 纪律收口", () => {
   it("内置工具的入参一律要求绝对路径", async () => {
     await withWorkspace(async (ws) => {
       const readInput = createReadFileTool(
-        { pathGuard: makePathGuard(ws), trackRead: () => undefined, excludeDirs: [] },
+        { pathGuard: makePathGuard(ws), excludeDirs: [] },
         { maxBytes: 1024, maxOutputTokens: 1024 },
       ).inputSchema
       expect(readInput.safeParse({ path: "relative/path.ts" }).success).toBe(false)

@@ -15,7 +15,6 @@ import { z } from "zod"
 import type { AgentTool, ToolExecutionContext } from "../../shared/contracts.js"
 import { AppError } from "../../shared/errors.js"
 import type { PathGuard } from "../../policy/pathguard.js"
-import type { EditEngine } from "../../patch/edit.js"
 import { validateStructuredFile } from "../../patch/edit.js"
 import { diffText } from "../../patch/diff.js"
 
@@ -28,7 +27,6 @@ const AbsolutePath = z
 
 export interface EditToolDeps {
   pathGuard: PathGuard
-  editEngine: EditEngine
   /** 记录本次改动，供最终 diff 与 file.changed 事件使用。 */
   onFileChanged?: (absolutePath: string, before: string, after: string) => void
 }
@@ -65,7 +63,7 @@ export function createEditFileTool(deps: EditToolDeps): AgentTool<EditFileInput>
         throw new AppError("TOOL_PERMISSION_DENIED", guard.reason ?? "Path requires approval")
       }
 
-      const outcome = await deps.editEngine.replace({
+      const outcome = await ctx.editEngine.replace({
         path: guard.path,
         oldString: input.oldString,
         newString: input.newString,
@@ -80,7 +78,7 @@ export function createEditFileTool(deps: EditToolDeps): AgentTool<EditFileInput>
 
       const before = await fs.readFile(outcome.path, "utf8").catch(() => "")
       await fs.writeFile(outcome.path, outcome.content, "utf8")
-      await deps.editEngine.recordWrite(outcome.path, outcome.content)
+      await ctx.editEngine.recordWrite(outcome.path, outcome.content)
       ctx.trackWrite(outcome.path)
       deps.onFileChanged?.(outcome.path, before, outcome.content)
 
@@ -160,12 +158,12 @@ export function createWriteFileTool(deps: EditToolDeps): AgentTool<WriteFileInpu
        * 且期间被别人改过"的文件变成静默发生的破坏 —— 而 overwrite:true 正是
        * 最容易被模型顺手用上的那条路径。
        */
-      const outcome = await deps.editEngine.writeWhole(guard.path, input.content, {
+      const outcome = await ctx.editEngine.writeWhole(guard.path, input.content, {
         maxBytes: input.maxBytes,
       })
       await fs.mkdir(path.dirname(guard.path), { recursive: true })
       await fs.writeFile(guard.path, outcome.content, "utf8")
-      await deps.editEngine.recordWrite(guard.path, outcome.content)
+      await ctx.editEngine.recordWrite(guard.path, outcome.content)
       ctx.trackWrite(guard.path)
       deps.onFileChanged?.(guard.path, before, input.content)
 

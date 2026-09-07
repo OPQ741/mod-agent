@@ -2,7 +2,7 @@
   "name": "mod-agent",
   "version": "0.0.0",
   "private": true,
-  "description": "TypeScript 实现的 AI Coding Agent CLI，形态对标 Claude Code。当前处于设计阶段，仓库主体是 VitePress 文档站。",
+  "description": "TypeScript 实现的 AI Coding Agent CLI，形态对标 Claude Code。",
   "type": "module",
   "license": "ISC",
   "author": {

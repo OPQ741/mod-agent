@@ -586,8 +586,14 @@ describe("model/gateway: 重试、退避、记账", () => {
     }
     const gateway = new ModelGateway({ provider, maxRetries: 3, sleep: async () => undefined })
     controller.abort()
+    /**
+     * 取消抛 `CANCELLED` 而不是 `MODEL_TIMEOUT`。
+     *
+     * 两者语义不同：超时是"这次没等到、可以重试"，取消是"用户要求停、不许再试"。
+     * 混用会让上层把一次用户取消记成一次可重试的网络故障。
+     */
     await expect(gateway.generate(baseRequest(), controller.signal)).rejects.toMatchObject({
-      code: "MODEL_TIMEOUT",
+      code: "CANCELLED",
     })
     expect(attempts).toBe(0)
   })

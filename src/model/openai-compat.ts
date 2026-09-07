@@ -35,7 +35,11 @@ export class OpenAICompatProvider implements ModelProvider {
   readonly id = "openai-compat"
   readonly capabilities: ModelCapabilities = {
     toolCalling: true,
-    streaming: true,
+    /**
+     * 当前走的是非流式请求（见本文件顶部的说明），统一接口也没有 `stream()`。
+     * 这里必须是 `false`：能力声明写成 `true`，上层就会以为有增量输出。
+     */
+    streaming: false,
     structuredOutput: true,
     vision: false,
   }

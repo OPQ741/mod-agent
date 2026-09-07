@@ -35,6 +35,13 @@ export const SettingsSchema = z.object({
   permissionMode: z
     .enum(["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"])
     .optional(),
+  /**
+   * 是否为任务开独立 worktree。
+   *
+   * **当前只是占位，没有任何消费方**：`--worktree` 与这项配置都不改变执行，
+   * 改动一律落在主检出。默认给 `false` 而不是 `true` —— 一个没人实现的开关
+   * 声称"默认开启"，比声称"默认关闭"更容易让人误判隔离状态。
+   */
   worktree: z.boolean().optional(),
   respectGitignore: z.boolean().optional(),
   permissions: z
@@ -115,7 +122,8 @@ export type SettingsInput = z.input<typeof SettingsSchema>
 export const DEFAULT_SETTINGS: Settings = {
   mode: "plan",
   permissionMode: "default",
-  worktree: true,
+  // 未实现的开关不声称"默认开启"（见 SettingsSchema 里 worktree 的说明）
+  worktree: false,
   respectGitignore: true,
   permissions: { allow: [], ask: [], deny: [] },
   budget: {},

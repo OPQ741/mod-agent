@@ -35,7 +35,12 @@ export class AnthropicProvider implements ModelProvider {
   readonly id = "anthropic"
   readonly capabilities: ModelCapabilities = {
     toolCalling: true,
-    streaming: true,
+    /**
+     * 实现上只有非流式 `generate()`，统一接口里也没有 `stream()`。
+     * 声明 `true` 会让上层据此以为能收到增量 token，实际只会等整段响应 ——
+     * 能力声明必须与实现一致，实现流式之后再改回 `true`。
+     */
+    streaming: false,
     structuredOutput: true,
     vision: true,
   }

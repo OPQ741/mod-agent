@@ -10,4 +10,4 @@
 
 ## 当前状态
 
-尚未发布任何版本。项目处于设计阶段，仓库主体是 VitePress 文档站，尚无 CLI 运行时，因此 `package.json` 与 `.release-please-manifest.json` 的版本基线定为 `0.0.0`：第一条带 `feat` 的提交合入后，release-please 会开出 `v0.1.0` 的 release PR。
+尚未发布任何版本。项目已进入代码阶段（`src/` 下有可运行的 Agent Runtime，`npm test` 可在离线环境跑全量用例），但还没有对外发布，因此 `package.json` 与 `.release-please-manifest.json` 的版本基线定为 `0.0.0`：第一条带 `feat` 的提交合入后，release-please 会开出 `v0.1.0` 的 release PR。

@@ -29,8 +29,6 @@ const AbsolutePath = z
 
 export interface RepoToolContext {
   pathGuard: PathGuard
-  /** 本会话已读表（read-before-edit 的依据）。 */
-  trackRead: (p: string, mtimeMs: number, content: string) => void
   /** 排除目录。 */
   excludeDirs: readonly string[]
 }
@@ -193,9 +191,13 @@ export function createReadFileTool(
       }
 
       const content = raw.toString("utf8")
-      // 记录已读 —— 这是 read-before-edit 与 mtime 防护的数据来源
-      deps.trackRead(resolved, stat.mtimeMs, content)
-      ctx.trackRead(resolved, stat.mtimeMs)
+      /**
+       * 只记到 `ctx`：它是**当前任务**的编辑会话。
+       *
+       * 这里曾经还写一份 runtime 级的已读表，于是已读记录跨任务共享 ——
+       * 任务 B 没读过的文件，只要任务 A 读过就能直接改。
+       */
+      ctx.trackRead(resolved, stat.mtimeMs, content)
 
       const lines = content.split("\n")
       const window = clipLines(lines, input.offset, input.limit)

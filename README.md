@@ -11,7 +11,26 @@
 
 一个用 **TypeScript + Node.js** 从零实现的 AI Coding Agent CLI，形态类似 Claude Code：读入自然语言编程需求，自主完成「读代码 → 改文件 → 跑测试 → 迭代修复」的闭环，最终产出人可审查的 diff。
 
-项目当前处于 **设计阶段**，仓库主体是 VitePress 文档站（`docs/`），在线文档见 <https://opq741.github.io/mod-agent/>，仓库内入口见 [docs/index.md](./docs/index.md)。
+项目当前处于 **代码阶段**：`src/` 下已经是一个可运行的 Agent Runtime（主循环、工具执行、权限策略、SQLite 持久化、沙箱），VitePress 文档站（`docs/`）与实现并行维护 —— 文档描述目标架构，代码是它的落地。在线文档见 <https://opq741.github.io/mod-agent/>，仓库内入口见 [docs/index.md](./docs/index.md)。
+
+## 从源码运行
+
+```bash
+npm install
+npm run build                    # tsc -p tsconfig.build.json → dist/
+node dist/cli/main.js --version  # 冒烟：入口可启动
+node dist/cli/main.js doctor     # 只读自检：配置 / 存储 / 沙箱 / 工具 / 凭证
+```
+
+不接真实模型也能跑：`--script <file>` 按文件里的决策序列离线回放，测试全部依赖这条通道，所以 `npm test` 不需要网络与 API Key。
+
+```bash
+npm test          # vitest run，440+ 条用例，离线
+npm run typecheck # tsc --noEmit（strict）
+npm run build     # 编译到 dist/
+```
+
+`package.json` 目前是 `private: true`（尚未作为 npm 包发布）；`bin` 已声明 `mod` / `mod-agent` 两个入口，指向同一个 `dist/cli/main.js`。本地试用可先 `npm link` 再敲 `mod`。
 
 ## 环境要求
 
@@ -91,16 +110,16 @@ fix(tools): 修复并行工具执行的结果顺序错乱
 
 GitHub Actions 在推送和 PR 时自动运行：
 
-| Workflow                | 作用                                                          |
-| ----------------------- | ------------------------------------------------------------- |
-| `ci.yml`                | ESLint / markdownlint / 链接 / AGENTS / Prettier / typecheck  |
-| `deploy-docs.yml`       | `master` 分支 push 时构建并发布 VitePress 站点到 GitHub Pages |
-| `codeql.yml`            | JS/TS 静态安全分析（security-extended）                       |
-| `scorecard.yml`         | OpenSSF Scorecard 周扫描 + 每次主干 push                      |
-| `dependency-review.yml` | PR 里拦截含已知 CVE 的新依赖、非白名单许可证                  |
-| `secret-scan.yml`       | gitleaks 扫 commit 历史与 diff                                |
-| `stale.yml`             | 60/45 天无活动的 Issue / PR 自动 stale，再 14 天关闭          |
-| `release-please.yml`    | 合入 `master` 的 Conventional Commits 累积成 release PR       |
+| Workflow                | 作用                                                                                                                   |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml`                | lint / typecheck / markdown / 链接 / AGENTS / Prettier / **test（Linux + Windows）** / **build + CLI 冒烟** / 文档构建 |
+| `deploy-docs.yml`       | `master` 分支 push 时构建并发布 VitePress 站点到 GitHub Pages                                                          |
+| `codeql.yml`            | JS/TS 静态安全分析（security-extended）                                                                                |
+| `scorecard.yml`         | OpenSSF Scorecard 周扫描 + 每次主干 push                                                                               |
+| `dependency-review.yml` | PR 里拦截含已知 CVE 的新依赖、非白名单许可证                                                                           |
+| `secret-scan.yml`       | gitleaks 扫 commit 历史与 diff                                                                                         |
+| `stale.yml`             | 60/45 天无活动的 Issue / PR 自动 stale，再 14 天关闭                                                                   |
+| `release-please.yml`    | 合入 `master` 的 Conventional Commits 累积成 release PR                                                                |
 
 ## 分支与合并策略
 

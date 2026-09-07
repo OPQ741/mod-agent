@@ -92,7 +92,7 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
     .option("-C, --cwd <dir>", "工作区目录")
     .option("--resume <id>", "从检查点恢复指定任务")
     .option("--continue", "接着本工作区最近一个任务跑")
-    .option("--worktree / --no-worktree", "是否为任务开独立 worktree")
+    .option("--worktree / --no-worktree", "（暂未实现）独立 worktree；当前改动仍落在主检出")
     .option("--no-validation", "交付前不跑验证命令")
     .option("--max-rounds <n>", "覆盖预算：最大轮次")
     .option("--max-cost <usd>", "覆盖预算：最大花费")
@@ -100,6 +100,17 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
     .exitOverride()
     .configureOutput({ writeOut: (text) => io.out(text), writeErr: (text) => io.err(text) })
     .action(async (promptArgs: string[], options: GlobalOptions) => {
+      /**
+       * 显式传入 `--worktree` / `--no-worktree` 时要**说出来**它没实现。
+       *
+       * 参数保留是为了不打断已有的脚本与肌肉记忆，但"接受一个参数然后忽略它"
+       * 是最糟的一种兼容：用户以为开了隔离，实际所有改动都写进主检出 ——
+       * 这正是后期最难查的一类事故。用 `getOptionValueSource` 区分
+       * "用户显式要求"与"默认值"，只在前者提示，不污染正常输出。
+       */
+      if (program.getOptionValueSource("worktree") === "cli") {
+        io.err("[提示] --worktree 尚未实现：本次不会创建独立 worktree，所有改动都落在主检出。\n")
+      }
       exitCode = await executeMain({
         promptArgs,
         options,

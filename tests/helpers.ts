@@ -212,7 +212,7 @@ export function makeToolContext(options: {
     budgetTokens: 25_000,
     runCommand: options.runCommand ?? fakeCommandRunner({ stdout: "ok", exitCode: 0 }),
     logger: noopLogger(),
-    trackRead: (p, mtimeMs) => tracker.recordRead(p, mtimeMs, ""),
+    trackRead: (p, mtimeMs, content) => tracker.recordRead(p, mtimeMs, content),
     readState: (p) => {
       const record = tracker.readRecord(p)
       if (!record) return undefined
@@ -225,6 +225,8 @@ export function makeToolContext(options: {
       uri: `mod://artifact/${kind}/${content.length}`,
       sha256: "test",
     }),
+    // 与生产装配一致：编辑会话随 ctx 下发，工具不再各自持有引擎
+    editEngine: tracker,
   }
 }
 

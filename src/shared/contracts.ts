@@ -186,14 +186,74 @@ export interface ToolExecutionContext {
   /** 执行有副作用的命令的命令运行器（sandbox 注入）。 */
   runCommand: (req: CommandRequestInput) => Promise<CommandResult>
   logger: ToolLogger
-  /** 记录本次调用读取了哪些文件（read-before-edit 的依据）。 */
-  trackRead: (path: string, mtimeMs: number) => void
+  /**
+   * 记录本次调用读取了哪个文件（read-before-edit 的依据）。
+   *
+   * 第三个参数 `content` 不能省：已读表里还要存读取时的内容 hash，
+   * 供补丁基准校验用。少了它，记录只能记下 mtime。
+   */
+  trackRead: (path: string, mtimeMs: number, content: string) => void
   /** 查询某文件是否已读、读取时的 mtime。 */
   readState: (path: string) => { read: boolean; mtimeMs?: number } | undefined
   /** 记录文件被本 Agent 修改，刷新 mtime 记录。 */
   trackWrite: (path: string) => void
   /** 大结果落盘（返回可回取的 URI）。 */
   persistArtifact: (content: string, kind: string) => Promise<{ uri: string; sha256: string }>
+  /**
+   * **当前任务**的编辑会话（read-before-edit 的唯一来源）。
+   *
+   * 必须是任务级的，不能是 runtime 级的：同一个 REPL 里连续跑两个任务时，
+   * 任务 A 读过 `src/a.ts`、任务 B 没读就直接改 —— 若共用一张已读表，
+   * 任务 B 会被误判为"已经读过"，read-before-edit 在第二个任务上直接失效。
+   */
+  editEngine: EditSession
+}
+
+/** 已读表的只读视图。 */
+export interface ReadRecordView {
+  mtimeMs: number
+  hash: string
+  readAt: number
+}
+
+export interface ReplaceEditRequest {
+  path: string
+  oldString: string
+  newString: string
+  allowMultiple?: boolean
+  expectedMatches?: number
+}
+
+export interface EditOutcomeView {
+  path: string
+  /** 应用后的完整内容。 */
+  content: string
+  baseHash: string
+  newHash: string
+  matches: number
+  additions: number
+  deletions: number
+}
+
+/**
+ * 编辑会话接口。
+ *
+ * 定义在 shared 而不是 patch，是因为**工具层**要拿它（`ToolExecutionContext`），
+ * 而 shared 不能反向依赖 patch。实现类在 `patch/edit.ts`，用 `implements`
+ * 强制两边签名同步，避免契约与实现各写一份形状。
+ */
+export interface EditSession {
+  recordRead(absolutePath: string, mtimeMs: number, content: string): void
+  recordWrite(absolutePath: string, content: string): Promise<void>
+  readRecord(absolutePath: string): ReadRecordView | undefined
+  hasRead(absolutePath: string): boolean
+  readonly trackedFiles: string[]
+  replace(input: ReplaceEditRequest): Promise<EditOutcomeView>
+  writeWhole(
+    absolutePath: string,
+    content: string,
+    options?: { maxBytes?: number },
+  ): Promise<EditOutcomeView>
 }
 
 export interface ToolLogger {

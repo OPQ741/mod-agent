@@ -21,6 +21,7 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { AppError } from "../shared/errors.js"
 import { contentHash } from "../shared/hash.js"
+import type { EditSession } from "../shared/contracts.js"
 
 export interface ReadRecord {
   mtimeMs: number
@@ -142,7 +143,14 @@ export function replaceAtPositions(
   return out
 }
 
-export class EditEngine {
+/**
+ * 编辑引擎：**一个任务一套**。
+ *
+ * 已读表（`readTable`）是 read-before-edit 的唯一依据。它必须是任务级状态：
+ * runtime 级共享一份时，任务 A 读过的文件会让任务 B 的"未读即改"通过校验，
+ * 护栏在第二个任务上静默失效。装配处见 `AgentRuntime.run()`。
+ */
+export class EditEngine implements EditSession {
   /** key 为 realpath 后的绝对路径。 */
   private readonly readTable = new Map<string, ReadRecord>()
 

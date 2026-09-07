@@ -105,7 +105,6 @@ export class AgentRuntime {
   readonly store: Store
   readonly registry: ToolRegistry
   readonly pathGuard: PathGuard
-  readonly editEngine: EditEngine
   readonly executor: ToolExecutor
   readonly policy: PolicyEngine
   readonly gateway: ModelGateway
@@ -149,7 +148,13 @@ export class AgentRuntime {
       workspaceRoot: this.workspaceRoot,
       respectGitignore: this.settings.respectGitignore,
     })
-    this.editEngine = new EditEngine()
+    /**
+     * 这里**不再**建一个 runtime 级的 EditEngine。
+     *
+     * 已读表是 read-before-edit 的唯一依据，必须是任务级状态（见 `run()`）。
+     * 曾经这里有 `this.editEngine = new EditEngine()`，整个 REPL 共用一张表：
+     * 任务 A 读过 `src/a.ts` 之后，任务 B 不读直接改也会通过校验。
+     */
 
     this.policy = new PolicyEngine({
       settings: this.settings,
@@ -210,9 +215,6 @@ export class AgentRuntime {
   private registerBuiltinTools(): void {
     const repoCtx = {
       pathGuard: this.pathGuard,
-      trackRead: (p: string, mtimeMs: number, content: string) => {
-        this.editEngine.recordRead(p, mtimeMs, content)
-      },
       excludeDirs: this.settings.excludeDirs,
     }
 
@@ -227,9 +229,13 @@ export class AgentRuntime {
     this.registry.register(createGitStatusTool(repoCtx))
     this.registry.register(createReadDiffTool(repoCtx))
 
+    /**
+     * 编辑工具不再持有引擎：它从 `ctx.editEngine` 取**当前任务**的会话。
+     * 工具是在 runtime 构造期注册的、任务是在运行期创建的，若在这里绑定一个
+     * 引擎实例，就等于把"一个任务一套已读表"变成"一个 runtime 一套"。
+     */
     const editDeps = {
       pathGuard: this.pathGuard,
-      editEngine: this.editEngine,
     }
     this.registry.register(createEditFileTool(editDeps))
     this.registry.register(createWriteFileTool(editDeps))
@@ -354,6 +360,15 @@ export class AgentRuntime {
 
     const validationChecks = options.validationChecks ?? (await this.autoDiscoverChecks())
 
+    /**
+     * **每个任务一套编辑会话。**
+     *
+     * 已读表、mtime 记录都挂在这里，任务结束即弃。同一 Runtime 连续跑多个任务时，
+     * 后一个任务不会继承前一个任务的"已读"状态 —— read-before-edit 才是真的
+     * 按任务生效，而不是按进程生效。
+     */
+    const editEngine = new EditEngine()
+
     const deps: LoopDeps = {
       store: this.store,
       registry: this.registry,
@@ -361,7 +376,7 @@ export class AgentRuntime {
       gateway: this.gateway,
       policy: this.policy,
       pathGuard: this.pathGuard,
-      editEngine: this.editEngine,
+      editEngine,
       settings: this.settings,
       logger: this.logger,
       metrics: this.metrics,
@@ -384,7 +399,7 @@ export class AgentRuntime {
           // 所以这里不能再加一遍 `state.usage.rounds`：那会把剩余轮次算少一半，
           // 恢复续跑时表现为"模型突然觉得只剩几轮了"，开始草率收尾。
           roundsLeft: Math.max(0, state.budget.maxRounds - round),
-          changedFiles: this.editEngine.trackedFiles,
+          changedFiles: editEngine.trackedFiles,
           now: this.now().toISOString(),
         }),
       ...(options.signal ? { signal: options.signal } : {}),

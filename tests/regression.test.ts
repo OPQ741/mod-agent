@@ -8,7 +8,9 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest"
-import { statSync } from "node:fs"
+import { promises as fs, statSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { z } from "zod"
 
 import {
@@ -28,6 +30,7 @@ import {
   type TempWorkspace,
 } from "./helpers.js"
 import { final, parallelToolUse, toolUse } from "../src/model/scripted.js"
+import { ModelGateway } from "../src/model/gateway.js"
 import { AgentRuntime } from "../src/runtime/runtime.js"
 import { ToolExecutor } from "../src/tools/executor.js"
 import { ToolRegistry } from "../src/tools/registry.js"
@@ -203,7 +206,7 @@ describe("回归 · write_file 覆写护栏", () => {
   it("overwrite:true 覆写没读过的文件必须被拒绝（不能绕过 read-before-edit）", async () => {
     const ws = await workspace({ "src/a.ts": "original\n" })
     const file = ws.abs("src/a.ts")
-    const tool = createWriteFileTool({ pathGuard: makePathGuard(ws), editEngine: new EditEngine() })
+    const tool = createWriteFileTool({ pathGuard: makePathGuard(ws) })
 
     await expect(
       tool.execute(
@@ -221,11 +224,11 @@ describe("回归 · write_file 覆写护栏", () => {
     const file = ws.abs("src/a.ts")
     const engine = new EditEngine()
     engine.recordRead(file, statSync(file).mtimeMs, "original\n")
-    const tool = createWriteFileTool({ pathGuard: makePathGuard(ws), editEngine: engine })
+    const tool = createWriteFileTool({ pathGuard: makePathGuard(ws) })
 
     await tool.execute(
       { path: file, content: "replaced\n", overwrite: true, maxBytes: 64_000 },
-      makeToolContext({ workspace: ws }),
+      makeToolContext({ workspace: ws, readTracker: engine }),
     )
     expect(await ws.read("src/a.ts")).toBe("replaced\n")
   })
@@ -683,5 +686,223 @@ describe("回归 · retry.api 进入事件流", () => {
     const retries = events.filter((event) => event.type === "retry.api")
     expect(retries).toHaveLength(1)
     expect(retries[0]?.payload).toMatchObject({ attempt: 1, error: "MODEL_RATE_LIMIT" })
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑮ 符号链接父目录：目标不存在也不能逃出工作区
+ * ------------------------------------------------------------------ */
+
+describe("回归 · 写路径不能借符号链接父目录逃逸", () => {
+  it("目标不存在且父目录指向工作区外 → 拒绝，且工作区外没有产生文件", async (context) => {
+    const ws = await workspace()
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mod-outside-")))
+    const link = path.join(ws.root, "link")
+    try {
+      await fs.symlink(outside, link, process.platform === "win32" ? "junction" : "dir")
+    } catch {
+      // Windows 未开启开发者模式 / 非管理员时建不了链接：明确跳过，不假装通过
+      await fs.rm(outside, { recursive: true, force: true })
+      context.skip()
+      return
+    }
+
+    try {
+      const guard = makePathGuard(ws)
+      await expect(guard.assertWritable(path.join(link, "escaped.txt"))).rejects.toMatchObject({
+        code: "PATH_POLICY_VIOLATION",
+      })
+      const leaked = await fs
+        .access(path.join(outside, "escaped.txt"))
+        .then(() => true)
+        .catch(() => false)
+      expect(leaked).toBe(false)
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it("端到端：write_file 写这种路径时工具失败，磁盘上什么也没发生", async (context) => {
+    const ws = await workspace()
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mod-outside-")))
+    const link = path.join(ws.root, "link")
+    try {
+      await fs.symlink(outside, link, process.platform === "win32" ? "junction" : "dir")
+    } catch {
+      await fs.rm(outside, { recursive: true, force: true })
+      context.skip()
+      return
+    }
+
+    try {
+      const runtime = await createTestRuntime({
+        workspace: ws,
+        settings: settingsWith({ mode: "edit", permissionMode: "acceptEdits" }),
+        script: [
+          toolUse("repo.write_file", {
+            path: path.join(link, "escaped.txt"),
+            content: "pwned",
+            overwrite: true,
+          }),
+          final("done"),
+        ],
+      })
+      const taskId = await runtime.createTask({ title: "t", userRequest: "write", mode: "edit" })
+      const { events } = await collect(runtime.run(taskId))
+      const completed = events.find((event) => event.type === "tool.completed")
+      expect((completed?.payload as { status: string } | undefined)?.status).toBe("failed")
+      expect(
+        await fs
+          .access(path.join(outside, "escaped.txt"))
+          .then(() => true)
+          .catch(() => false),
+      ).toBe(false)
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑯ 输出被 max_tokens 截断：不许当成交付
+ * ------------------------------------------------------------------ */
+
+describe("回归 · max_tokens 截断不能判成功", () => {
+  it("截断后不产生 completed，而是发 warning 并续写", async () => {
+    const ws = await workspace()
+    const runtime = await createTestRuntime({
+      workspace: ws,
+      settings: settingsWith({ mode: "edit" }),
+      script: [
+        { type: "raw", text: "我已经完成了前两项，第三项", stopReason: "max_tokens" },
+        final("三项都完成了"),
+      ],
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "do", mode: "edit" })
+    const { events, outcome } = await collect(runtime.run(taskId))
+
+    expect(reasons(events)).toContain("output_truncated")
+    // 续写之后模型给了正常收尾，才算完成 —— 但"截断那一轮"本身不能是完成
+    expect(outcome.status).toBe("completed")
+    const truncatedWarningIndex = events.findIndex(
+      (event) =>
+        event.type === "task.warning" &&
+        (event.payload as { reason?: string }).reason === "output_truncated",
+    )
+    const completedIndex = events.findIndex((event) => event.type === "task.completed")
+    expect(truncatedWarningIndex).toBeGreaterThanOrEqual(0)
+    expect(completedIndex).toBeGreaterThan(truncatedWarningIndex)
+  })
+
+  it("连续截断超过上限 → 任务失败，不静默交付半成品", async () => {
+    const ws = await workspace()
+    const runtime = await createTestRuntime({
+      workspace: ws,
+      settings: settingsWith({ mode: "edit" }),
+      script: [
+        { type: "raw", text: "第一段", stopReason: "max_tokens" },
+        { type: "raw", text: "第二段", stopReason: "max_tokens" },
+        { type: "raw", text: "第三段", stopReason: "max_tokens" },
+        { type: "raw", text: "第四段", stopReason: "max_tokens" },
+      ],
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "do", mode: "edit" })
+    const { events, outcome } = await collect(runtime.run(taskId))
+
+    expect(outcome.status).toBe("failed")
+    expect(events.some((event) => event.type === "task.completed")).toBe(false)
+  })
+
+  it("stop_reason = error 时直接失败，不把错误响应当决策", async () => {
+    const ws = await workspace()
+    const runtime = await createTestRuntime({
+      workspace: ws,
+      settings: settingsWith({ mode: "edit" }),
+      script: [{ type: "raw", text: "", stopReason: "error" }, final("unreachable")],
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "do", mode: "edit" })
+    const { outcome } = await collect(runtime.run(taskId))
+    expect(outcome.status).toBe("failed")
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑰ 已读表必须是任务级：任务 A 读过不等于任务 B 读过
+ * ------------------------------------------------------------------ */
+
+describe("回归 · 编辑会话按任务隔离", () => {
+  it("任务 A 读过文件后，任务 B 未读即改仍然被 read-before-edit 挡下", async () => {
+    const ws = await workspace({ "src/a.ts": "const a = 1\n" })
+    const runtime = await createTestRuntime({
+      workspace: ws,
+      settings: settingsWith({ mode: "edit", permissionMode: "acceptEdits" }),
+      script: [
+        // 任务 A：只读，不改
+        toolUse("repo.read_file", { path: ws.abs("src/a.ts") }),
+        final("A done"),
+        // 任务 B：不读直接改
+        toolUse("repo.edit_file", {
+          path: ws.abs("src/a.ts"),
+          oldString: "const a = 1",
+          newString: "const a = 2",
+        }),
+        final("B done"),
+      ],
+    })
+
+    const taskA = await runtime.createTask({ title: "A", userRequest: "read it", mode: "edit" })
+    await collect(runtime.run(taskA))
+
+    const taskB = await runtime.createTask({ title: "B", userRequest: "edit it", mode: "edit" })
+    const { events } = await collect(runtime.run(taskB))
+
+    const edit = events.find(
+      (event) =>
+        event.type === "tool.completed" &&
+        (event.payload as { tool: string }).tool === "repo.edit_file",
+    )
+    expect((edit?.payload as { status: string } | undefined)?.status).toBe("failed")
+    // 拒绝必须真的没写：文件保持原样
+    expect(await ws.read("src/a.ts")).toBe("const a = 1\n")
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑱ 退避等待必须可以被打断
+ * ------------------------------------------------------------------ */
+
+describe("回归 · 退避期间取消要立刻返回", () => {
+  it("abort 发生在退避等待中时，不等满退避就抛 CANCELLED", async () => {
+    let attempts = 0
+    const provider = {
+      id: "rate-limited",
+      capabilities: {
+        toolCalling: true,
+        streaming: false,
+        structuredOutput: true,
+        vision: false,
+      },
+      async generate() {
+        attempts += 1
+        throw new AppError("MODEL_RATE_LIMIT", "HTTP 429 slow down")
+      },
+    }
+    // 不注入 sleep：这里要验证的就是**真实**等待能否被打断
+    const gateway = new ModelGateway({
+      provider: provider as never,
+      baseBackoffMs: 20_000,
+      maxBackoffMs: 20_000,
+      maxRetries: 3,
+      random: () => 0,
+    })
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 100)
+
+    const started = Date.now()
+    await expect(
+      gateway.generate({ model: "m", messages: [], tools: [] }, controller.signal),
+    ).rejects.toMatchObject({ code: "CANCELLED" })
+    expect(Date.now() - started).toBeLessThan(3_000)
+    expect(attempts).toBe(1)
   })
 })

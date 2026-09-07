@@ -32,8 +32,8 @@ export interface GatewayOptions {
   baseBackoffMs?: number
   /** 注入随机源，便于测试确定性退避。默认 Math.random。 */
   random?: () => number
-  /** 注入 sleep，便于测试不真的等待。 */
-  sleep?: (ms: number) => Promise<void>
+  /** 注入 sleep，便于测试不真的等待。第二个参数用于让等待可被打断。 */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
   /** 每次退避重试都发一条 retry.api 事件（data-and-events.md §1.3 ②）。 */
   onRetry?: (event: RetryEvent) => void
   now?: () => number
@@ -66,7 +66,7 @@ export class ModelGateway {
   private readonly maxBackoffMs: number
   private readonly baseBackoffMs: number
   private readonly random: () => number
-  private readonly sleepFn: (ms: number) => Promise<void>
+  private readonly sleepFn: (ms: number, signal?: AbortSignal) => Promise<void>
   private readonly onRetry?: (event: RetryEvent) => void
   private readonly now: () => number
   private totals: UsageTotals = { ...EMPTY_USAGE }
@@ -119,7 +119,7 @@ export class ModelGateway {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       if (signal?.aborted) {
-        throw new AppError("MODEL_TIMEOUT", "Model request aborted before sending")
+        throw abortError("Model request aborted before sending")
       }
 
       try {
@@ -154,7 +154,15 @@ export class ModelGateway {
         }
         this.onRetry?.(retryEvent)
         options?.onRetry?.(retryEvent)
-        await this.sleepFn(wait)
+        /**
+         * 退避等待必须**可被打断**。
+         *
+         * 之前这里是 `await this.sleepFn(wait)`：用户按下停止后，循环要等满
+         * 整个退避（上限 30s）才轮到下一次检查取消信号 —— 实测 abort 在 150ms
+         * 触发，`generate()` 依然在 20s 后才返回。取消是用户能感知的操作，
+         * 不能让它排队等一个纯粹为了省流量的定时器。
+         */
+        await this.sleepFn(wait, signal)
         delayMs = Math.min(delayMs * 2, this.maxBackoffMs)
       }
     }
@@ -206,8 +214,24 @@ function readRetryAfterMs(err: AppError): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError("Retry backoff aborted"))
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(abortError("Retry backoff aborted"))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+/** 取消是**用户意图**，不与其他可重试错误混用一个码。`CANCELLED` 不在 RETRYABLE 里。 */
+function abortError(message: string): AppError {
+  return new AppError("CANCELLED", message)
 }
 
 /** 指数退避计算（导出以便单测，不依赖 sleep）。 */

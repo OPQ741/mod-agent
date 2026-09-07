@@ -120,6 +120,18 @@ describe("CLI · 元命令", () => {
     expect(result.stdout).toContain("--output-format")
     expect(result.stdout).toContain("doctor")
     expect(result.stdout).toContain("config")
+    // 未实现的开关必须在 --help 里就写清楚，不能只写"是否开独立 worktree"
+    expect(result.stdout).toContain("暂未实现")
+  })
+
+  it("显式 --worktree 会提示尚未实现，但任务照常跑完", async () => {
+    const { cwd, homeDir } = await setup()
+    const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
+    const result = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
+    expect(result.code).toBe(EXIT_OK)
+    // 提示走 stderr：stdout 必须保持机器可读
+    expect(result.stderr).toContain("尚未实现")
+    expect(result.stdout).not.toContain("尚未实现")
   })
 
   it("--version 输出 package.json 里的版本", async () => {

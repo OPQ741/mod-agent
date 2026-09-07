@@ -22,6 +22,7 @@ import {
   type ModelRequest,
   type ModelResponse,
   type ModelUsage,
+  type StopReason,
 } from "./types.js"
 
 /**
@@ -39,10 +40,30 @@ export interface ParallelToolUseStep {
   }>
 }
 
+/**
+ * 直接给定停止原因的响应步。
+ *
+ * `Decision` 只能表达"tool_use / final / ask"三种**语义**结果，而
+ * `max_tokens` / `error` / `unknown` 是**传输层**的结束原因 —— 用脚本重放
+ * 才能让主循环里"截断不许当交付"这类分支在离线测试里真的走到。
+ */
+export interface RawResponseStep {
+  type: "raw"
+  text?: string
+  toolCalls?: ReadonlyArray<{
+    toolName: string
+    args: Record<string, unknown>
+    callId?: string
+  }>
+  stopReason: StopReason
+  decisionHint?: "ask"
+}
+
 export type ScriptStep =
   | Decision
   | ParallelToolUseStep
-  | ((request: ModelRequest, stepIndex: number) => Decision | ParallelToolUseStep)
+  | RawResponseStep
+  | ((request: ModelRequest, stepIndex: number) => Decision | ParallelToolUseStep | RawResponseStep)
 
 export interface ScriptedProviderOptions {
   /** 每步产生的"输出 token 数"，用于让预算测试可复现。 */
@@ -111,7 +132,10 @@ export class ScriptedProvider implements ModelProvider {
     return this.render(decision, input)
   }
 
-  private render(decision: Decision | ParallelToolUseStep, input: ModelRequest): ModelResponse {
+  private render(
+    decision: Decision | ParallelToolUseStep | RawResponseStep,
+    input: ModelRequest,
+  ): ModelResponse {
     const promptTokens = input.messages.reduce(
       (sum, m) => sum + estimateTokens(messageToText(m)),
       0,
@@ -120,6 +144,22 @@ export class ScriptedProvider implements ModelProvider {
       inputTokens: promptTokens,
       outputTokens: this.tokensPerStep,
       totalTokens: promptTokens + this.tokensPerStep,
+    }
+
+    if (decision.type === "raw") {
+      return {
+        text: decision.text ?? "",
+        toolCalls: (decision.toolCalls ?? []).map((call) => ({
+          id: call.callId || newCallId(),
+          name: call.toolName,
+          args: call.args,
+        })),
+        stopReason: decision.stopReason,
+        usage,
+        model: this.modelName,
+        costUsd: estimateCost(usage, DEFAULT_PRICING),
+        ...(decision.decisionHint ? { decisionHint: decision.decisionHint } : {}),
+      }
     }
 
     if (decision.type === "parallel_tool_use") {

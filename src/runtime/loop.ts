@@ -142,6 +142,16 @@ interface PreparedCall {
   argsParseError?: string
 }
 
+/** 单轮输出被截断时最多续写几次（超过就是"写不完"，要交给人）。 */
+const MAX_TRUNCATION_RECOVERIES = 3
+
+/** 截断续写指令：明确说"接着写"，避免模型重新生成整段。 */
+const OUTPUT_TRUNCATED_CONTINUE =
+  "[output-truncated] Your previous message was cut off by the output token limit " +
+  "(stop_reason: max_tokens). Continue from exactly where it stopped — do not restart " +
+  "the whole answer and do not summarize what you already wrote. " +
+  "If the remaining work does not fit in one response, reply with a tool call that splits it."
+
 /* ------------------------------------------------------------------ *
  * 事件输出
  * ------------------------------------------------------------------ */
@@ -223,6 +233,14 @@ export async function* runTask(
    * `maxRounds` 是最基本的成本护栏，可被反复 resume 无限绕过。
    */
   let turns = state.usage.rounds
+  /**
+   * 输出截断的续写次数。
+   *
+   * 续写是恢复手段，不是无限续杯：真出现"每轮都被截断"时，说明单轮产出
+   * 已经系统性超过上限（模型在写大段内容），继续续写只会烧钱不推进，
+   * 必须停下来让人处理。
+   */
+  let truncationRecoveries = 0
   const messages: ModelMessage[] = isFreshTask
     ? await seedMessages(deps, options, state.userRequest)
     : [...state.messages]
@@ -453,6 +471,24 @@ export async function* runTask(
       for (const retry of retryBuffer.splice(0, retryBuffer.length)) {
         yield await sink.emit("retry.api", { ...retry })
       }
+      /**
+       * 取消必须落到 `cancelled`，不是 `failed`。
+       *
+       * 请求在飞或退避等待中被中断时，网关抛的是 `CANCELLED`；若不在这里分流，
+       * 用户按了一次停止就会得到一个"任务失败"的终态 —— 而失败会进失败统计、
+       * 让 `--continue` 把它当成需要修的错误。
+       */
+      if (options.signal?.aborted) {
+        yield await sink.emit("task.warning", {
+          reason: "cancelled",
+          message: "Cancelled while waiting for the model",
+        })
+        const toCancelling = await moveTo("cancelling")
+        if (toCancelling) yield toCancelling
+        const settled = await finish("cancelled", "cancelled", "Cancelled by user or caller")
+        if (settled.event) yield settled.event
+        return settled.outcome
+      }
       const appError = toAppError(err, "MODEL_INVALID_OUTPUT")
       deps.metrics.increment("model.error")
       yield await sink.emit("task.failed", { code: appError.code, message: appError.message })
@@ -503,6 +539,61 @@ export async function* runTask(
     }
 
     let decided: Decision | undefined
+
+    /**
+     * **停止原因必须先于决策解析处理。**
+     *
+     * `stopReason` 在模型契约里定义了很久、两家 provider 也都正确映射了它，
+     * 但主循环此前从未读过 —— 于是"文本被 `max_tokens` 砍断"与"正常收尾"
+     * 走同一条 final 分支：任务被判成成功交付、退出码 0、流水线继续往下。
+     * 实测（ScriptedProvider 回放 `stopReason: "max_tokens"` + 半截文本）
+     * 拿到的就是 `completed / success`。
+     */
+    if (response.stopReason === "error") {
+      const message =
+        "The model reported an error stop reason; this response carries no usable decision."
+      yield await sink.emit("task.failed", { code: "MODEL_INVALID_OUTPUT", message })
+      const settled = await finish("failed", "error_during_execution", message)
+      if (settled.event) yield settled.event
+      return settled.outcome
+    }
+
+    if (response.stopReason === "max_tokens" && batch.length === 0) {
+      truncationRecoveries += 1
+      deps.metrics.increment("model.output_truncated")
+      if (truncationRecoveries > MAX_TRUNCATION_RECOVERIES) {
+        const message =
+          `Model output was truncated by the token limit ${truncationRecoveries} time(s) in a row. ` +
+          "This task cannot be delivered: the last response was cut off mid-thought. " +
+          "Reduce the requested output size (split the work into smaller steps) and rerun."
+        yield await sink.emit("task.failed", { code: "MODEL_INVALID_OUTPUT", message })
+        const settled = await finish("failed", "error_during_execution", message)
+        if (settled.event) yield settled.event
+        return settled.outcome
+      }
+      /**
+       * 续写而不是重来：把半截 assistant 文本留在历史里，模型从断点接着写。
+       * 丢掉它等于让模型重新生成一遍，既贵又可能得到另一份不同内容。
+       * 空文本（纯思考被截断）不落空消息 —— 后端会拒绝空 content。
+       */
+      if (response.text.trim().length > 0) {
+        messages.push({ role: "assistant", content: response.text })
+      }
+      messages.push({ role: "user", content: OUTPUT_TRUNCATED_CONTINUE })
+      await flushMessages()
+      yield await sink.emit("task.warning", {
+        reason: "output_truncated",
+        attempt: truncationRecoveries,
+        limit: MAX_TRUNCATION_RECOVERIES,
+      })
+      continue
+    }
+
+    if (response.stopReason === "unknown") {
+      // 原因不明时不猜：留一条可诊断的记录，仍按常规路径推进（文本通常是完整的）
+      deps.logger.warn("model.stop_reason_unknown", { taskId: options.taskId, turn: turns })
+    }
+
     if (response.toolCalls.length === 0) {
       const single: Decision =
         response.decisionHint === "ask"
@@ -1199,10 +1290,9 @@ function buildToolContext(
     budgetTokens: deps.settings.limits.readMaxOutputTokens,
     runCommand: deps.runCommand,
     logger: deps.logger,
-    trackRead: (p: string, mtimeMs: number) => {
-      // 已读表由 EditEngine 持有（read-before-edit 的唯一来源）
-      void p
-      void mtimeMs
+    trackRead: (p: string, mtimeMs: number, content: string) => {
+      // 已读表由本任务的 EditEngine 持有（read-before-edit 的唯一来源）
+      deps.editEngine.recordRead(p, mtimeMs, content)
     },
     readState: (p: string) => {
       const record = deps.editEngine.readRecord(p)
@@ -1213,6 +1303,7 @@ function buildToolContext(
     },
     persistArtifact: async (content: string, kind: string) =>
       persistArtifact(deps, options.taskId, content, kind),
+    editEngine: deps.editEngine,
   }
 }
 
