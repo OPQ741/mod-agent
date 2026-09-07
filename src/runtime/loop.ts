@@ -41,7 +41,7 @@ import {
 import { AppError, toAppError } from "../shared/errors.js"
 import { newCallId, newCheckpointId } from "../shared/ids.js"
 import { parameterHash, sha256, stableStringify } from "../shared/hash.js"
-import type { ContentBlock, ModelMessage, ModelResponse } from "../model/types.js"
+import type { ContentBlock, ModelMessage, ModelRequest, ModelResponse } from "../model/types.js"
 import type { ModelGateway, RetryEvent } from "../model/gateway.js"
 import type { Store } from "../store/types.js"
 import { updateTaskWithRetry } from "./task-write.js"
@@ -152,6 +152,16 @@ const OUTPUT_TRUNCATED_CONTINUE =
   "(stop_reason: max_tokens). Continue from exactly where it stopped — do not restart " +
   "the whole answer and do not summarize what you already wrote. " +
   "If the remaining work does not fit in one response, reply with a tool call that splits it."
+
+/**
+ * 流式增量的合并阈值。
+ *
+ * 每个 token 发一条事件会让事件表按 token 数量膨胀（一轮回答上千行），
+ * 而事件是**落库**的，不是只往终端打。所以按"字符数或 chunk 数"攒一攒再发：
+ * 首屏延迟最多几十毫秒，落库量降到几十条。
+ */
+const DELTA_FLUSH_CHARS = 160
+const DELTA_FLUSH_CHUNKS = 8
 
 /* ------------------------------------------------------------------ *
  * 事件输出
@@ -516,22 +526,71 @@ export async function* runTask(
      * 但事件流里必须有这条记录，否则事后无法解释"那 30 秒在干什么"。
      */
     const retryBuffer: RetryEvent[] = []
-    let response: ModelResponse
+    /**
+     * 两条分支都在 try 内赋值；"没有响应"的情况在分支里已经 throw，
+     * 但编译器看不到这条路径，所以用 definite assignment 断言兜住。
+     */
+    let response!: ModelResponse
     try {
-      response = await deps.gateway.generate(
-        {
-          model: deps.settings.model ?? "default",
-          system:
-            typeof sentMessages[0]?.content === "string"
-              ? sentMessages[0].content
-              : options.systemPrompt,
-          messages: sentMessages.filter((m) => m.role !== "system"),
-          tools: assembled.specs,
-          maxTokens: 8_192,
-        },
-        options.signal,
-        { onRetry: (event) => retryBuffer.push(event) },
-      )
+      const request: ModelRequest = {
+        model: deps.settings.model ?? "default",
+        system:
+          typeof sentMessages[0]?.content === "string"
+            ? sentMessages[0].content
+            : options.systemPrompt,
+        messages: sentMessages.filter((m) => m.role !== "system"),
+        tools: assembled.specs,
+        maxTokens: 8_192,
+      }
+
+      /**
+       * 后端声明了流式就走流式，否则退回 `generate()`。
+       *
+       * 选择依据是**能力位**而不是"有没有提供方"：能力声明与实现一致，
+       * 否则会出现"以为有增量、实际等整段"的静默降级。
+       */
+      if (deps.gateway.capabilities.streaming) {
+        let pendingText = ""
+        let pendingChunks = 0
+        let streamed: ModelResponse | undefined
+
+        for await (const event of deps.gateway.stream(request, options.signal)) {
+          if (event.type === "retry") {
+            // 流式下的退避是实时事件，不需要像非流式那样先缓冲再补发
+            yield await sink.emit("retry.api", { ...event.event })
+            continue
+          }
+          if (event.type === "done") {
+            streamed = event.response
+            continue
+          }
+          if (event.delta.type !== "text") continue
+
+          pendingText += event.delta.text
+          pendingChunks += 1
+          if (pendingText.length >= DELTA_FLUSH_CHARS || pendingChunks >= DELTA_FLUSH_CHUNKS) {
+            yield await sink.emit("agent.message_delta", { turn: turns, text: pendingText })
+            pendingText = ""
+            pendingChunks = 0
+          }
+        }
+
+        // 结尾残量必须发出去：否则用户看到的最后一句是缺的
+        if (pendingText.length > 0) {
+          yield await sink.emit("agent.message_delta", { turn: turns, text: pendingText })
+        }
+        if (!streamed) {
+          throw new AppError(
+            "MODEL_INVALID_OUTPUT",
+            "Model stream completed without a final response (no end chunk)",
+          )
+        }
+        response = streamed
+      } else {
+        response = await deps.gateway.generate(request, options.signal, {
+          onRetry: (event) => retryBuffer.push(event),
+        })
+      }
     } catch (err) {
       for (const retry of retryBuffer.splice(0, retryBuffer.length)) {
         yield await sink.emit("retry.api", { ...retry })

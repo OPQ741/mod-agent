@@ -44,7 +44,7 @@ export { parseOutputFormat, renderEventText, buildJsonResult } from "./cli/rende
 
 /* 模型层 */
 export { ModelGateway, backoffDelay } from "./model/gateway.js"
-export type { GatewayOptions, UsageTotals } from "./model/gateway.js"
+export type { GatewayOptions, UsageTotals, ModelStreamEvent } from "./model/gateway.js"
 export { AnthropicProvider } from "./model/anthropic.js"
 export { OpenAICompatProvider } from "./model/openai-compat.js"
 export { ScriptedProvider, ScriptExhaustedError, toolUse, final, ask } from "./model/scripted.js"
@@ -55,6 +55,8 @@ export type {
   ModelMessage,
   ModelRequest,
   ModelResponse,
+  ModelDelta,
+  ModelStreamChunk,
   ToolSpec,
 } from "./model/types.js"
 

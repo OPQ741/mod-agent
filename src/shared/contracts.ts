@@ -384,16 +384,21 @@ export type ToolUseDecision = z.infer<typeof ToolUseDecisionSchema>
  * 事件类型白名单。
  *
  * 这里只列**真的会 emit** 的类型：契约是系统对外的承诺，列出永远发不出来的
- * 事件等于给消费端一个假的接口。`agent.message_delta` 与 `tool.progress`
- * 是流式阶段的设计项，等 `generateStream` 与长命令增量输出落地时再加回来 ——
- * 在那之前它们留在 [data-and-events.md](../docs/data-and-events.md) 的设计描述里，
- * 不进这个数组。
+ * 事件等于给消费端一个假的接口。
+ *
+ * `agent.message_delta` 在流式落地后重新加回：`capabilities.streaming === true`
+ * 的后端走 `gateway.stream()`，主循环把文本增量按阈值合并成该事件
+ * （payload `{ turn, text }`）。注意它是**合并后的增量**，不是逐 token ——
+ * 事件要落库，逐 token 会把事件表撑爆。`tool.progress` 仍未实现
+ * （长命令增量输出不在本轮范围）。
  */
 export const TASK_EVENT_TYPES = [
   "task.status_changed",
   "task.plan_ready",
   "tool.started",
   "tool.completed",
+  /** data-and-events.md §1.2：模型流式输出的合并增量。 */
+  "agent.message_delta",
   "approval.required",
   "approval.decided",
   "file.changed",

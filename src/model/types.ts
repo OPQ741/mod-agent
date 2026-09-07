@@ -98,6 +98,38 @@ export interface ModelProvider {
   readonly id: string
   readonly capabilities: ModelCapabilities
   generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>
+  /**
+   * 可选流式方法。只有 `capabilities.streaming === true` 的 provider 才需要实现；
+   * 没有它时网关退回 `generate()`，业务层行为不变（只是没有增量输出）。
+   *
+   * 最后一个 chunk 必须是 `{ type: "end", response }`，且 response 要与同一请求
+   * 走 `generate()` 时**逐字段一致** —— 调用方据此决定"要不要把它当真"。
+   */
+  generateStream?(input: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelStreamChunk>
+}
+
+/** 统一后的单个增量。 */
+export type ModelDelta =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
+  /** 一个工具块开始。`index` 是后端给的块序号，用于并行调用时区分。 */
+  | { type: "tool_start"; index: number; id: string; name: string }
+  /** 工具参数 JSON 的片段：必须按 `index` 累积到完整后再 `JSON.parse`。 */
+  | { type: "tool_args"; index: number; partialJson: string }
+  | { type: "tool_stop"; index: number }
+
+/**
+ * 流上的一个 chunk。
+ *
+ * `end` 必须**最后**出现且只出现一次。没收到 `end` 的流是残缺的：
+ * 网关会把它当错误，而不是把半截文本当成一轮完整响应。
+ */
+export type ModelStreamChunk = ModelDelta | { type: "end"; response: ModelResponse }
+
+export function isModelStreamEnd(
+  chunk: ModelStreamChunk,
+): chunk is { type: "end"; response: ModelResponse } {
+  return chunk.type === "end"
 }
 
 /** 把模型消息压成纯文本（用于 token 估算、压缩与日志摘要）。 */

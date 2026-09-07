@@ -10,17 +10,21 @@
  */
 
 import { AppError } from "../shared/errors.js"
+import { estimateTokens } from "../shared/tokens.js"
 import {
   DEFAULT_PRICING,
   estimateCost,
+  estimateMessagesTokens,
   type ModelCapabilities,
   type ModelProvider,
   type ModelRequest,
   type ModelResponse,
+  type ModelStreamChunk,
   type ModelToolCall,
   type ModelUsage,
   type StopReason,
 } from "./types.js"
+import { parseSseJson, readSseEvents } from "./streaming.js"
 
 export interface OpenAICompatOptions {
   baseUrl: string
@@ -36,10 +40,10 @@ export class OpenAICompatProvider implements ModelProvider {
   readonly capabilities: ModelCapabilities = {
     toolCalling: true,
     /**
-     * 当前走的是非流式请求（见本文件顶部的说明），统一接口也没有 `stream()`。
-     * 这里必须是 `false`：能力声明写成 `true`，上层就会以为有增量输出。
+     * SSE 流式已实现（`generateStream`），与非流式共用同一段响应解析，
+     * 这条声明有实现支撑。
      */
-    streaming: false,
+    streaming: true,
     structuredOutput: true,
     vision: false,
   }
@@ -57,30 +61,34 @@ export class OpenAICompatProvider implements ModelProvider {
   }
 
   async generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
-    const messages: unknown[] = []
-    if (input.system) messages.push({ role: "system", content: input.system })
-    for (const message of input.messages) {
-      messages.push(...toOpenAIMessages(message))
-    }
+    const response = await this.post(buildOpenAIBody(input, false), signal)
+    const json: unknown = await response.json()
+    return parseOpenAIResponse(json, input.model)
+  }
 
-    const body: Record<string, unknown> = {
-      model: input.model,
-      messages,
-      ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-      ...(input.stopSequences ? { stop: input.stopSequences } : {}),
+  /**
+   * 真流式（SSE）。
+   *
+   * 与非流式共用 `parseOpenAIResponse`：增量在这里被拼回 chat-completions 的
+   * 原始响应形状（`choices[0].message.tool_calls` 仍是**完整** arguments 字符串），
+   * 所以两条路径的结果逐字段一致。工具参数分片按 `index` 累积 ——
+   * 逐片解析只会得到空参数（见文件顶部那条注释）。
+   */
+  async *generateStream(
+    input: ModelRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ModelStreamChunk, void, void> {
+    const response = await this.post(buildOpenAIBody(input, true), signal)
+    if (!response.body) {
+      throw new AppError(
+        "MODEL_INVALID_OUTPUT",
+        "OpenAI-compatible endpoint returned a streaming response without a body",
+      )
     }
-    if (input.tools.length > 0) {
-      body.tools = input.tools.map((tool) => ({
-        type: "function",
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        },
-      }))
-    }
+    yield* parseOpenAIStream(response.body, input)
+  }
 
+  private async post(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
     const headers: Record<string, string> = { "content-type": "application/json" }
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`
     if (this.organization) headers["openai-organization"] = this.organization
@@ -103,10 +111,37 @@ export class OpenAICompatProvider implements ModelProvider {
       const detail = await safeReadBody(response)
       throw classifyHttpError(response.status, detail, parseRetryAfter(response))
     }
-
-    const json: unknown = await response.json()
-    return parseOpenAIResponse(json, input.model)
+    return response
   }
+}
+
+/** 请求体：非流式与流式只差 `stream` 开关，其余字段完全一致。 */
+function buildOpenAIBody(input: ModelRequest, stream: boolean): Record<string, unknown> {
+  const messages: unknown[] = []
+  if (input.system) messages.push({ role: "system", content: input.system })
+  for (const message of input.messages) {
+    messages.push(...toOpenAIMessages(message))
+  }
+
+  const body: Record<string, unknown> = {
+    model: input.model,
+    messages,
+    ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.stopSequences ? { stop: input.stopSequences } : {}),
+    ...(stream ? { stream: true } : {}),
+  }
+  if (input.tools.length > 0) {
+    body.tools = input.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+      },
+    }))
+  }
+  return body
 }
 
 /* ------------------------------------------------------------------ *
@@ -270,6 +305,121 @@ function accumulateCallFragments(rawCalls: readonly unknown[]): Array<{
   }
 
   return [...byKey.values()]
+}
+
+/* ------------------------------------------------------------------ *
+ * 流式解析（SSE）→ 与非流式同形状的原始响应
+ * ------------------------------------------------------------------ */
+
+interface StreamToolCall {
+  id: string
+  name: string
+  arguments: string
+}
+
+/**
+ * 把 OpenAI 兼容后端的 SSE 拼回 chat-completions 响应。
+ *
+ * 每个 chunk 的 `choices[0].delta` 只带"这一片"：`content` 是文本增量，
+ * `tool_calls` 是**分片**（同一个 `index` 的 `function.arguments` 要逐片拼接）。
+ * 拼完之后交给 `parseOpenAIResponse`，与非流式走完全相同的映射与校验。
+ */
+async function* parseOpenAIStream(
+  body: ReadableStream<Uint8Array>,
+  input: ModelRequest,
+): AsyncGenerator<ModelStreamChunk, void, void> {
+  let model = input.model
+  let requestId: string | undefined
+  let content = ""
+  let finishReason: string | undefined
+  let usageRaw: Record<string, unknown> | undefined
+  const toolCalls = new Map<number, StreamToolCall>()
+
+  for await (const event of readSseEvents(body)) {
+    const data = event.data.trim()
+    if (data === "[DONE]") break
+    const json = parseSseJson(data)
+    if (!json) continue
+
+    if (typeof json.model === "string") model = json.model
+    if (typeof json.id === "string") requestId = json.id
+    const usage = asRecord(json.usage)
+    if (Object.keys(usage).length > 0) usageRaw = usage
+
+    const choices = Array.isArray(json.choices) ? json.choices : []
+    const choice = asRecord(choices[0])
+    const delta = asRecord(choice.delta)
+    if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      content += delta.content
+      yield { type: "text", text: delta.content }
+    }
+
+    const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : []
+    for (const raw of rawCalls) {
+      const call = asRecord(raw)
+      const fn = asRecord(call.function)
+      const index = typeof call.index === "number" ? call.index : toolCalls.size
+      const id =
+        typeof call.id === "string" && call.id.length > 0
+          ? call.id
+          : (toolCalls.get(index)?.id ?? `call_${index}`)
+      const name = typeof fn.name === "string" ? fn.name : ""
+      const partialJson = typeof fn.arguments === "string" ? fn.arguments : ""
+
+      const existing = toolCalls.get(index)
+      if (!existing) {
+        toolCalls.set(index, { id, name, arguments: partialJson })
+        yield { type: "tool_start", index, id, name }
+      } else {
+        if (existing.name.length === 0 && name.length > 0) existing.name = name
+        existing.arguments += partialJson
+      }
+      if (partialJson.length > 0) yield { type: "tool_args", index, partialJson }
+    }
+  }
+
+  const message: Record<string, unknown> = { content }
+  if (toolCalls.size > 0) {
+    message.tool_calls = [...toolCalls.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([index, call]) => ({
+        index,
+        id: call.id,
+        type: "function",
+        function: { name: call.name, arguments: call.arguments },
+      }))
+  }
+
+  yield {
+    type: "end",
+    response: parseOpenAIResponse(
+      {
+        id: requestId,
+        model,
+        choices: [{ index: 0, message, finish_reason: finishReason }],
+        /**
+         * 有些兼容端点流式不返回 usage（`stream_options.include_usage` 不被支持）。
+         * 这时用本地估算兜底，并把口径写在注释里：预算门禁本来就是估算，
+         * 宁可有量不等于账单，也不要记 0 让成本门禁形同虚设。
+         */
+        usage: usageRaw ?? estimateStreamUsage(input, content, toolCalls),
+      },
+      input.model,
+    ),
+  }
+}
+
+function estimateStreamUsage(
+  input: ModelRequest,
+  content: string,
+  toolCalls: ReadonlyMap<number, StreamToolCall>,
+): Record<string, number> {
+  const prompt = estimateTokens(input.system ?? "") + estimateMessagesTokens(input.messages)
+  let completion = estimateTokens(content)
+  for (const call of toolCalls.values()) completion += estimateTokens(call.arguments)
+  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion }
 }
 
 export function mapFinishReason(reason: string | undefined): StopReason {

@@ -59,6 +59,12 @@ export function renderEventText(event: TaskEvent): string | undefined {
       return `[验证] ${String(payload.status ?? "?")}`
     case "checkpoint.created":
       return `[检查点] v${String(payload.version ?? "?")}`
+    case "agent.message_delta":
+      /**
+       * 增量正文由 session 直接打到 stdout（它属于结果，不属于状态行），
+       * 这里返回 undefined 是为了别的消费端（若复用本函数）不会把它当状态打印。
+       */
+      return undefined
     case "task.warning":
       return `[警告] ${describeWarning(payload)}`
     /**
@@ -159,10 +165,12 @@ export function renderFinalText(input: {
   durationMs: number
   usage?: BudgetUsage
   pendingApproval?: PendingApproval
+  /** 正文已经流式输出过时置 true：只打印改动/验证/用量，不再复读 summary。 */
+  omitSummary?: boolean
 }): string {
   const lines: string[] = []
   const { outcome } = input
-  if (outcome?.summary) lines.push(outcome.summary)
+  if (outcome?.summary && !input.omitSummary) lines.push(outcome.summary)
   if (outcome?.changedFiles.length) {
     lines.push(`改动 ${outcome.changedFiles.length} 个文件：`)
     for (const file of outcome.changedFiles) lines.push(`  - ${file}`)

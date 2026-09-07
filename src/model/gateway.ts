@@ -11,7 +11,14 @@
  */
 
 import { AppError, isRetryableCode } from "../shared/errors.js"
-import type { ModelProvider, ModelRequest, ModelResponse, ModelUsage } from "./types.js"
+import {
+  isModelStreamEnd,
+  type ModelDelta,
+  type ModelProvider,
+  type ModelRequest,
+  type ModelResponse,
+  type ModelUsage,
+} from "./types.js"
 
 export interface RetryEvent {
   attempt: number
@@ -20,6 +27,18 @@ export interface RetryEvent {
   errorStatus?: number
   error: string
 }
+
+/**
+ * `stream()` 产出的事件。
+ *
+ * `delta` 是给消费端实时展示的增量；`retry` 是退避记录（必须进事件流，
+ * 否则事后无法解释"那 30 秒在等什么"）；`done` 是最终响应，
+ * 与 `generate()` 的返回值完全同形状 —— 主循环两条路径可以共用后面的决策代码。
+ */
+export type ModelStreamEvent =
+  | { type: "delta"; delta: ModelDelta }
+  | { type: "retry"; event: RetryEvent }
+  | { type: "done"; response: ModelResponse }
 
 export interface GatewayOptions {
   provider: ModelProvider
@@ -137,23 +156,10 @@ export class ModelGateway {
 
         // 退避 + 抖动：把重试散开，避免重试风暴。
         // 服务端给了 Retry-After 就优先遵守（不加抖动），否则走指数退避。
-        const retryAfter = readRetryAfterMs(appError)
-        const jitter = Math.floor(this.random() * delayMs * 0.5)
-        const exponentialWait = Math.min(delayMs + jitter, this.maxBackoffMs)
-        const wait =
-          retryAfter !== undefined ? Math.min(retryAfter, this.maxBackoffMs) : exponentialWait
-        this.totals.retries += 1
-        const retryEvent: RetryEvent = {
-          attempt: attempt + 1,
-          maxRetries: this.maxRetries,
-          retryDelayMs: wait,
-          error: appError.code,
-          ...(extractStatus(appError) !== undefined
-            ? { errorStatus: extractStatus(appError) }
-            : {}),
-        }
-        this.onRetry?.(retryEvent)
-        options?.onRetry?.(retryEvent)
+        const backoff = this.backoff(appError, attempt, delayMs)
+        delayMs = backoff.delayMs
+        this.onRetry?.(backoff.event)
+        options?.onRetry?.(backoff.event)
         /**
          * 退避等待必须**可被打断**。
          *
@@ -162,8 +168,7 @@ export class ModelGateway {
          * 触发，`generate()` 依然在 20s 后才返回。取消是用户能感知的操作，
          * 不能让它排队等一个纯粹为了省流量的定时器。
          */
-        await this.sleepFn(wait, signal)
-        delayMs = Math.min(delayMs * 2, this.maxBackoffMs)
+        await this.sleepFn(backoff.event.retryDelayMs, signal)
       }
     }
 
@@ -171,6 +176,113 @@ export class ModelGateway {
       lastError ??
       new AppError("MODEL_EXHAUSTED", "Model gateway exhausted retries without a result")
     )
+  }
+
+  /**
+   * 流式请求。没有流式实现的 provider 会退回一次非流式 `generate()`，
+   * 产出单个 `done` —— 调用方不需要为"这个后端支不支持流式"写两套逻辑。
+   *
+   * **重试语义与 `generate()` 不同，这是有意的**：一旦已经有增量吐给消费者，
+   * 就不能再重试 —— 重放会让用户看到重复的半段文本，且模型已经"说出口"的
+   * 内容会被第二次生成覆盖。所以只有"一个 delta 都还没吐出"时（连接失败、
+   * HTTP 错误、首个事件前断开）才允许退避重试。
+   */
+  async *stream(
+    input: ModelRequest,
+    signal?: AbortSignal,
+    options?: { onRetry?: (event: RetryEvent) => void },
+  ): AsyncGenerator<ModelStreamEvent, void, void> {
+    const generateStream = this.provider.generateStream?.bind(this.provider)
+    if (!generateStream || this.provider.capabilities.streaming !== true) {
+      const response = await this.generate(input, signal, options)
+      yield { type: "done", response }
+      return
+    }
+
+    let lastError: AppError | undefined
+    let delayMs = this.baseBackoffMs
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      if (signal?.aborted) throw abortError("Model request aborted before streaming")
+
+      let sawDelta = false
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(new Error("model timeout")), this.timeoutMs)
+      const onOuterAbort = (): void => controller.abort(signal?.reason)
+      signal?.addEventListener("abort", onOuterAbort, { once: true })
+
+      try {
+        for await (const chunk of generateStream(input, controller.signal)) {
+          if (isModelStreamEnd(chunk)) {
+            this.accumulate(chunk.response.usage, chunk.response.costUsd)
+            yield { type: "done", response: chunk.response }
+            return
+          }
+          sawDelta = true
+          yield { type: "delta", delta: chunk }
+        }
+        throw new AppError(
+          "MODEL_INVALID_OUTPUT",
+          "Model stream ended without a final response chunk",
+        )
+      } catch (err) {
+        if (signal?.aborted) throw abortError("Model request aborted while streaming")
+        if (controller.signal.aborted && !signal?.aborted) {
+          lastError = new AppError(
+            "MODEL_TIMEOUT",
+            `Model request timed out after ${this.timeoutMs}ms (streaming)`,
+            { cause: err },
+          )
+        } else {
+          lastError =
+            err instanceof AppError
+              ? err
+              : new AppError("MODEL_NETWORK", String(err), { cause: err })
+        }
+
+        // 已经吐出增量就不能重试（见上面的方法注释）
+        if (sawDelta || !isRetryableCode(lastError.code) || attempt >= this.maxRetries) {
+          throw lastError
+        }
+
+        const backoff = this.backoff(lastError, attempt, delayMs)
+        delayMs = backoff.delayMs
+        this.onRetry?.(backoff.event)
+        options?.onRetry?.(backoff.event)
+        yield { type: "retry", event: backoff.event }
+        await this.sleepFn(backoff.event.retryDelayMs, signal)
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener("abort", onOuterAbort)
+      }
+    }
+
+    throw (
+      lastError ??
+      new AppError("MODEL_EXHAUSTED", "Model gateway exhausted retries without a result")
+    )
+  }
+
+  /** 退避计算：Retry-After 优先，否则指数 + 抖动；顺带产出可观测事件。 */
+  private backoff(
+    err: AppError,
+    attempt: number,
+    delayMs: number,
+  ): { delayMs: number; event: RetryEvent } {
+    const retryAfter = readRetryAfterMs(err)
+    const jitter = Math.floor(this.random() * delayMs * 0.5)
+    const exponentialWait = Math.min(delayMs + jitter, this.maxBackoffMs)
+    const wait =
+      retryAfter !== undefined ? Math.min(retryAfter, this.maxBackoffMs) : exponentialWait
+    this.totals.retries += 1
+    const event: RetryEvent = {
+      attempt: attempt + 1,
+      maxRetries: this.maxRetries,
+      retryDelayMs: wait,
+      error: err.code,
+      ...(extractStatus(err) !== undefined ? { errorStatus: extractStatus(err) } : {}),
+    }
+    return { delayMs: Math.min(delayMs * 2, this.maxBackoffMs), event }
   }
 
   private async withTimeout(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {

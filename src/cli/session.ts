@@ -48,6 +48,14 @@ export class CliSession {
   readonly metrics: Metrics
   private readonly io: CliIo
   private readonly format: OutputFormat
+  /**
+   * 本次任务已经流式打到 stdout 的正文。
+   *
+   * 收尾时据此决定要不要再打印一遍 summary：流式场景下答案已经在生成过程中
+   * 逐段出现，末尾重复整段会让 `--print` 的输出看起来被"复读"了一遍。
+   * 中途取消也走这条判断 —— 半句话已经出现在 stdout，不能再补一句完整摘要。
+   */
+  private streamedText = ""
 
   private constructor(runtime: AgentRuntime, metrics: Metrics, io: CliIo, format: OutputFormat) {
     this.runtime = runtime
@@ -102,6 +110,7 @@ export class CliSession {
     taskId: string,
     options: Omit<RunOnceOptions, "prompt">,
   ): Promise<DriveResult> {
+    this.streamedText = ""
     const result = await driveTask(this.runtime, taskId, {
       ...(options.signal ? { signal: options.signal } : {}),
       onEvent: (event) => this.emitEvent(event),
@@ -120,6 +129,19 @@ export class CliSession {
       return
     }
     if (this.format === "text") {
+      /**
+       * 流式正文写 stdout（它就是结果本身），其余事件写 stderr。
+       * 这样 `mod --print "..." > answer.txt` 拿到的是干净的答案，
+       * 而不是"答案 + 状态行"混在一起。
+       */
+      if (event.type === "agent.message_delta") {
+        const text = deltaText(event)
+        if (text.length > 0) {
+          this.streamedText += text
+          this.io.out(text)
+        }
+        return
+      }
       const line = renderEventText(event)
       if (line !== undefined) this.io.err(`${line}\n`)
     }
@@ -150,11 +172,15 @@ export class CliSession {
       this.io.out(`${JSON.stringify(payload)}\n`)
       return
     }
+    // 流式正文没以换行结尾时先补一个，避免摘要与正文粘成一行
+    if (this.streamedText.length > 0) this.io.out("\n")
     const text = renderFinalText({
       ...(result.outcome ? { outcome: result.outcome } : {}),
       durationMs: result.durationMs,
       ...(result.usage ? { usage: result.usage } : {}),
       ...(result.pendingApproval ? { pendingApproval: result.pendingApproval } : {}),
+      // 正文已经流式打过了，末尾不再复读 summary
+      omitSummary: this.streamedText.length > 0,
     })
     if (text.length > 0) this.io.out(`${text}\n`)
   }
@@ -177,4 +203,12 @@ export class CliSession {
 function titleFromPrompt(prompt: string): string {
   const firstLine = prompt.trim().split(/\r?\n/)[0] ?? prompt
   return firstLine.length > 60 ? `${firstLine.slice(0, 59)}…` : firstLine
+}
+
+/** `agent.message_delta` 的 payload 只有 `{ turn, text }`，缺字段时按空串处理。 */
+function deltaText(event: TaskEvent): string {
+  const payload = event.payload
+  if (typeof payload !== "object" || payload === null) return ""
+  const text = (payload as { text?: unknown }).text
+  return typeof text === "string" ? text : ""
 }

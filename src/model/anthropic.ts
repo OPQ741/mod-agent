@@ -18,11 +18,13 @@ import {
   type ModelProvider,
   type ModelRequest,
   type ModelResponse,
+  type ModelStreamChunk,
   type ModelToolCall,
   type ModelUsage,
   type StopReason,
 } from "./types.js"
-import { asRecord, classifyHttpError, numberOr } from "./openai-compat.js"
+import { asRecord, classifyHttpError, numberOr, parseArgsSafely } from "./openai-compat.js"
+import { parseSseJson, readSseEvents } from "./streaming.js"
 
 export interface AnthropicOptions {
   baseUrl?: string
@@ -36,11 +38,10 @@ export class AnthropicProvider implements ModelProvider {
   readonly capabilities: ModelCapabilities = {
     toolCalling: true,
     /**
-     * 实现上只有非流式 `generate()`，统一接口里也没有 `stream()`。
-     * 声明 `true` 会让上层据此以为能收到增量 token，实际只会等整段响应 ——
-     * 能力声明必须与实现一致，实现流式之后再改回 `true`。
+     * SSE 流式已实现（`generateStream`），两条路径共用同一段响应解析，
+     * 所以这里的 `true` 有实现支撑，不是"计划中"的声明。
      */
-    streaming: false,
+    streaming: true,
     structuredOutput: true,
     vision: true,
   }
@@ -58,28 +59,35 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   async generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+    const response = await this.post(buildAnthropicBody(input, false), signal)
+    const json: unknown = await response.json()
+    return parseAnthropicResponse(json, input.model)
+  }
+
+  /**
+   * 真流式（SSE）。
+   *
+   * 关键点：这里**不重写**响应映射。增量被拼成与非流式完全同形状的原始响应，
+   * 最后交给同一个 `parseAnthropicResponse` —— 两条路径的字段永远对得上，
+   * 不会出现"流式少了 requestId / usage 口径不同"这类漂移。
+   */
+  async *generateStream(
+    input: ModelRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ModelStreamChunk, void, void> {
+    const response = await this.post(buildAnthropicBody(input, true), signal)
+    if (!response.body) {
+      throw new AppError(
+        "MODEL_INVALID_OUTPUT",
+        "Anthropic returned a streaming response without a body",
+      )
+    }
+    yield* parseAnthropicStream(response.body, input.model)
+  }
+
+  private async post(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
     if (!this.apiKey) {
       throw new AppError("MODEL_AUTH_FAILED", "Anthropic provider requires an apiKey")
-    }
-
-    const messages = input.messages
-      .filter((m) => m.role !== "system")
-      .map((m) => toAnthropicMessage(m))
-
-    const body: Record<string, unknown> = {
-      model: input.model,
-      messages,
-      max_tokens: input.maxTokens ?? 8192,
-      ...(input.system ? { system: input.system } : {}),
-      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-      ...(input.stopSequences ? { stop_sequences: input.stopSequences } : {}),
-    }
-    if (input.tools.length > 0) {
-      body.tools = input.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      }))
     }
 
     let response: Response
@@ -105,10 +113,33 @@ export class AnthropicProvider implements ModelProvider {
       const detail = await response.text().catch(() => "")
       throw classifyHttpError(response.status, detail)
     }
-
-    const json: unknown = await response.json()
-    return parseAnthropicResponse(json, input.model)
+    return response
   }
+}
+
+/** 请求体：非流式与流式只差一个 `stream` 开关，其余字段必须完全一致。 */
+function buildAnthropicBody(input: ModelRequest, stream: boolean): Record<string, unknown> {
+  const messages = input.messages
+    .filter((m) => m.role !== "system")
+    .map((m) => toAnthropicMessage(m))
+
+  const body: Record<string, unknown> = {
+    model: input.model,
+    messages,
+    max_tokens: input.maxTokens ?? 8192,
+    ...(input.system ? { system: input.system } : {}),
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.stopSequences ? { stop_sequences: input.stopSequences } : {}),
+    ...(stream ? { stream: true } : {}),
+  }
+  if (input.tools.length > 0) {
+    body.tools = input.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+    }))
+  }
+  return body
 }
 
 /**
@@ -249,6 +280,172 @@ export function parseAnthropicResponse(json: unknown, fallbackModel: string): Mo
     model: typeof root.model === "string" ? root.model : fallbackModel,
     ...(typeof root.id === "string" ? { requestId: root.id } : {}),
     costUsd: estimateCost(usage, DEFAULT_PRICING),
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 流式解析（SSE）→ 与非流式同形状的原始响应
+ * ------------------------------------------------------------------ */
+
+type StreamBlock =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; thinking: string }
+  | { kind: "tool_use"; id: string; name: string; json: string; input: Record<string, unknown> }
+
+/**
+ * 把 Anthropic 的 SSE 事件流拼成消息，最后复用 `parseAnthropicResponse`。
+ *
+ * 事件形状（官方文档）：
+ * - `message_start`：id / model / usage（输入侧 token）
+ * - `content_block_start`：每个内容块的开头（text / tool_use / thinking）
+ * - `content_block_delta`：`text_delta` / `input_json_delta` / `thinking_delta` / `signature_delta`
+ * - `content_block_stop`
+ * - `message_delta`：`stop_reason` 与输出 token
+ * - `message_stop`
+ *
+ * `input_json_delta` 必须**按块累积成完整字符串再解析**：逐片 `JSON.parse`
+ * 只会得到"模型调了工具但参数永远是空对象"。
+ */
+async function* parseAnthropicStream(
+  body: ReadableStream<Uint8Array>,
+  fallbackModel: string,
+): AsyncGenerator<ModelStreamChunk, void, void> {
+  let model = fallbackModel
+  let requestId: string | undefined
+  let stopReason: string | undefined
+  const usage: Record<string, unknown> = {}
+  const blocks: Array<StreamBlock | undefined> = []
+
+  for await (const event of readSseEvents(body)) {
+    if (event.event === "error") {
+      throw new AppError(
+        "MODEL_NETWORK",
+        `Anthropic stream reported an error: ${event.data.slice(0, 200)}`,
+      )
+    }
+
+    const json = parseSseJson(event.data)
+    if (!json) continue
+    const type = typeof json.type === "string" ? json.type : event.event
+
+    switch (type) {
+      case "message_start": {
+        const message = asRecord(json.message)
+        if (typeof message.model === "string") model = message.model
+        if (typeof message.id === "string") requestId = message.id
+        mergeUsage(usage, asRecord(message.usage))
+        break
+      }
+      case "content_block_start": {
+        const index = blockIndex(json, blocks.length)
+        const block = asRecord(json.content_block)
+        if (block.type === "text") {
+          const text = typeof block.text === "string" ? block.text : ""
+          blocks[index] = { kind: "text", text }
+          if (text.length > 0) yield { type: "text", text }
+        } else if (block.type === "tool_use") {
+          const id = typeof block.id === "string" ? block.id : `tool_${index}`
+          const name = typeof block.name === "string" ? block.name : ""
+          blocks[index] = { kind: "tool_use", id, name, json: "", input: {} }
+          yield { type: "tool_start", index, id, name }
+        } else if (block.type === "thinking") {
+          const thinking = typeof block.thinking === "string" ? block.thinking : ""
+          blocks[index] = { kind: "thinking", thinking }
+          if (thinking.length > 0) yield { type: "thinking", thinking }
+        }
+        break
+      }
+      case "content_block_delta": {
+        const index = blockIndex(json, 0)
+        const delta = asRecord(json.delta)
+        if (delta.type === "text_delta") {
+          const text = typeof delta.text === "string" ? delta.text : ""
+          const block = ensureTextBlock(blocks, index)
+          block.text += text
+          if (text.length > 0) yield { type: "text", text }
+        } else if (delta.type === "input_json_delta") {
+          const partialJson = typeof delta.partial_json === "string" ? delta.partial_json : ""
+          const block = blocks[index]
+          if (block?.kind === "tool_use") block.json += partialJson
+          if (partialJson.length > 0) yield { type: "tool_args", index, partialJson }
+        } else if (delta.type === "thinking_delta") {
+          const thinking = typeof delta.thinking === "string" ? delta.thinking : ""
+          const block = blocks[index]
+          if (block?.kind === "thinking") block.thinking += thinking
+          if (thinking.length > 0) yield { type: "thinking", thinking }
+        }
+        // signature_delta 一类的块对业务无意义，直接忽略
+        break
+      }
+      case "content_block_stop": {
+        const index = blockIndex(json, 0)
+        finalizeToolBlock(blocks[index])
+        if (blocks[index]?.kind === "tool_use") yield { type: "tool_stop", index }
+        break
+      }
+      case "message_delta": {
+        const delta = asRecord(json.delta)
+        if (typeof delta.stop_reason === "string") stopReason = delta.stop_reason
+        mergeUsage(usage, asRecord(json.usage))
+        break
+      }
+      default:
+        // message_stop / ping 没有业务信息
+        break
+    }
+  }
+
+  // 少数服务端不发 content_block_stop：结尾统一兜底解析，避免参数停在半截
+  for (const block of blocks) finalizeToolBlock(block)
+
+  const content = blocks
+    .filter((block): block is StreamBlock => block !== undefined)
+    .map((block) => {
+      switch (block.kind) {
+        case "text":
+          return { type: "text", text: block.text }
+        case "thinking":
+          return { type: "thinking", thinking: block.thinking }
+        case "tool_use":
+          return { type: "tool_use", id: block.id, name: block.name, input: block.input }
+      }
+    })
+
+  yield {
+    type: "end",
+    response: parseAnthropicResponse(
+      { id: requestId, model, content, stop_reason: stopReason, usage },
+      fallbackModel,
+    ),
+  }
+}
+
+function blockIndex(json: Record<string, unknown>, fallback: number): number {
+  const value = json.index
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback
+}
+
+function ensureTextBlock(
+  blocks: Array<StreamBlock | undefined>,
+  index: number,
+): Extract<StreamBlock, { kind: "text" }> {
+  const existing = blocks[index]
+  if (existing?.kind === "text") return existing
+  const created: StreamBlock = { kind: "text", text: "" }
+  blocks[index] = created
+  return created
+}
+
+function finalizeToolBlock(block: StreamBlock | undefined): void {
+  if (block?.kind !== "tool_use" || block.json.length === 0) return
+  const parsed = parseArgsSafely(block.json)
+  block.input = parsed.ok ? parsed.value : {}
+  block.json = ""
+}
+
+function mergeUsage(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "number" && Number.isFinite(value)) target[key] = value
   }
 }
 

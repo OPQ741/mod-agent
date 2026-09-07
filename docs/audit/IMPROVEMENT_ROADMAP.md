@@ -191,13 +191,15 @@
 - `retry.api`：`runtime.ts:158-161` 的 `onRetry` 需要 `sink.emit`，而不只是 `logger.info`。
   这需要把 sink 传进 gateway 回调，或由循环在 `generate` 前后比对 `gateway.usage.retries` 增量补发；
 - `task.plan_ready`：C1 完成后自然有 emit 点；
-- `agent.message_delta` / `tool.progress`：与 Phase D 的流式一起做，否则没有内容可发。
+- `agent.message_delta`：已随流式落地（见 D1）；`tool.progress` 仍待做。
 
 ---
 
 ## Phase D · 流式与并行工具
 
 ### D1. 流式响应（AUD-012，P1 体验）
+
+**状态：已完成**（`tests/streaming.test.ts` ×14；`capabilities.streaming` 已在两个 provider 上为 `true`）。落地时做了两处与初版计划的修正：一是流式增量先拼回**与非流式同形状**的原始响应再复用同一个 `parseXxxResponse`（一致性由构造保证，不靠测试盯）；二是主循环对 `agent.message_delta` 做阈值合并，避免逐 token 落库。仍未做：`tool.progress` 与"断流后从最近完成的工具块恢复"。
 
 **改动**：
 
@@ -339,6 +341,7 @@ Hook 执行必须有超时（默认 5s）与失败策略（pre 失败 → fail-c
 
 **为什么"流式响应"没进前 10**：它是体验差异项，不是正确性/安全问题。
 在 1–10 修完之前投入流式，等于在会丢工具调用的循环上做动画。
+（前提已满足，D1 已在第四批完成。）
 
 **为什么"扩展体系"没进前 10**：它是 0→1 的能力建设，工作量以周计；
 而前 10 条里有 6 条是"一行到几十行"的修复，性价比差两个数量级。

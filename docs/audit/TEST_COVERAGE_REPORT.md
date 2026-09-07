@@ -111,7 +111,7 @@ $ npx vitest run
 | `runtime` 传 `gitignorePatterns` | 配置失效                        | `pathguard` 单测**手动传**了该参数，集成路径从未传过                                               |
 | `.env.example`                   | 读不了合法模板文件              | bypass-immune 测试覆盖 `.env`，未覆盖 `.env.example`                                               |
 | `preToolUse` 改入参              | 策略绕过                        | 有 3 处 hook 测试，但测的是 block / replaceOutput，未测"改入参后是否重新判定"                      |
-| 流式                             | 能力声明为真但未实现            | `streaming` 在测试里出现 3 次，都是 capability 字段断言                                            |
+| 流式                             | 能力声明为真但未实现            | 已补：`tests/streaming.test.ts` ×14（SSE 回放、两条路径逐字段相等、断流不重试、取消、CLI 输出）    |
 | 事件类型完整性                   | 4 个死类型                      | 无"声明表 vs 实际 emit"的一致性测试                                                                |
 | 长会话压缩后用户请求是否保留     | 目标漂移                        | `context.test.ts:360` 测了"第一条 user 仍存在"，但构造的消息数组**没有**循环里的动态环境块前置结构 |
 

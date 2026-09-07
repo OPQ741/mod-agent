@@ -29,7 +29,7 @@
 
 ## 1. 项目当前阶段
 
-TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于代码阶段**：`src/` 下已有可运行的 Agent Runtime（`runtime/loop.ts` 唯一主循环 → `tools/executor.ts` → `policy/` → `sandbox/` → `store/`），`tests/` 有 440+ 条离线用例（`npm test` 不联网、不烧 API 额度）；`docs/`（24 篇源文档）与实现并行维护，文档写目标架构，代码是它的落地。判断"某能力是否存在"一律以 `src/` 为准，不要只读文档下结论。
+TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于代码阶段**：`src/` 下已有可运行的 Agent Runtime（`runtime/loop.ts` 唯一主循环 → `tools/executor.ts` → `policy/` → `sandbox/` → `store/`），`tests/` 有 469 条离线用例（`npm test` 不联网、不烧 API 额度）；`docs/`（24 篇源文档）与实现并行维护，文档写目标架构，代码是它的落地。判断"某能力是否存在"一律以 `src/` 为准，不要只读文档下结论。
 
 ## 2. 开始任何任务前
 
@@ -52,7 +52,7 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 - `npm run format:check` — 仅检查格式，不写文件。
 - `npm run typecheck` — TypeScript strict 类型检查（`tsc --noEmit`）。
 - `npm run build` — 编译到 `dist/`（`tsc -p tsconfig.build.json`）。
-- `npm run test` — 全量离线测试（`vitest run`，440+ 用例，不联网、不需要 API Key）。
+- `npm run test` — 全量离线测试（`vitest run`，469 用例，不联网、不需要 API Key）。
 - `npm run test:watch` — 监听模式，改一处跑相关用例时用。
 - `npm run cli` — 跑编译产物 `node dist/cli/main.js`（需先 `npm run build`）。
 - `npm run verify` — `typecheck` + `test`；改代码后至少跑这一条。
@@ -116,7 +116,8 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 - 高风险操作（写文件、执行 Shell、Git 推送）需要显式审批，不允许只靠 Prompt 约束模型。
 - 策略判定必须发生在 PreToolUse 钩子**之后**：钩子能改写入参，先判定后执行会让"批准 A、执行 B"。
 - 路径判定用 realpath，且目标不存在时也要解析最近存在的祖先 —— 否则符号链接父目录会变成写路径逃逸。
-- 能力声明必须与实现一致：`ModelCapabilities.streaming` 在真正实现 `stream()` 之前只能是 `false`。
+- 能力声明必须与实现一致：声明 `streaming: true` 就必须真的提供 `generateStream()`，且流式与非流式的最终 `ModelResponse` 逐字段一致（流式只负责拼回同形状的原始响应，复用同一段解析）。
+- 流式的重试语义与其他请求不同且不可改回去：**一个增量都还没吐出来才允许重试**，吐过之后断流只能失败 —— 重放会让用户看到重复的半段文本。
 - 沙箱后端必须声明 `capabilities`，命令的默认网络档位由能力位决定（默认写在 `defaultNetworkProfile`，不要在各处写死）：做不到真断网的后端默认 `inherit`，不要用「阻断」类错误码假装有隔离。
 - 任务状态持久化、错误重试上限、变更范围与验收证据链，见 `docs/architecture.md` 与 `docs/security.md`。
 

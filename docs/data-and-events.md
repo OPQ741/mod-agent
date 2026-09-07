@@ -36,9 +36,11 @@ interface TaskEvent<T = unknown> {
 }
 ```
 
-事件类型：`task.status_changed`、`task.plan_ready`、`tool.started`、`tool.completed`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`、`retry.api`。
+事件类型：`task.status_changed`、`task.plan_ready`、`tool.started`、`tool.completed`、`agent.message_delta`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`、`retry.api`。
 
-`agent.message_delta`（流式增量）与 `tool.progress`（长命令增量输出）是流式阶段的设计项，当前**未实现、也不在** `TASK_EVENT_TYPES` 里：契约只列真的会发出来的类型，列一个永远发不出来的事件等于给消费端一个假接口。等 `generateStream` 与长命令增量输出落地时再把它们加回来。
+`agent.message_delta` 已随真流式落地：`capabilities.streaming === true` 的后端走 `gateway.stream()`，主循环把文本增量按阈值（160 字符或 8 个 SSE 块）合并成该事件，payload 为 `{ turn, text }`。它是**合并后的增量**而不是逐 token —— 事件要落库，逐 token 会把事件表撑爆。消费端把它拼起来就是本轮正文，与最终 `task.completed` 里的 summary 一致。
+
+`tool.progress`（长命令增量输出）仍是设计项，当前**不在** `TASK_EVENT_TYPES` 里：契约只列真的会发出来的类型，列一个永远发不出来的事件等于给消费端一个假接口。
 
 一次真实任务在流水账上长什么样（这几行合起来就是当时到底发生了什么的全部证据）：
 

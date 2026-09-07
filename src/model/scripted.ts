@@ -21,6 +21,7 @@ import {
   type ModelProvider,
   type ModelRequest,
   type ModelResponse,
+  type ModelStreamChunk,
   type ModelUsage,
   type StopReason,
 } from "./types.js"
@@ -72,6 +73,14 @@ export interface ScriptedProviderOptions {
   model?: string
   /** 记录每次收到的请求，供断言（例如"第二条决策能看到 read_file 的正文"）。 */
   onRequest?: (request: ModelRequest, stepIndex: number) => void
+  /**
+   * 打开流式回放：`generateStream()` 会把同一份响应切成增量吐出。
+   * 默认 `false` —— 既有用例都走非流式路径，行为不受影响；
+   * 要测"增量事件进入事件流"时显式打开。
+   */
+  streaming?: boolean
+  /** 流式回放时每个文本增量的字符数。 */
+  streamChunkChars?: number
 }
 
 export class ScriptExhaustedError extends AppError {
@@ -86,24 +95,31 @@ export class ScriptExhaustedError extends AppError {
 
 export class ScriptedProvider implements ModelProvider {
   readonly id = "scripted"
-  readonly capabilities: ModelCapabilities = {
-    toolCalling: true,
-    streaming: false,
-    structuredOutput: true,
-    vision: false,
-  }
+  private readonly caps: ModelCapabilities
 
   private index = 0
   private readonly steps: ScriptStep[]
   private readonly tokensPerStep: number
   private readonly modelName: string
   private readonly onRequest?: (request: ModelRequest, stepIndex: number) => void
+  private readonly streamChunkChars: number
 
   constructor(steps: readonly ScriptStep[], options: ScriptedProviderOptions = {}) {
     this.steps = [...steps]
     this.tokensPerStep = options.tokensPerStep ?? 64
     this.modelName = options.model ?? "scripted-model"
     this.onRequest = options.onRequest
+    this.streamChunkChars = Math.max(1, options.streamChunkChars ?? 40)
+    this.caps = {
+      toolCalling: true,
+      streaming: options.streaming === true,
+      structuredOutput: true,
+      vision: false,
+    }
+  }
+
+  get capabilities(): ModelCapabilities {
+    return this.caps
   }
 
   /** 已消费的步数，测试用来断言"循环走了几步"。 */
@@ -130,6 +146,35 @@ export class ScriptedProvider implements ModelProvider {
 
     const decision = typeof step === "function" ? step(input, this.index - 1) : step
     return this.render(decision, input)
+  }
+
+  /**
+   * 流式回放：同一份 `ModelResponse` 切成增量吐出。
+   *
+   * 它不模拟真实网络的分段节奏（那会让测试变慢且不稳定），只保证
+   * "增量事件能进入事件流、最终结果与非流式路径完全一致"这两件事。
+   */
+  async *generateStream(
+    input: ModelRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ModelStreamChunk, void, void> {
+    const response = await this.generate(input, signal)
+    if (signal?.aborted) throw new AppError("CANCELLED", "Model stream aborted before emitting")
+
+    for (let offset = 0; offset < response.text.length; offset += this.streamChunkChars) {
+      const text = response.text.slice(offset, offset + this.streamChunkChars)
+      if (text.length > 0) yield { type: "text", text }
+    }
+
+    for (let index = 0; index < response.toolCalls.length; index += 1) {
+      const call = response.toolCalls[index]
+      if (!call) continue
+      yield { type: "tool_start", index, id: call.id, name: call.name }
+      yield { type: "tool_args", index, partialJson: JSON.stringify(call.args) }
+      yield { type: "tool_stop", index }
+    }
+
+    yield { type: "end", response }
   }
 
   private render(

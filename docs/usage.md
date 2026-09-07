@@ -134,6 +134,8 @@ mod-agent 把"agent 的手能伸多远"分成四档：`ask`、`plan`、`edit`、
 
 带"本文约定"的行是本页第一次把它们写死，实现时若与专题冲突以专题为准。`--print` 与 `--output-format` 的语义不是拍脑袋：headless 是 ADR-7 定的 CLI-first 一等公民，事件流直接序列化成 `stream-json`，退出码即成败（0 成功、非 0 失败，2 表示被人主动打断，[agent-loop.md §6.3](./agent-loop.md)）。
 
+当前实现已走真流式：声明了 `streaming` 能力的模型后端边生成边输出，`text` 格式把正文直接写 stdout（正文就是结果，状态行仍走 stderr），`stream-json` 则每条 `agent.message_delta` 一行。收尾不会再把整段正文复读一遍；中途取消时已输出的半段保留在原处。
+
 ### 4.3 配置文件（settings.json）
 
 启动参数是一次性的，长期偏好落在配置文件里。分层的权威在 [security.md §4.1](./security.md)：托管策略 > 命令行 `--settings` > 团队 `.mod/settings.json` > 用户 `~/.mod/settings.json` > 项目 `settings.local.json`。下面这份是本文第一次把配置项成清单列出，实现时以各专题为准。

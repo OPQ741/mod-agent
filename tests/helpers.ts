@@ -118,11 +118,14 @@ export async function createTestRuntime(options: {
   settings?: Settings
   hasTty?: boolean
   now?: () => Date
+  /** 打开脚本回放的流式模式（默认关闭，既有用例走非流式路径）。 */
+  streaming?: boolean
   /** 录制模型收到的请求，用于断言"第二轮能看到上一轮的工具结果"。 */
   onRequest?: (request: ModelRequest, stepIndex: number) => void
 }): Promise<TestRuntime> {
   const provider = new ScriptedProvider(options.script, {
     ...(options.onRequest ? { onRequest: options.onRequest } : {}),
+    ...(options.streaming ? { streaming: true } : {}),
   })
   const logger = noopLogger()
   const metrics = new Metrics()

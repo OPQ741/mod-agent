@@ -51,7 +51,7 @@
 | 停止条件     | IMPLEMENTED   | 步数/成本/墙钟/输入 token/无进展 五维；`repairRounds` 刻意不硬刹车（有注释说明理由）          |
 | 最大迭代次数 | IMPLEMENTED   | `maxRounds` 默认 30，但可被 resume 绕过（AUD-005）                                            |
 | 异常恢复     | PARTIAL       | 工具错误即数据 ✅；模型错误 → 终止 ✅；**策略拒绝上限异常穿透**（AUD-002）                    |
-| 流式响应     | **MISSING**   | 无 SSE/ReadableStream；`agent.message_delta` 从不 emit（AUD-012）                             |
+| 流式响应     | IMPLEMENTED   | SSE 流式已落地；`agent.message_delta` 按阈值合并后进事件流                                    |
 | 用户取消     | PARTIAL       | `AbortSignal` 贯穿到子进程 ✅；`cancelRequestedAt` 下一轮入口生效 ✅；并发取消撞锁（AUD-008） |
 
 ### 2.3 LLM Provider
@@ -62,7 +62,7 @@
 | Anthropic 接入         | IMPLEMENTED   | `system` 独立参数、`input_schema`、`tool_result` 配对、`stop_reason`、缓存 token 统计 |
 | OpenAI 接入            | IMPLEMENTED   | 同一 `OpenAICompatProvider` 覆盖 OpenAI/DeepSeek/通义/vLLM/Ollama                     |
 | OpenAI-compatible 接入 | IMPLEMENTED   | 同上；`baseUrl` 可配                                                                  |
-| 流式响应               | **MISSING**   | 非流式；`capabilities.streaming: true` 是虚假声明                                     |
+| 流式响应               | IMPLEMENTED   | SSE + `generateStream`；与非流式结果逐字段相等（复用同一段响应解析）                  |
 | Tool Calling 兼容性    | IMPLEMENTED   | 分片累积（`accumulateCallFragments`）、参数 JSON 失败转数据、两家消息形状差异有测试   |
 | 超时                   | IMPLEMENTED   | 网关级 + 外部 signal 联动                                                             |
 | 重试                   | PARTIAL       | 指数退避 + 抖动 + 可重试码分类 ✅；`Retry-After` 未使用（AUD-014）                    |
@@ -144,6 +144,6 @@
 
 1. **扩展体系（Skills/MCP/Hooks/Subagents）**：0 → 1 的阶段，工作量最大，但地基已备。
 2. **规划落地**：工具存在、数据模型存在，缺"计划落盘 + 驱动执行 + 注入上下文"这条链。
-3. **流式响应**：CLI 体验的关键差异项；当前用户要等到整个 turn 结束才看到任何输出。
+3. **流式响应**：已实现（SSE + `agent.message_delta`）。仍缺两项：`tool.progress`（长命令增量输出）与断流后从最近完成的工具块恢复。
 4. **并行工具调用**：不是"优化"，是正确性问题——多文件任务会静默少做一半。
 5. **验证链路的策略接入**：安全前提，改动量很小（一处调用点）。
