@@ -35,6 +35,20 @@ export type { SandboxBackend, SandboxProbeResult }
 export class RestrictedSubprocessBackend implements SandboxBackend {
   readonly id = "restricted-subprocess"
 
+  /**
+   * 诚实的自我描述：**没有**网络隔离，也**没有**文件系统隔离。
+   * 这个后端提供的是生命周期与资源约束（超时/取消杀进程树、输出上限、cwd 限制）。
+   */
+  readonly capabilities = { networkIsolation: false, filesystemIsolation: false } as const
+
+  /**
+   * 默认档位是 `inherit` 而不是 `none`。
+   *
+   * 默认 `none` 会制造一个持续存在的假象：每条命令都"要求断网"，而实际阻断完全不存在，
+   * 只剩一个正则在做意图拦截。默认值应当描述事实 —— 这里的事实是"没有隔离"。
+   */
+  readonly defaultNetworkProfile = "inherit" as const
+
   constructor(
     private readonly options: {
       workspaceRoot: string
@@ -54,13 +68,23 @@ export class RestrictedSubprocessBackend implements SandboxBackend {
     // 规则 ②：命令 cwd 必须落在授权工作区内，不允许 `cd ..` 逃逸
     const cwd = this.options.assertCwd(request.cwd)
 
-    // 网络档位：none 时拒绝声明需要网络的请求（子进程后端无法真正断网）
-    if (request.networkProfile === "none" && hasNetworkIntent(request)) {
-      throw new AppError(
-        "NETWORK_BLOCKED",
-        "Command declares network access but the active sandbox backend cannot enforce network isolation",
-        { details: { executable: request.executable, networkProfile: request.networkProfile } },
-      )
+    /**
+     * 网络档位：这里**只能做意图拦截**，不是强制隔离。
+     *
+     * `networkProfile === "none"` 但本后端没有网络隔离能力时，用命令文本正则识别
+     * "看起来要联网"的请求并拒绝。它挡不住 `node build.js`、`make`、`npm run anything`
+     * 这类间接联网 —— 所以错误码叫 `NETWORK_INTENT_BLOCKED` 而不是 `NETWORK_BLOCKED`，
+     * 文案也写明"启发式"。要真断网请用 Docker 后端（`--network none`）。
+     */
+    if (request.networkProfile === "none" && this.capabilities.networkIsolation === false) {
+      if (networkIntentGuard(request)) {
+        throw new AppError(
+          "NETWORK_INTENT_BLOCKED",
+          "Command looks like it needs network access, and the active sandbox backend cannot enforce network isolation " +
+            "(heuristic intent guard, not a hard block). Use the Docker sandbox backend for real network isolation.",
+          { details: { executable: request.executable, networkProfile: request.networkProfile } },
+        )
+      }
     }
 
     const result: RunProcessResult = await runProcess(
@@ -102,12 +126,19 @@ class LazyBudget {
   }
 }
 
-const NETWORK_INTENT =
+/**
+ * 网络**意图**拦截（启发式）。
+ *
+ * 只看命令文本里的常见联网工具名。它**不是**隔离：
+ * `node build.js`、`python gen.py`、`npm run anything`、`make` 都能自由联网。
+ * 保留它的理由只有一个 —— 在 `none` 档下挡掉最明显的错误，并给出可操作的提示。
+ */
+const NETWORK_INTENT_PATTERN =
   /\b(curl|wget|nc|netcat|ssh|scp|rsync|git\s+(clone|fetch|pull|push)|npm\s+(install|publish)|pip\s+install|apt-get|apk\s+add)\b/i
 
-function hasNetworkIntent(request: CommandRequest): boolean {
+function networkIntentGuard(request: CommandRequest): boolean {
   const line = `${request.executable} ${request.args.join(" ")}`
-  return NETWORK_INTENT.test(line)
+  return NETWORK_INTENT_PATTERN.test(line)
 }
 
 /**
@@ -118,6 +149,12 @@ function hasNetworkIntent(request: CommandRequest): boolean {
  */
 export class DockerBackend implements SandboxBackend {
   readonly id = "docker"
+
+  /** 容器是真的隔离：`--network none` 断出口，只挂载授权工作区。 */
+  readonly capabilities = { networkIsolation: true, filesystemIsolation: true } as const
+
+  /** 有真隔离才能把 `none` 作为默认 —— 这时默认值描述的是事实。 */
+  readonly defaultNetworkProfile = "none" as const
 
   constructor(
     private readonly options: {
@@ -246,6 +283,7 @@ export async function selectSandbox(options: {
         "output size limits (per-command and session total)",
         "cwd confined to the authorized workspace",
         "NOT covered: filesystem visibility, network egress",
+        "default network profile: inherit (no egress blocking; `none` only triggers a heuristic intent guard)",
       ],
       degraded: false,
     }
@@ -279,7 +317,11 @@ export async function selectSandbox(options: {
   }
   return {
     backend: restricted,
-    coverage: ["DEGRADED: Docker unavailable, fell back to restricted subprocess"],
+    coverage: [
+      "DEGRADED: Docker unavailable, fell back to restricted subprocess",
+      "NOT covered: filesystem visibility, network egress",
+      "default network profile: inherit (no egress blocking)",
+    ],
     degraded: true,
   }
 }

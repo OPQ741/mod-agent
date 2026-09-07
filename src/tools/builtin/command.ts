@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod"
+import { NetworkProfileSchema } from "../../shared/contracts.js"
 import type {
   AgentTool,
   CommandRequestInput,
@@ -38,7 +39,12 @@ const CommandRunInput = z.object({
   cwd: AbsolutePath,
   timeoutMs: z.number().int().positive().max(600_000).default(120_000),
   reason: z.string().min(1, "reason is required: explain why this command is needed"),
-  networkProfile: z.enum(["none", "package_registry", "approved_domains"]).default("none"),
+  /**
+   * 网络档位。**不在这里写默认值**：省略时由运行时按沙箱后端能力补齐
+   * （Docker → `none`，受限子进程 → `inherit`），见 `normalizeCommandRequest`。
+   * 在工具 schema 里写死 `none` 会让"默认断网"变成一句与后端无关的空话。
+   */
+  networkProfile: NetworkProfileSchema.optional(),
   onTimeout: z.enum(["kill", "move-to-background"]).default("kill"),
 })
 export type CommandRunInput = z.infer<typeof CommandRunInput>

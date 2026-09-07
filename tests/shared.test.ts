@@ -276,7 +276,7 @@ describe("shared/json-schema", () => {
 })
 
 describe("shared/contracts", () => {
-  it("normalizeCommandRequest 补全默认值且不容许 shell 字符串", () => {
+  it("normalizeCommandRequest 补全默认值，网络档位由调用方按后端能力决定", () => {
     const req = normalizeCommandRequest({
       executable: "npm",
       args: ["run", "test"],
@@ -284,8 +284,28 @@ describe("shared/contracts", () => {
       reason: "r",
     })
     expect(req.args).toEqual(["run", "test"])
-    expect(req.networkProfile).toBe("none")
+    /**
+     * 不再写死 `none`：默认值必须反映后端能力。
+     * 没有传 `defaults` 时回落到 `inherit` —— 宁可承认不隔离，也不假装隔离。
+     */
+    expect(req.networkProfile).toBe("inherit")
     expect(req.onTimeout).toBe("kill")
     expect(req.timeoutMs).toBeGreaterThan(0)
+
+    // 后端能真断网时，默认才是 none
+    expect(
+      normalizeCommandRequest(
+        { executable: "npm", args: ["test"], cwd: "D:/w", reason: "r" },
+        { networkProfile: "none" },
+      ).networkProfile,
+    ).toBe("none")
+
+    // 显式声明优先于默认
+    expect(
+      normalizeCommandRequest(
+        { executable: "npm", args: ["test"], cwd: "D:/w", reason: "r", networkProfile: "none" },
+        { networkProfile: "inherit" },
+      ).networkProfile,
+    ).toBe("none")
   })
 })

@@ -71,7 +71,23 @@ export type ToolRisk = z.infer<typeof ToolRiskSchema>
 export const ToolIdempotencySchema = z.enum(["safe", "keyed", "non_idempotent"])
 export type ToolIdempotency = z.infer<typeof ToolIdempotencySchema>
 
-export const NetworkProfileSchema = z.enum(["none", "package_registry", "approved_domains"])
+/**
+ * 网络档位。
+ *
+ * - `none`：要求真正阻断出口。**只有具备内核级隔离的后端才能兑现**（Docker `--network none`）；
+ *   受限子进程后端只能做"意图拦截"，见 `sandbox/index.ts` 的 `networkIntentGuard`。
+ * - `package_registry` / `approved_domains`：允许特定出口（当前由策略层表达，沙箱不强制）。
+ * - `inherit`：不承诺任何网络限制，继承宿主网络。受限子进程后端的默认档位。
+ *
+ * 之所以要有 `inherit`：默认值必须反映**实际防护能力**，而不是愿望。
+ * 没有这一档时，"默认 none"等于让每个命令都声称自己被隔离了，而事实并非如此。
+ */
+export const NetworkProfileSchema = z.enum([
+  "none",
+  "package_registry",
+  "approved_domains",
+  "inherit",
+])
 export type NetworkProfile = z.infer<typeof NetworkProfileSchema>
 
 /* ------------------------------------------------------------------ *
@@ -85,21 +101,40 @@ export const CommandRequestSchema = z.object({
   env: z.record(z.string()).optional(),
   /** 默认与 `settings.limits.commandTimeoutMs` 对齐；省略时由 normalize 补齐。 */
   timeoutMs: z.number().int().positive().max(600_000).default(120_000),
-  networkProfile: NetworkProfileSchema.default("none"),
+  /**
+   * 网络档位。**省略时由执行方按后端能力补齐**（见 `normalizeCommandRequest` 的 `defaults`）。
+   * 这里不写死 `none`：那会让"默认不许联网"成为一句与后端能力无关的口号。
+   */
+  networkProfile: NetworkProfileSchema.optional(),
   reason: z.string().min(1),
   /** 超时后的处置：kill 或转后台（tools-and-extensions.md §2.5）。 */
   onTimeout: z.enum(["kill", "move-to-background"]).default("kill"),
 })
-export type CommandRequest = z.infer<typeof CommandRequestSchema>
+/** 规范化后的请求：`normalizeCommandRequest` 保证 `networkProfile` 一定存在。 */
+export type CommandRequest = z.infer<typeof CommandRequestSchema> & {
+  networkProfile: NetworkProfile
+}
 /**
  * 调用方视角的命令请求：`args` / `networkProfile` / `onTimeout` 可省略。
  * 执行前一律经 `normalizeCommandRequest()` 补默认值，避免"改一个默认值要同步改三处"。
  */
 export type CommandRequestInput = z.input<typeof CommandRequestSchema>
 
-/** 补全默认值并做一次结构校验。 */
-export function normalizeCommandRequest(input: CommandRequestInput): CommandRequest {
-  return CommandRequestSchema.parse(input)
+/**
+ * 补全默认值并做一次结构校验。
+ *
+ * `defaults.networkProfile` 由**沙箱后端**决定（Docker → `none`，受限子进程 → `inherit`），
+ * 调用方不该自己猜。都没有时回落到 `inherit`：不承诺隔离，总比声称隔离却不做要好。
+ */
+export function normalizeCommandRequest(
+  input: CommandRequestInput,
+  defaults: { networkProfile?: NetworkProfile } = {},
+): CommandRequest {
+  const parsed = CommandRequestSchema.parse(input)
+  return {
+    ...parsed,
+    networkProfile: parsed.networkProfile ?? defaults.networkProfile ?? "inherit",
+  }
 }
 
 export const CommandResultSchema = z.object({

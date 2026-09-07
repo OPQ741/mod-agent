@@ -31,13 +31,20 @@ import { DEFAULT_BUDGET } from "../src/shared/contracts.js"
 
 const NODE = process.execPath
 
-function req(executable: string, args: string[], cwd: string, timeoutMs = 10_000) {
+function req(
+  executable: string,
+  args: string[],
+  cwd: string,
+  timeoutMs = 10_000,
+  networkProfile?: "none" | "inherit",
+) {
   return normalizeCommandRequest({
     executable,
     args,
     cwd,
     timeoutMs,
     reason: "sandbox test",
+    ...(networkProfile ? { networkProfile } : {}),
   })
 }
 
@@ -263,7 +270,7 @@ describe("sandbox/index: fail-closed 选择与能力声明", () => {
     }
   })
 
-  it("网络档位 none 且命令像是要联网 → NETWORK_BLOCKED（faily-closed，不降级裸跑）", async () => {
+  it("网络档位显式 none 且命令像是要联网 → 意图拦截（不是假装断网）", async () => {
     const ws = await createTempWorkspace()
     try {
       const guard = new PathGuard({ workspaceRoot: ws.root })
@@ -273,11 +280,37 @@ describe("sandbox/index: fail-closed 选择与能力声明", () => {
         maxTotalOutputBytes: 1_000,
         assertCwd: (cwd) => guard.assertCwd(cwd),
       })
+      // 必须**显式**要 none：默认档位来自后端能力，受限子进程后端默认是 inherit
       await expect(
-        backend.exec(req("curl", ["https://example.com"], ws.root)),
+        backend.exec(req("curl", ["https://example.com"], ws.root, 10_000, "none")),
       ).rejects.toMatchObject({
-        code: "NETWORK_BLOCKED",
+        /**
+         * 错误码从 `NETWORK_BLOCKED` 改为 `NETWORK_INTENT_BLOCKED`。
+         * 受限于进程的沙箱根本没有网络隔离能力，用"BLOCKED"会让人以为出口被切断；
+         * 实际只是"命令文本看起来要联网，先拒绝"。真隔离错误码留给 Docker 后端。
+         */
+        code: "NETWORK_INTENT_BLOCKED",
       })
+    } finally {
+      await ws.cleanup()
+    }
+  })
+
+  it("受限子进程后端声明自己没有网络/文件系统隔离，默认档位是 inherit", async () => {
+    const ws = await createTempWorkspace()
+    try {
+      const guard = new PathGuard({ workspaceRoot: ws.root })
+      const backend = new RestrictedSubprocessBackend({
+        workspaceRoot: ws.root,
+        maxOutputChars: 1_000,
+        maxTotalOutputBytes: 1_000,
+        assertCwd: (cwd) => guard.assertCwd(cwd),
+      })
+      expect(backend.capabilities).toEqual({
+        networkIsolation: false,
+        filesystemIsolation: false,
+      })
+      expect(backend.defaultNetworkProfile).toBe("inherit")
     } finally {
       await ws.cleanup()
     }

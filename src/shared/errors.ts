@@ -45,7 +45,17 @@ export const ERROR_CODES = [
   "COMMAND_EXIT_NONZERO",
   "COMMAND_DENIED",
   "DEPENDENCY_INSTALL_FAILED",
+  /**
+   * 沙箱**真的**阻断了网络出口（Docker `--network none`，或未来的内核级隔离）。
+   * 这不是代码的错，模型不该反复重写代码试图绕过。
+   */
   "NETWORK_BLOCKED",
+  /**
+   * 受限子进程后端的**意图拦截**：命令看起来要联网，而后端没有网络隔离能力。
+   * 与 `NETWORK_BLOCKED` 分开是为了不让人误以为"网络被强制切断了" ——
+   * 这条只是"我们猜它要联网，所以先拒绝"，`node build.js` 这类间接联网照样能出去。
+   */
+  "NETWORK_INTENT_BLOCKED",
   "SANDBOX_FAILURE",
   "SANDBOX_UNAVAILABLE",
   "WORKSPACE_CONFLICT",

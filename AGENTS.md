@@ -117,6 +117,7 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 - 策略判定必须发生在 PreToolUse 钩子**之后**：钩子能改写入参，先判定后执行会让"批准 A、执行 B"。
 - 路径判定用 realpath，且目标不存在时也要解析最近存在的祖先 —— 否则符号链接父目录会变成写路径逃逸。
 - 能力声明必须与实现一致：`ModelCapabilities.streaming` 在真正实现 `stream()` 之前只能是 `false`。
+- 沙箱后端必须声明 `capabilities`，命令的默认网络档位由能力位决定（默认写在 `defaultNetworkProfile`，不要在各处写死）：做不到真断网的后端默认 `inherit`，不要用「阻断」类错误码假装有隔离。
 - 任务状态持久化、错误重试上限、变更范围与验收证据链，见 `docs/architecture.md` 与 `docs/security.md`。
 
 ## 8. 参考

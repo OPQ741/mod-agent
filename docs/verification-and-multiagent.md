@@ -33,7 +33,7 @@ flowchart TD
 
 先运行几秒钟就能给出结果的检查，通过后再投入更多时间。一旦某一步失败，就进入 Repair Loop 分析和修复，不必等到最后一步才发现问题。
 
-比如，同样是命令返回非 0，系统会按错误码区别对待：`TEST_FAILED`（测试断言没通过）就让模型进 Repair Loop 去修；`NETWORK_BLOCKED`（网络被沙箱挡了）则不该让模型反复重写代码，因为这不是代码的错；`TOOL_PERMISSION_DENIED`（权限被拒）更不能让模型换一条命令绕过策略。错误码不同，恢复策略完全不同。
+比如，同样是命令返回非 0，系统会按错误码区别对待：`TEST_FAILED`（测试断言没通过）就让模型进 Repair Loop 去修；`NETWORK_BLOCKED`（网络出口被沙箱真切断）或 `NETWORK_INTENT_BLOCKED`（后端没有隔离能力、命令看起来要联网所以先拒）则不该让模型反复重写代码，因为这不是代码的错；`TOOL_PERMISSION_DENIED`（权限被拒）更不能让模型换一条命令绕过策略。错误码不同，恢复策略完全不同。
 
 Playwright 优先用可等待的 locator assertion，不靠固定 sleep 判断页面稳定。
 
@@ -81,7 +81,7 @@ AGENTS.md 规范 FAQ 明确（出处：https://agents.md ）：在 AGENTS.md 里
 - `MODEL_TIMEOUT` / `MODEL_RATE_LIMIT` / `MODEL_INVALID_OUTPUT`
 - `TOOL_TIMEOUT` / `TOOL_PERMISSION_DENIED` / `TOOL_SCHEMA_INVALID`
 - `PATCH_CONFLICT` / `PATH_POLICY_VIOLATION`
-- `COMMAND_EXIT_NONZERO` / `DEPENDENCY_INSTALL_FAILED` / `NETWORK_BLOCKED`
+- `COMMAND_EXIT_NONZERO` / `DEPENDENCY_INSTALL_FAILED` / `NETWORK_BLOCKED` / `NETWORK_INTENT_BLOCKED`
 - `TYPECHECK_FAILED` / `LINT_FAILED` / `TEST_FAILED` / `BUILD_FAILED`
 - `BUDGET_EXCEEDED` / `NO_PROGRESS` / `CANCELLED`
 - `SANDBOX_FAILURE` / `WORKSPACE_CONFLICT`

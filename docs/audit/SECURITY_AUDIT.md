@@ -12,14 +12,14 @@
 
 但有 **6 条真实可用的绕过/失效通道**，其中 2 条我写探针证实了可复现行为。**复核后 5 条已修复，1 条是已知限制**（见下表"现状"列与 §0.1）：
 
-| 编号   | 问题                                                     | 严重度           | 可复现      | 现状（复核后）                                                |
-| ------ | -------------------------------------------------------- | ---------------- | ----------- | ------------------------------------------------------------- |
-| SEC-01 | 验证流水线绕过策略引擎执行仓库代码                       | 高               | ✅ 探针 P7  | ✅ 已修复（`loop.ts` 的 `authorize` 走 `evaluateValidation`） |
-| SEC-02 | PreToolUse 钩子可在判定后改写入参                        | 高（当前未接线） | ✅ 探针 P5a | ✅ 已修复（钩子已移到判定之前，并重跑校验）                   |
-| SEC-03 | 策略拒绝上限异常穿透执行器，任务死在 executing           | 中               | ✅ 探针 P1  | ✅ 已修复（`DENIAL_LIMIT_REACHED` 作为结果收口）              |
-| SEC-04 | `respectGitignore` 失效，配置的安全控制是空开关          | 中               | ✅ 代码路径 | ✅ 已修复（`setGitignorePatterns` 已接线）                    |
-| SEC-05 | allow 规则多路径用 `.some()`，任一路径命中即放行整次调用 | 中（当前潜伏）   | ✅ 探针 P8  | ✅ 已修复（allow 改 `every`，deny/ask 仍 `some`）             |
-| SEC-06 | 网络隔离只是命令字符串正则启发式                         | 中               | ✅ 代码路径 | ⚠️ 仍存在（受限子进程后端的固有限制）                         |
+| 编号   | 问题                                                     | 严重度           | 可复现      | 现状（复核后）                                                                |
+| ------ | -------------------------------------------------------- | ---------------- | ----------- | ----------------------------------------------------------------------------- |
+| SEC-01 | 验证流水线绕过策略引擎执行仓库代码                       | 高               | ✅ 探针 P7  | ✅ 已修复（`loop.ts` 的 `authorize` 走 `evaluateValidation`）                 |
+| SEC-02 | PreToolUse 钩子可在判定后改写入参                        | 高（当前未接线） | ✅ 探针 P5a | ✅ 已修复（钩子已移到判定之前，并重跑校验）                                   |
+| SEC-03 | 策略拒绝上限异常穿透执行器，任务死在 executing           | 中               | ✅ 探针 P1  | ✅ 已修复（`DENIAL_LIMIT_REACHED` 作为结果收口）                              |
+| SEC-04 | `respectGitignore` 失效，配置的安全控制是空开关          | 中               | ✅ 代码路径 | ✅ 已修复（`setGitignorePatterns` 已接线）                                    |
+| SEC-05 | allow 规则多路径用 `.some()`，任一路径命中即放行整次调用 | 中（当前潜伏）   | ✅ 探针 P8  | ✅ 已修复（allow 改 `every`，deny/ask 仍 `some`）                             |
+| SEC-06 | 网络隔离只是命令字符串正则启发式                         | 中               | ✅ 代码路径 | 🟡 部分修复（已改名 + 能力位 + 默认档位按后端能力；真断网仍待 Docker/内核级） |
 
 ### 0.1 复核说明
 
@@ -33,8 +33,11 @@
   由主循环收口并落终态。
 - SEC-04：`runtime.create()` 读 `.gitignore` 与 `.git/info/exclude` 并注入 PathGuard。
 - SEC-05：`engine.ts` 的多路径量化按效应区分（allow → `every`，deny/ask → `some`）。
-- SEC-06：仍是正则启发式，属于"受限子进程后端做不到真断网"的已知限制，
-  升级路径是 Docker 后端（`--network none`）或平台级网络命名空间。
+- SEC-06：第一层已修 —— 检查函数改名为 `networkIntentGuard`、错误码拆成
+  `NETWORK_INTENT_BLOCKED`（意图拦截，不代表出口被切断），`SandboxBackend` 增加
+  `capabilities { networkIsolation, filesystemIsolation }` 与 `defaultNetworkProfile`，
+  默认档位改为按后端能力决定（Docker → `none`，受限子进程 → `inherit`）。
+  **真断网仍未实现**：升级路径是 Docker 后端（`--network none`）或平台级网络命名空间。
 
 另外，本轮修复补上了一个原审计**没有覆盖**的 P1 路径逃逸（见 §1.2 末尾）。
 
@@ -176,6 +179,20 @@ deny 用 `.some` 正确（任一违规即拒）。allow 必须是 `.every`——
 并在 `doctor` 的 coverage 里明确写"NOT covered: network egress"（目前 `sandbox/index.ts:239-245`
 在 `enabled: false` 时确实这么写了，但 `enabled: true` + Docker 可用时没有提这一点）。
 
+> **第一层已修复**：
+>
+> - 检查函数改名 `networkIntentGuard`，正则常量 `NETWORK_INTENT_PATTERN`；
+> - 错误码拆成两条 —— `NETWORK_INTENT_BLOCKED`（后端起不到隔离作用时的意图拦截）、
+>   `NETWORK_BLOCKED`（真隔离后端确实挡住了出口，留给 Docker / 内核级后端）；
+> - `SandboxBackend` 新增 `capabilities { networkIsolation, filesystemIsolation }`
+>   与 `defaultNetworkProfile`，`doctor` 的 coverage 三处（未启用 / degraded / Docker）都写明默认档位；
+> - `CommandRequest.networkProfile` 改为可选，默认值由**后端能力**补齐
+>   （Docker → `none`，受限子进程 → `inherit`），不再写死 `none` —— 宁可承认不隔离，也不假装隔离；
+> - 新增 `inherit` 档位，语义是"不做任何网络干预"。
+>
+> **仍存在**：受限子进程后端没有能力真断网，`inherit` 就是它的诚实默认。
+> 真断网排在第二层（Docker `--network none`，Linux `unshare -n`，macOS `sandbox-exec`）。
+
 ### 1.5 敏感信息泄露
 
 **判定：IMPLEMENTED**
@@ -247,23 +264,23 @@ POSIX 下子进程独立进程组，若父进程被 SIGKILL（无法捕获），
 
 ## 2. 安全控制有效性矩阵
 
-| 控制                   | 声明位置                 | 是否真的生效 | 证据                                 |
-| ---------------------- | ------------------------ | ------------ | ------------------------------------ |
-| 无 shell 执行          | `process-runner.ts:5-6`  | ✅           | `shell: false`                       |
-| 路径必须在工作区       | `pathguard.ts:129-200`   | ✅           | realpath（含祖先解析）+ 测试         |
-| 符号链接写入拦截       | `pathguard.ts:186-191`   | ✅           | 显式检查 + 端到端回归用例            |
-| cwd 必须在工作区       | `pathguard.ts:203-213`   | ✅           | 已补 realpath（见 §1.1）             |
-| deny 优先于 allow      | `engine.ts:166-178`      | ✅           | 有测试                               |
-| bypass-immune 不可绕过 | `engine.ts:249-268`      | ✅           | 有测试                               |
-| 审批绑定参数           | `runtime.ts:459-486`     | ✅           | 有测试                               |
-| 审批单次生效           | `sqlite.ts:545-567`      | ✅           | `WHERE status='pending'`             |
-| 无 TTY 默认拒绝        | `engine.ts:351-356`      | ✅           | 有测试                               |
-| 所有执行都过策略       | `command.ts:129-130`     | ✅           | 已修（SEC-01，验证阶段也走策略）     |
-| 钩子不能改判定依据     | —                        | ✅           | 已修（SEC-02，钩子在判定之前）       |
-| 拒绝上限优雅降级       | `engine.ts:190`          | ✅           | 已修（SEC-03，作为结果收口）         |
-| gitignore 生效         | `settings.ts:39`         | ✅           | 已修（SEC-04，规则已注入 PathGuard） |
-| allow 多路径全命中     | —                        | ✅           | 已修（SEC-05，allow 用 `every`）     |
-| 网络真断               | `sandbox/index.ts:58-64` | ⚠️ 启发式    | SEC-06（受限子进程后端的固有边界）   |
+| 控制                   | 声明位置                 | 是否真的生效 | 证据                                                          |
+| ---------------------- | ------------------------ | ------------ | ------------------------------------------------------------- |
+| 无 shell 执行          | `process-runner.ts:5-6`  | ✅           | `shell: false`                                                |
+| 路径必须在工作区       | `pathguard.ts:129-200`   | ✅           | realpath（含祖先解析）+ 测试                                  |
+| 符号链接写入拦截       | `pathguard.ts:186-191`   | ✅           | 显式检查 + 端到端回归用例                                     |
+| cwd 必须在工作区       | `pathguard.ts:203-213`   | ✅           | 已补 realpath（见 §1.1）                                      |
+| deny 优先于 allow      | `engine.ts:166-178`      | ✅           | 有测试                                                        |
+| bypass-immune 不可绕过 | `engine.ts:249-268`      | ✅           | 有测试                                                        |
+| 审批绑定参数           | `runtime.ts:459-486`     | ✅           | 有测试                                                        |
+| 审批单次生效           | `sqlite.ts:545-567`      | ✅           | `WHERE status='pending'`                                      |
+| 无 TTY 默认拒绝        | `engine.ts:351-356`      | ✅           | 有测试                                                        |
+| 所有执行都过策略       | `command.ts:129-130`     | ✅           | 已修（SEC-01，验证阶段也走策略）                              |
+| 钩子不能改判定依据     | —                        | ✅           | 已修（SEC-02，钩子在判定之前）                                |
+| 拒绝上限优雅降级       | `engine.ts:190`          | ✅           | 已修（SEC-03，作为结果收口）                                  |
+| gitignore 生效         | `settings.ts:39`         | ✅           | 已修（SEC-04，规则已注入 PathGuard）                          |
+| allow 多路径全命中     | —                        | ✅           | 已修（SEC-05，allow 用 `every`）                              |
+| 网络真断               | `sandbox/index.ts:58-64` | ⚠️ 启发式    | SEC-06 第一层已修（能力位 + 默认档位 + 拆码）；真断网待第二层 |
 
 ## 3. 与文档声明的偏差（需要修文档或修代码）
 
@@ -288,6 +305,7 @@ POSIX 下子进程独立进程组，若父进程被 SIGKILL（无法捕获），
 3. **SEC-03**（一个 `try/catch` + 一次循环内判断）—— 让拒绝上限优雅收场；✅ 已完成
 4. **SEC-05**（`.some` → `.every`）—— 一行，但要在加多路径写工具之前；✅ 已完成
 5. **SEC-04**（传 `gitignorePatterns`）—— 让配置项名副其实；✅ 已完成
-6. **SEC-06**（改名 + 声明）—— 把"启发式"诚实地叫启发式；⚠️ 仍在待办
+6. **SEC-06**（改名 + 声明）—— 把"启发式"诚实地叫启发式；✅ 第一层已完成（改名 `NETWORK_INTENT_BLOCKED`、
+   能力位 `capabilities`、默认档位按后端能力）；⚠️ 真断网仍待第二层
 
 本轮另补 **路径祖先解析**（§1.2 末尾），它是原审计未覆盖的 P1 逃逸，已修复并配端到端回归用例。

@@ -7,8 +7,9 @@
  * 一旦某一步失败就进入 Repair Loop，不必等到最后一步才发现问题。
  *
  * 错误码不同，恢复策略完全不同：`TEST_FAILED` 让模型进 Repair Loop 去修；
- * `NETWORK_BLOCKED` 不该让模型反复重写代码；`TOOL_PERMISSION_DENIED` 更不能
- * 让模型换一条命令绕过策略。
+ * `NETWORK_BLOCKED` / `NETWORK_INTENT_BLOCKED` 不该让模型反复重写代码
+ * （前者是出口真被拦，后者是命令看起来要联网被拒——都不是代码的错）；
+ * `TOOL_PERMISSION_DENIED` 更不能让模型换一条命令绕过策略。
  */
 
 import type { CommandRequestInput, CommandResult, ValidationReport } from "../shared/contracts.js"

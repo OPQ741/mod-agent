@@ -30,7 +30,9 @@ import {
   type TempWorkspace,
 } from "./helpers.js"
 import { final, parallelToolUse, toolUse } from "../src/model/scripted.js"
+import { ScriptedProvider } from "../src/model/scripted.js"
 import { ModelGateway } from "../src/model/gateway.js"
+import { updateTaskWithRetry } from "../src/runtime/task-write.js"
 import { AgentRuntime } from "../src/runtime/runtime.js"
 import { ToolExecutor } from "../src/tools/executor.js"
 import { ToolRegistry } from "../src/tools/registry.js"
@@ -904,5 +906,142 @@ describe("回归 · 退避期间取消要立刻返回", () => {
     ).rejects.toMatchObject({ code: "CANCELLED" })
     expect(Date.now() - started).toBeLessThan(3_000)
     expect(attempts).toBe(1)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑲ 取消/暂停与循环收尾的并发写入（乐观锁）
+ * ------------------------------------------------------------------ */
+
+describe("回归 · 取消与收尾并发写入不再抛穿", () => {
+  it("乐观锁冲突时重读重试，而不是把 VersionConflictError 抛给调用方", async () => {
+    const ws = await workspace()
+    const store = new MemoryStore()
+    const runtime = await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({ mode: "edit" }),
+      provider: new ScriptedProvider([final("done")]),
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "go", mode: "edit" })
+    const inner = store.updateTask.bind(store)
+    let conflicts = 0
+    let injected = false
+    ;(store as unknown as { updateTask: typeof inner }).updateTask = async (
+      id,
+      patch,
+      expected,
+    ) => {
+      if (!injected) {
+        injected = true
+        const current = await store.getTask(id)
+        // 对手先写一次：版本号前进，让下面那次 CAS 必然失败
+        await inner(id, { lastErrorCode: "RACE" }, current!.stateVersion)
+        conflicts += 1
+      }
+      return inner(id, patch, expected)
+    }
+
+    const result = await updateTaskWithRetry(
+      store,
+      taskId,
+      { status: "executing" },
+      { sleep: async () => undefined },
+    )
+
+    expect(result.applied).toBe(true)
+    expect(result.conflicts).toBe(conflicts)
+    expect(result.state.status).toBe("executing")
+  })
+
+  it("取消执行中的任务写 cancelling（不是直接跳到 cancelled）", async () => {
+    const ws = await workspace()
+    const store = new MemoryStore()
+    const runtime = await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({ mode: "edit" }),
+      provider: new ScriptedProvider([final("done")]),
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "go", mode: "edit" })
+
+    await runtime.cancel(taskId)
+
+    /**
+     * `executing → cancelled` 不在迁移表里（必须经 `cancelling`）。
+     * 直接写 `cancelled` 会让库停在 executing，而调用方以为已取消。
+     */
+    const state = await store.getTask(taskId)
+    expect(state?.status).toBe("cancelling")
+    expect(state?.cancelRequestedAt).toBeTruthy()
+  })
+
+  it("已完成的任务收到取消：不改状态、不抛错", async () => {
+    const ws = await workspace()
+    const store = new MemoryStore()
+    const runtime = await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({ mode: "edit" }),
+      provider: new ScriptedProvider([final("done")]),
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "go", mode: "edit" })
+    await collect(runtime.run(taskId))
+    expect((await store.getTask(taskId))?.status).toBe("completed")
+
+    // 连点两次取消：幂等，且不能把已交付的任务改回 cancelled
+    await expect(runtime.cancel(taskId)).resolves.toBeUndefined()
+    await expect(runtime.cancel(taskId)).resolves.toBeUndefined()
+    expect((await store.getTask(taskId))?.status).toBe("completed")
+  })
+
+  it("循环收尾时库已被外部取消 → 不把 cancelling 覆盖成 completed", async () => {
+    const ws = await workspace()
+    const store = new MemoryStore()
+    const runtime = await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({ mode: "edit" }),
+      provider: new ScriptedProvider([final("done")]),
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "go", mode: "edit" })
+
+    /**
+     * 确定性复现竞态：在循环第一次写库（queued → executing）时，
+     * 让"外部取消"先落库。真实世界里这是两个进程/两段代码的几微秒窗口，
+     * 这里用可注入的 store 把它变成必然发生。
+     */
+    const inner = store.updateTask.bind(store)
+    let injected = false
+    ;(store as unknown as { updateTask: typeof inner }).updateTask = async (
+      id,
+      patch,
+      expected,
+    ) => {
+      if (!injected) {
+        injected = true
+        const current = await store.getTask(id)
+        await inner(
+          id,
+          { status: "cancelling", cancelRequestedAt: new Date().toISOString() },
+          current!.stateVersion,
+        )
+      }
+      return inner(id, patch, expected)
+    }
+
+    const { outcome } = await collect(runtime.run(taskId))
+
+    // 库与内存必须一致：用户取消优先于收尾，不能出现"内存 completed、库里 cancelling"
+    expect((await store.getTask(taskId))?.status).toBe("cancelled")
+    expect(outcome.status).toBe("cancelled")
   })
 })

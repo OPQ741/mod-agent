@@ -20,7 +20,7 @@ import type {
   TaskEvent,
   TaskMode,
 } from "../shared/contracts.js"
-import { DEFAULT_BUDGET } from "../shared/contracts.js"
+import { DEFAULT_BUDGET, isTerminalStatus } from "../shared/contracts.js"
 import { AppError } from "../shared/errors.js"
 import { newTaskId } from "../shared/ids.js"
 import { sha256 } from "../shared/hash.js"
@@ -63,7 +63,8 @@ import type { ValidationCheck } from "../validation/runner.js"
 import { discoverChecks } from "../tools/builtin/command.js"
 import { runTask, type LoopDeps, type LoopOptions, type LoopOutcome } from "./loop.js"
 import { createUsage } from "../shared/contracts.js"
-import { isResumable } from "./state-machine.js"
+import { canTransition, isResumable } from "./state-machine.js"
+import { updateTaskWithRetry } from "./task-write.js"
 import { stripInvisibleCharacters } from "../shared/sanitize.js"
 
 export interface RuntimeOptions {
@@ -380,7 +381,8 @@ export class AgentRuntime {
       settings: this.settings,
       logger: this.logger,
       metrics: this.metrics,
-      runCommand: (req) => this.sandbox.exec(normalize(req), options.signal),
+      runCommand: (req) =>
+        this.sandbox.exec(normalize(req, this.sandbox.defaultNetworkProfile), options.signal),
       isPlanModeActive: () => this.planModeActive,
     }
 
@@ -415,24 +417,68 @@ export class AgentRuntime {
     return yield* runTask(deps, loopOptions)
   }
 
-  /** 暂停：不再开始新的工具调用，保存现场后退出。 */
+  /**
+   * 暂停：不再开始新的工具调用，保存现场后退出。
+   *
+   * 三条纪律与 `cancel()` 相同：走状态机（不是硬写）、幂等、冲突重试。
+   * 之前这里既没校验迁移合法性（`completed → paused` 会写进去，破坏状态机），
+   * 也没重试（与循环收尾竞争时把 `VersionConflictError` 抛给调用方）。
+   */
   async pause(taskId: string): Promise<void> {
-    const state = await this.store.getTask(taskId)
-    if (!state) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
-    await this.store.updateTask(taskId, { status: "paused" }, state.stateVersion)
-    await this.appendEvent(taskId, "task.status_changed", { from: state.status, to: "paused" })
+    const result = await updateTaskWithRetry(
+      this.store,
+      taskId,
+      { status: "paused" },
+      {
+        stopIf: (state) =>
+          state.status === "paused" || !canTransition(state.status, "paused").allowed,
+      },
+    )
+    if (!result.applied) {
+      await this.appendEvent(taskId, "task.warning", {
+        reason: "pause_ignored",
+        status: result.state.status,
+        detail: result.reason,
+      })
+      return
+    }
+    await this.appendEvent(taskId, "task.status_changed", {
+      from: result.previous?.status ?? result.state.status,
+      to: "paused",
+    })
   }
 
-  /** 取消：记录原因，不假装能回滚已发生的外部副作用。 */
+  /**
+   * 取消：记录"取消请求"并把状态推进到 `cancelling`，由主循环收口为 `cancelled`。
+   *
+   * 为什么不直接写 `cancelled`：`executing → cancelled` **不在状态机迁移表里**
+   * （必须经 `cancelling`）。直接写会让库停在 executing、而调用方以为已取消；
+   * 之后 `--continue` 还会把它当成可恢复任务再跑一遍。
+   *
+   * 取消是**幂等**的：任务已在 `cancelling` 或已到终态时不再改状态，只留一条告警，
+   * 不抛错 —— 用户连点两次取消不该收到一个异常。
+   */
   async cancel(taskId: string, reason = "cancelled by user"): Promise<void> {
-    const state = await this.store.getTask(taskId)
-    if (!state) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
-    await this.store.updateTask(
+    const result = await updateTaskWithRetry(
+      this.store,
       taskId,
-      { status: "cancelled", cancelRequestedAt: this.now().toISOString() },
-      state.stateVersion,
+      { status: "cancelling", cancelRequestedAt: this.now().toISOString() },
+      {
+        stopIf: (state) =>
+          isTerminalStatus(state.status) ||
+          state.status === "cancelling" ||
+          !canTransition(state.status, "cancelling").allowed,
+      },
     )
-    await this.appendEvent(taskId, "task.cancelled", { reason })
+    if (!result.applied) {
+      await this.appendEvent(taskId, "task.warning", {
+        reason: "cancel_ignored",
+        status: result.state.status,
+        detail: result.reason,
+      })
+      return
+    }
+    await this.appendEvent(taskId, "task.cancelled", { reason, phase: "requested" })
   }
 
   /** 恢复：先检查未闭合的工具调用，再决定重跑 / 查证 / 标记未知。 */
@@ -441,6 +487,30 @@ export class AgentRuntime {
   ): Promise<{ resumed: boolean; openCalls: number; unknownOutcomes: string[] }> {
     const state = await this.store.getTask(taskId)
     if (!state) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
+    /**
+     * 停在 `cancelling` 的任务不该可恢复。
+     *
+     * 这通常意味着"取消请求已经落库、但收口没来得及执行"（进程在中间被杀）。
+     * 以前这里会抛"不可恢复"，任务就永远卡在 `cancelling` —— 既不能续跑，
+     * 也不能被 `--continue` 清理。这里顺手把终态补上，再如实告诉调用方。
+     */
+    if (state.status === "cancelling") {
+      await updateTaskWithRetry(
+        this.store,
+        taskId,
+        { status: "cancelled" },
+        { stopIf: (current) => isTerminalStatus(current.status) },
+      )
+      await this.appendEvent(taskId, "task.status_changed", {
+        from: "cancelling",
+        to: "cancelled",
+        reason: "closed_dangling_cancelling",
+      })
+      throw new AppError(
+        "INVALID_INPUT",
+        `Task ${taskId} had a pending cancel request; it is now closed as cancelled`,
+      )
+    }
     if (!isResumable(state.status)) {
       throw new AppError(
         "INVALID_INPUT",
@@ -460,14 +530,27 @@ export class AgentRuntime {
       unknownOutcomes.push(call.id)
     }
 
-    await this.store.updateTask(taskId, { status: "queued" }, state.stateVersion)
+    const requeued = await updateTaskWithRetry(
+      this.store,
+      taskId,
+      { status: "queued" },
+      /**
+       * 守卫只看终态与 `cancelling`。
+       *
+       * 恢复的真实路径是 `awaiting_approval → queued`（审批后重新排队），
+       * 而这一条不在迁移表里 —— 套用 `canTransition` 会把所有"审批后续跑"挡成 `resumed: false`。
+       */
+      {
+        stopIf: (current) => isTerminalStatus(current.status) || current.status === "cancelling",
+      },
+    )
     await this.appendEvent(taskId, "task.status_changed", {
       from: state.status,
       to: "queued",
       openCalls: openCalls.length,
       unknownOutcomes,
     })
-    return { resumed: true, openCalls: openCalls.length, unknownOutcomes }
+    return { resumed: requeued.applied, openCalls: openCalls.length, unknownOutcomes }
   }
 
   /**
@@ -525,15 +608,18 @@ export class AgentRuntime {
    */
   async diff(options: { statOnly?: boolean; cwd?: string } = {}): Promise<CommandResult> {
     return this.sandbox.exec(
-      normalize({
-        executable: "git",
-        args: options.statOnly ? ["diff", "--stat"] : ["diff"],
-        cwd: options.cwd ?? this.workspaceRoot,
-        timeoutMs: 30_000,
-        networkProfile: "none",
-        reason: "Show the current workspace diff to the user",
-        onTimeout: "kill",
-      }),
+      normalize(
+        {
+          executable: "git",
+          args: options.statOnly ? ["diff", "--stat"] : ["diff"],
+          cwd: options.cwd ?? this.workspaceRoot,
+          timeoutMs: 30_000,
+          networkProfile: "none",
+          reason: "Show the current workspace diff to the user",
+          onTimeout: "kill",
+        },
+        this.sandbox.defaultNetworkProfile,
+      ),
     )
   }
 
@@ -637,13 +723,18 @@ function toKind(id: string): ValidationCheck["kind"] {
 
 function normalize(
   req: import("../shared/contracts.js").CommandRequestInput,
+  defaultNetworkProfile: import("../shared/contracts.js").NetworkProfile,
 ): import("../shared/contracts.js").CommandRequest {
   return {
     executable: req.executable,
     args: req.args ?? [],
     cwd: req.cwd,
     timeoutMs: req.timeoutMs ?? DEFAULT_SETTINGS.limits.commandTimeoutMs,
-    networkProfile: req.networkProfile ?? "none",
+    /**
+     * 默认档位来自**后端能力**，不是写死的常量：
+     * Docker 后端能真的断网 → 默认 `none`；受限子进程断不了 → 默认 `inherit`。
+     */
+    networkProfile: req.networkProfile ?? defaultNetworkProfile,
     reason: req.reason,
     onTimeout: req.onTimeout ?? "kill",
     ...(req.env ? { env: req.env } : {}),

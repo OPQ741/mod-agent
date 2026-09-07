@@ -44,6 +44,7 @@ import { parameterHash, sha256, stableStringify } from "../shared/hash.js"
 import type { ContentBlock, ModelMessage, ModelResponse } from "../model/types.js"
 import type { ModelGateway, RetryEvent } from "../model/gateway.js"
 import type { Store } from "../store/types.js"
+import { updateTaskWithRetry } from "./task-write.js"
 import type { ToolExecutor } from "../tools/executor.js"
 import type { ToolRegistry } from "../tools/registry.js"
 import type { PolicyEngine } from "../policy/engine.js"
@@ -305,8 +306,42 @@ export async function* runTask(
     const from = latest?.status ?? state.status
     let event: TaskEvent | undefined
     if (latest && assertSafeTransition(from, status)) {
-      await deps.store.updateTask(options.taskId, { status, usage }, latest.stateVersion)
-      event = await sink.emit("task.status_changed", { from, to: status, subtype })
+      /**
+       * 用重试写入而不是裸 `updateTask`：从上面 `getTask` 到这里之间，
+       * 「取消/暂停」可能刚好落库。裸 CAS 会抛 `VersionConflictError`，
+       * 而它是普通 Error，`toAppError` 兜不住 —— 直接把生成器掀翻。
+       *
+       * 守卫同样关键：重读时若当前状态已不允许转到目标（典型是别人先写了
+       * `cancelling`，而这里想写 `completed`），就**放弃写入**。
+       * 用户取消优先于收尾：把取消覆盖成"成功交付"比冲突本身更糟。
+       */
+      const written = await updateTaskWithRetry(
+        deps.store,
+        options.taskId,
+        { status, usage },
+        { stopIf: (current) => !assertSafeTransition(current.status, status) },
+      )
+      if (written.applied) {
+        event = await sink.emit("task.status_changed", { from, to: status, subtype })
+      } else {
+        deps.logger.warn("task.finish_write_abandoned", {
+          taskId: options.taskId,
+          attempted: status,
+          actual: written.state.status,
+          reason: written.reason,
+          conflicts: written.conflicts,
+        })
+        /**
+         * 库已经被外部推进到 `cancelling`：以**库**为准，把终态也收成 `cancelled`。
+         *
+         * 否则会出现"内存返回 completed、库里停在 cancelling"的双重真相：
+         * CLI 报成功、`--continue` 却认为任务还没结束。`cancelling → cancelled`
+         * 是合法转换，再走一次 `finish` 就能收敛，且只递归一层。
+         */
+        if (written.state.status === "cancelling") {
+          return finish("cancelled", "cancelled", "Cancelled while finishing the task", validation)
+        }
+      }
     } else if (latest && from !== status) {
       /**
        * 拒绝转换必须留下痕迹。
@@ -337,7 +372,22 @@ export async function* runTask(
   // 进入执行态
   if (!isTerminalStatus(state.status) && state.status !== "executing") {
     yield await sink.emit("task.status_changed", { from: state.status, to: "executing" })
-    await deps.store.updateTask(options.taskId, { status: "executing" }, state.stateVersion)
+    /**
+     * `state` 是循环开始时的快照，版本号可能已经旧了（创建与开跑之间还有一次写入）。
+     * 用重试写入，避免"刚开跑就撞乐观锁"表现为任务卡在 queued。
+     *
+     * 守卫只看**终态与 cancelling**，不套用完整迁移表：`queued → executing`
+     * 这条真实路径本来就不在表里（任务创建后直接开跑，不经过 initializing），
+     * 用迁移表做守卫会把每个任务都挡在 queued。
+     */
+    await updateTaskWithRetry(
+      deps.store,
+      options.taskId,
+      { status: "executing" },
+      {
+        stopIf: (current) => isTerminalStatus(current.status) || current.status === "cancelling",
+      },
+    )
   }
 
   let currentStatus: TaskStatus = "executing"
@@ -353,7 +403,22 @@ export async function* runTask(
     const latest = await deps.store.getTask(options.taskId)
     if (!latest || latest.status === to) return undefined
     if (!assertSafeTransition(latest.status, to)) return undefined
-    await deps.store.updateTask(options.taskId, { status: to, usage }, latest.stateVersion)
+    const written = await updateTaskWithRetry(
+      deps.store,
+      options.taskId,
+      { status: to, usage },
+      // 重读后若已不允许转到 `to`（例如中途被取消），放弃而不是硬写
+      { stopIf: (current) => !assertSafeTransition(current.status, to) },
+    )
+    if (!written.applied) {
+      deps.logger.warn("task.transition_abandoned", {
+        taskId: options.taskId,
+        attempted: to,
+        actual: written.state.status,
+        reason: written.reason,
+      })
+      return undefined
+    }
     currentStatus = to
     return sink.emit("task.status_changed", { from: latest.status, to })
   }
@@ -989,10 +1054,12 @@ export async function* runTask(
 
         const latestState = await deps.store.getTask(options.taskId)
         if (latestState) {
-          await deps.store.updateTask(
+          // 审批前落库同样要抗竞争：用户可能正在取消，不该把状态写回 awaiting_approval
+          await updateTaskWithRetry(
+            deps.store,
             options.taskId,
             { status: "awaiting_approval", usage },
-            latestState.stateVersion,
+            { stopIf: (current) => !assertSafeTransition(current.status, "awaiting_approval") },
           )
         }
         const settled = await finish(

@@ -13,6 +13,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import type { CommandRequest, CommandResult } from "../shared/contracts.js"
 import { AppError } from "../shared/errors.js"
 import { filterEnv, isSensitiveEnvName, stripAnsi } from "../shared/sanitize.js"
+import { resolveExecutable } from "./executable-resolver.js"
 
 export interface RunProcessOptions {
   /** 单条命令的字节硬顶，超过即截断并标 truncated。 */
@@ -73,12 +74,24 @@ export async function runProcess(
   }
 
   const env = filterEnv(process.env, undefined, request.env)
-  const child = spawn(request.executable, request.args, {
+  /**
+   * Windows 上 `npm` / `npx` / `yarn` 是 `.cmd` shim，`shell: false` 既做不了 PATHEXT 解析、
+   * 又不允许直接 spawn 批处理（Node 对 CVE-2024-27980 的修复会抛 EINVAL）。
+   * 这里统一交给解析器决定：要么原样 spawn，要么显式经 `cmd.exe` 包装。
+   * **仍然不用 `shell: true`** —— 参数边界必须保住。
+   */
+  const resolved = await resolveExecutable(request.executable, request.args, {
+    env,
+    cwd: request.cwd,
+  })
+  const child = spawn(resolved.command, resolved.args, {
     cwd: request.cwd,
     env,
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
     windowsHide: true,
+    // `.cmd` 包装时命令行已由 resolver 逐参引号化，不能让 Node 再拼一遍
+    windowsVerbatimArguments: resolved.viaCmdHost,
     // POSIX 下独立进程组，便于超时时整组 kill
     detached: process.platform !== "win32",
   })
