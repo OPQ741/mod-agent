@@ -290,7 +290,20 @@ export function parseAnthropicResponse(json: unknown, fallbackModel: string): Mo
 type StreamBlock =
   | { kind: "text"; text: string }
   | { kind: "thinking"; thinking: string }
-  | { kind: "tool_use"; id: string; name: string; json: string; input: Record<string, unknown> }
+  | {
+      kind: "tool_use"
+      id: string
+      name: string
+      json: string
+      input: Record<string, unknown>
+      /**
+       * 参数是否已经**完整**收到（`content_block_stop` 到达且 JSON 能解析）。
+       *
+       * 断流恢复只认 `complete === true` 的块：半截参数的调用如果被当成
+       * "已完成的工具调用"补进历史，模型会以为一个带着残缺参数的动作执行过了。
+       */
+      complete: boolean
+    }
 
 /**
  * 把 Anthropic 的 SSE 事件流拼成消息，最后复用 `parseAnthropicResponse`。
@@ -316,83 +329,94 @@ async function* parseAnthropicStream(
   const usage: Record<string, unknown> = {}
   const blocks: Array<StreamBlock | undefined> = []
 
-  for await (const event of readSseEvents(body)) {
-    if (event.event === "error") {
-      throw new AppError(
-        "MODEL_NETWORK",
-        `Anthropic stream reported an error: ${event.data.slice(0, 200)}`,
-      )
-    }
+  try {
+    for await (const event of readSseEvents(body)) {
+      if (event.event === "error") {
+        throw new AppError(
+          "MODEL_NETWORK",
+          `Anthropic stream reported an error: ${event.data.slice(0, 200)}`,
+        )
+      }
 
-    const json = parseSseJson(event.data)
-    if (!json) continue
-    const type = typeof json.type === "string" ? json.type : event.event
+      const json = parseSseJson(event.data)
+      if (!json) continue
+      const type = typeof json.type === "string" ? json.type : event.event
 
-    switch (type) {
-      case "message_start": {
-        const message = asRecord(json.message)
-        if (typeof message.model === "string") model = message.model
-        if (typeof message.id === "string") requestId = message.id
-        mergeUsage(usage, asRecord(message.usage))
-        break
-      }
-      case "content_block_start": {
-        const index = blockIndex(json, blocks.length)
-        const block = asRecord(json.content_block)
-        if (block.type === "text") {
-          const text = typeof block.text === "string" ? block.text : ""
-          blocks[index] = { kind: "text", text }
-          if (text.length > 0) yield { type: "text", text }
-        } else if (block.type === "tool_use") {
-          const id = typeof block.id === "string" ? block.id : `tool_${index}`
-          const name = typeof block.name === "string" ? block.name : ""
-          blocks[index] = { kind: "tool_use", id, name, json: "", input: {} }
-          yield { type: "tool_start", index, id, name }
-        } else if (block.type === "thinking") {
-          const thinking = typeof block.thinking === "string" ? block.thinking : ""
-          blocks[index] = { kind: "thinking", thinking }
-          if (thinking.length > 0) yield { type: "thinking", thinking }
+      switch (type) {
+        case "message_start": {
+          const message = asRecord(json.message)
+          if (typeof message.model === "string") model = message.model
+          if (typeof message.id === "string") requestId = message.id
+          mergeUsage(usage, asRecord(message.usage))
+          break
         }
-        break
-      }
-      case "content_block_delta": {
-        const index = blockIndex(json, 0)
-        const delta = asRecord(json.delta)
-        if (delta.type === "text_delta") {
-          const text = typeof delta.text === "string" ? delta.text : ""
-          const block = ensureTextBlock(blocks, index)
-          block.text += text
-          if (text.length > 0) yield { type: "text", text }
-        } else if (delta.type === "input_json_delta") {
-          const partialJson = typeof delta.partial_json === "string" ? delta.partial_json : ""
-          const block = blocks[index]
-          if (block?.kind === "tool_use") block.json += partialJson
-          if (partialJson.length > 0) yield { type: "tool_args", index, partialJson }
-        } else if (delta.type === "thinking_delta") {
-          const thinking = typeof delta.thinking === "string" ? delta.thinking : ""
-          const block = blocks[index]
-          if (block?.kind === "thinking") block.thinking += thinking
-          if (thinking.length > 0) yield { type: "thinking", thinking }
+        case "content_block_start": {
+          const index = blockIndex(json, blocks.length)
+          const block = asRecord(json.content_block)
+          if (block.type === "text") {
+            const text = typeof block.text === "string" ? block.text : ""
+            blocks[index] = { kind: "text", text }
+            if (text.length > 0) yield { type: "text", text }
+          } else if (block.type === "tool_use") {
+            const id = typeof block.id === "string" ? block.id : `tool_${index}`
+            const name = typeof block.name === "string" ? block.name : ""
+            blocks[index] = { kind: "tool_use", id, name, json: "", input: {}, complete: false }
+            yield { type: "tool_start", index, id, name }
+          } else if (block.type === "thinking") {
+            const thinking = typeof block.thinking === "string" ? block.thinking : ""
+            blocks[index] = { kind: "thinking", thinking }
+            if (thinking.length > 0) yield { type: "thinking", thinking }
+          }
+          break
         }
-        // signature_delta 一类的块对业务无意义，直接忽略
-        break
+        case "content_block_delta": {
+          const index = blockIndex(json, 0)
+          const delta = asRecord(json.delta)
+          if (delta.type === "text_delta") {
+            const text = typeof delta.text === "string" ? delta.text : ""
+            const block = ensureTextBlock(blocks, index)
+            block.text += text
+            if (text.length > 0) yield { type: "text", text }
+          } else if (delta.type === "input_json_delta") {
+            const partialJson = typeof delta.partial_json === "string" ? delta.partial_json : ""
+            const block = blocks[index]
+            if (block?.kind === "tool_use") block.json += partialJson
+            if (partialJson.length > 0) yield { type: "tool_args", index, partialJson }
+          } else if (delta.type === "thinking_delta") {
+            const thinking = typeof delta.thinking === "string" ? delta.thinking : ""
+            const block = blocks[index]
+            if (block?.kind === "thinking") block.thinking += thinking
+            if (thinking.length > 0) yield { type: "thinking", thinking }
+          }
+          // signature_delta 一类的块对业务无意义，直接忽略
+          break
+        }
+        case "content_block_stop": {
+          const index = blockIndex(json, 0)
+          finalizeToolBlock(blocks[index])
+          if (blocks[index]?.kind === "tool_use") yield { type: "tool_stop", index }
+          break
+        }
+        case "message_delta": {
+          const delta = asRecord(json.delta)
+          if (typeof delta.stop_reason === "string") stopReason = delta.stop_reason
+          mergeUsage(usage, asRecord(json.usage))
+          break
+        }
+        default:
+          // message_stop / ping 没有业务信息
+          break
       }
-      case "content_block_stop": {
-        const index = blockIndex(json, 0)
-        finalizeToolBlock(blocks[index])
-        if (blocks[index]?.kind === "tool_use") yield { type: "tool_stop", index }
-        break
-      }
-      case "message_delta": {
-        const delta = asRecord(json.delta)
-        if (typeof delta.stop_reason === "string") stopReason = delta.stop_reason
-        mergeUsage(usage, asRecord(json.usage))
-        break
-      }
-      default:
-        // message_stop / ping 没有业务信息
-        break
     }
+  } catch (err) {
+    /**
+     * 流读取中断（连接重置、代理断开、上游在流中报 error 事件）。
+     *
+     * 这里**不**做末尾兜底解析：断流时最后一块的参数很可能只有半截 JSON，
+     * 兜底会把"残缺参数"解析成 `{}` 或直接丢掉，两种都不诚实。
+     * 只把 `complete === true` 的调用交出去，由主循环决定怎么续。
+     */
+    throw interruptedStreamError(err, blocks)
   }
 
   // 少数服务端不发 content_block_stop：结尾统一兜底解析，避免参数停在半截
@@ -437,10 +461,68 @@ function ensureTextBlock(
 }
 
 function finalizeToolBlock(block: StreamBlock | undefined): void {
-  if (block?.kind !== "tool_use" || block.json.length === 0) return
+  if (block?.kind !== "tool_use") return
+  // 无参数的工具调用（`json` 为空）也是完整的一次调用，`{}` 就是它的参数
+  if (block.json.length === 0) {
+    block.complete = true
+    return
+  }
   const parsed = parseArgsSafely(block.json)
-  block.input = parsed.ok ? parsed.value : {}
-  block.json = ""
+  if (parsed.ok) {
+    block.input = parsed.value
+    block.complete = true
+    block.json = ""
+    return
+  }
+  /**
+   * 参数解析失败说明这一块**没收到完整参数**（典型是流在这里断了）。
+   * 保留 `complete: false`，既不拿去执行、也不冒充"已完成"参与断流恢复。
+   */
+  block.complete = false
+}
+
+/**
+ * 流中断时抛出什么。
+ *
+ * 两条不同的处理路径，取决于"断之前有没有吐出过东西"：
+ * - 一个增量都没吐（刚建连就断）：仍然是可重试的 `MODEL_NETWORK`，
+ *   交给网关按原有退避重试，用户无感；
+ * - 已经吐过增量：抛 `MODEL_STREAM_INTERRUPTED`（不可重试），并把
+ *   **已完成**的工具调用挂到 `details.toolCalls` —— 主循环据此补配对、
+ *   让模型在"已经看过自己说过什么"的基础上继续，而不是整段作废。
+ */
+function interruptedStreamError(
+  err: unknown,
+  blocks: ReadonlyArray<StreamBlock | undefined>,
+): AppError {
+  const original: AppError =
+    err instanceof AppError
+      ? err
+      : new AppError("MODEL_NETWORK", `Model stream failed: ${String(err)}`, { cause: err })
+
+  const progressed = blocks.some((block) => {
+    if (!block) return false
+    if (block.kind === "text") return block.text.length > 0
+    if (block.kind === "thinking") return block.thinking.length > 0
+    return block.json.length > 0 || block.complete
+  })
+  if (!progressed) return original
+
+  const toolCalls = blocks
+    .filter(
+      (block): block is Extract<StreamBlock, { kind: "tool_use" }> =>
+        block?.kind === "tool_use" && block.complete,
+    )
+    .map((block) => ({ id: block.id, name: block.name, input: block.input }))
+
+  return new AppError(
+    "MODEL_STREAM_INTERRUPTED",
+    `Model stream interrupted mid-response: ${original.message}`,
+    {
+      cause: err,
+      details: { toolCalls, upstreamCode: original.code },
+    },
+  )
 }
 
 function mergeUsage(target: Record<string, unknown>, source: Record<string, unknown>): void {

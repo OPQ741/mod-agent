@@ -25,6 +25,7 @@ import type {
   Decision,
   PermissionMode,
   TaskEvent,
+  CommandOutputChunk,
   TaskMode,
   ToolExecutionContext,
   ToolExecutionResult,
@@ -45,7 +46,7 @@ import type { ContentBlock, ModelMessage, ModelRequest, ModelResponse } from "..
 import type { ModelGateway, RetryEvent } from "../model/gateway.js"
 import type { Store } from "../store/types.js"
 import { updateTaskWithRetry } from "./task-write.js"
-import type { ToolExecutor } from "../tools/executor.js"
+import type { ExecutionOutcome, ToolExecutor } from "../tools/executor.js"
 import type { ToolRegistry } from "../tools/registry.js"
 import type { PolicyEngine } from "../policy/engine.js"
 import type { PathGuard } from "../policy/pathguard.js"
@@ -64,6 +65,7 @@ import {
   summarizeReport,
 } from "../validation/runner.js"
 import { diffText, summarize } from "../patch/diff.js"
+import { stripAnsi } from "../shared/sanitize.js"
 
 export interface LoopDeps {
   store: Store
@@ -76,8 +78,11 @@ export interface LoopDeps {
   settings: Settings
   logger: Logger
   metrics: Metrics
-  /** 命令运行器（沙箱注入）。 */
-  runCommand: (req: CommandRequestInput) => Promise<CommandResult>
+  /** 命令运行器（沙箱注入）。第二个参数用于把长命令的增量输出透传出去。 */
+  runCommand: (
+    req: CommandRequestInput,
+    options?: { onOutput?: (chunk: CommandOutputChunk) => void },
+  ) => Promise<CommandResult>
   /**
    * 计划模式是否处于激活状态。
    *
@@ -162,6 +167,62 @@ const OUTPUT_TRUNCATED_CONTINUE =
  */
 const DELTA_FLUSH_CHARS = 160
 const DELTA_FLUSH_CHUNKS = 8
+
+/**
+ * 断流恢复次数上限（每个任务）。
+ *
+ * 恢复会重新向模型发一次请求；若网络持续抖动，"恢复 → 又断 → 再恢复"会变成
+ * 一条烧钱又不出结果的死循环。一次足够：第一次用来保住已经完成的工具调用，
+ * 第二次仍断说明链路真的不可用，应该失败并把原因交给用户，而不是继续重试。
+ */
+const MAX_STREAM_RECOVERIES = 1
+
+/**
+ * 长命令增量输出的合并间隔。
+ *
+ * 200ms 是"看起来是实时"与"落库量可接受"之间的折中：一个跑 30 秒的构建
+ * 最多 150 条事件，而不是几千条；用户仍然能在一秒内看到进度在动。
+ */
+const PROGRESS_TICK_MS = 200
+/** 单条 `tool.progress` 的正文上限，超出的部分截断（完整输出仍在 `tool.completed`）。 */
+const PROGRESS_CHUNK_CHARS = 4_000
+
+/** 等一个 tick；命令结束时由 `Promise.race` 提前唤醒，不会真的等满。 */
+function progressTick(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, PROGRESS_TICK_MS)
+    // 定时器不应把进程吊着（测试结束时尤其明显）
+    if (typeof timer.unref === "function") timer.unref()
+  })
+}
+
+/**
+ * 把缓冲里的片段按流合并、清洗、截断，转成可发的事件正文。
+ *
+ * 按流分开是因为 stdout / stderr 混在一起会让人读不出哪句是错误；
+ * `stripAnsi` 在这里做（而不是沙箱逐块做）：逐块清洗会把跨块的半个转义
+ * 序列当成正文发出去，合并后再清洗才认得完整序列。
+ */
+function takeProgress(
+  queue: CommandOutputChunk[],
+): Array<{ stream: "stdout" | "stderr"; text: string }> {
+  if (queue.length === 0) return []
+  const byStream = new Map<"stdout" | "stderr", string>()
+  for (const chunk of queue.splice(0, queue.length)) {
+    byStream.set(chunk.stream, (byStream.get(chunk.stream) ?? "") + chunk.text)
+  }
+  const out: Array<{ stream: "stdout" | "stderr"; text: string }> = []
+  for (const [stream, raw] of byStream) {
+    // 只去掉行尾空白：行首缩进是输出格式的一部分（测试报告的缩进树、表格对齐）
+    const text = stripAnsi(raw).replace(/\s+$/u, "")
+    if (text.trim().length === 0) continue
+    out.push({
+      stream,
+      text: text.length > PROGRESS_CHUNK_CHARS ? `${text.slice(0, PROGRESS_CHUNK_CHARS)}…` : text,
+    })
+  }
+  return out
+}
 
 /* ------------------------------------------------------------------ *
  * 事件输出
@@ -402,6 +463,9 @@ export async function* runTask(
 
   let currentStatus: TaskStatus = "executing"
 
+  /** 本任务已做过几次断流恢复（见 `MAX_STREAM_RECOVERIES`）。 */
+  let streamRecoveries = 0
+
   /**
    * 显式状态迁移。
    *
@@ -531,6 +595,13 @@ export async function* runTask(
      * 但编译器看不到这条路径，所以用 definite assignment 断言兜住。
      */
     let response!: ModelResponse
+    /**
+     * 这一轮已经流式吐给用户的正文。
+     *
+     * 断流恢复要把它写回 assistant 历史：用户已经在屏幕上看到了这段文字，
+     * 如果历史里没有，模型下一轮会"不知道自己说过什么"而从头再讲一遍。
+     */
+    let streamedText = ""
     try {
       const request: ModelRequest = {
         model: deps.settings.model ?? "default",
@@ -566,6 +637,7 @@ export async function* runTask(
           }
           if (event.delta.type !== "text") continue
 
+          streamedText += event.delta.text
           pendingText += event.delta.text
           pendingChunks += 1
           if (pendingText.length >= DELTA_FLUSH_CHARS || pendingChunks >= DELTA_FLUSH_CHUNKS) {
@@ -614,6 +686,63 @@ export async function* runTask(
         return settled.outcome
       }
       const appError = toAppError(err, "MODEL_INVALID_OUTPUT")
+
+      /**
+       * 断流恢复：把"断之前已经完整收到"的工具调用补成合法历史，让模型继续。
+       *
+       * 为什么值得单独一条路径：流式下模型经常先说一段结论、再调一串工具。
+       * 走开丢掉整轮，等于让用户看到"我说完了要动手"，然后任务直接失败 ——
+       * 那些已经完整的调用本来可以执行，只是被一次网络抖动废掉了。
+       *
+       * 三条约束：
+       * 1. 只补 `complete` 的调用（参数残缺的不执行，也不假装执行过）；
+       * 2. 补完立刻 `continue`，**不**在本轮执行这些工具 —— 历史里它们已经是
+       *    "未执行"的失败结果，交给模型重新决定，避免"历史说没执行、实际执行了"；
+       * 3. 每个任务最多恢复一次，防止抖动时无限循环。
+       */
+      if (appError.code === "MODEL_STREAM_INTERRUPTED") {
+        const completed = readCompletedToolCalls(appError)
+        if (completed.length > 0 && streamRecoveries < MAX_STREAM_RECOVERIES) {
+          streamRecoveries += 1
+          deps.metrics.increment("model.stream_recovered")
+          yield await sink.emit("task.warning", {
+            reason: "stream_interrupted",
+            message: appError.message,
+            recoveredToolCalls: completed.length,
+            recoveriesLeft: MAX_STREAM_RECOVERIES - streamRecoveries,
+          })
+
+          const blocks: ContentBlock[] = []
+          if (streamedText.length > 0) blocks.push({ type: "text", text: streamedText })
+          for (const call of completed) {
+            blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.input })
+          }
+          messages.push({ role: "assistant", content: blocks })
+          messages.push({
+            role: "user",
+            content: [
+              ...completed.map((call) => ({
+                type: "tool_result" as const,
+                toolUseId: call.id,
+                content:
+                  "Not executed: the response stream was interrupted before this call could run. " +
+                  "Re-issue it if it is still needed.",
+                isError: true,
+              })),
+              {
+                type: "text" as const,
+                text:
+                  "Your previous response was cut off mid-stream. The tool calls above arrived complete " +
+                  "but were never executed. Continue from there: re-issue what you still need, and do not " +
+                  "repeat the part you already said.",
+              },
+            ],
+          })
+          await flushMessages()
+          continue
+        }
+      }
+
       deps.metrics.increment("model.error")
       yield await sink.emit("task.failed", { code: appError.code, message: appError.message })
       const settled = await finish("failed", "error_during_execution", appError.message)
@@ -1024,7 +1153,15 @@ export async function* runTask(
        * 四次调用后就会误报"这个文件已被重写 4 次"，把模型推进无意义的重新规划。
        */
       const callChangedFiles = new Set<string>()
-      const outcome = await deps.executor.execute({
+      /**
+       * 本次命令调用的增量输出缓冲。
+       *
+       * 沙箱每来一块数据就往这里塞，主循环每 `PROGRESS_TICK_MS` 合并发出一次。
+       * 不做逐块 emit 的理由和 `agent.message_delta` 一样：事件要落库，
+       * `npm test` 一秒能吐几十块，逐块写会把事件表撑成日志流水。
+       */
+      const progressQueue: CommandOutputChunk[] = []
+      const execPromise = deps.executor.execute({
         toolName: call.toolName,
         args: argsRecord,
         ctx: buildToolContext(
@@ -1036,6 +1173,7 @@ export async function* runTask(
             changedFiles.add(file)
           },
           state.workspaceRoot,
+          tool?.streamsOutput ? (chunk) => progressQueue.push(chunk) : undefined,
         ),
         /**
          * 策略判定的输入**必须在工具校验之后**再求值。
@@ -1065,6 +1203,51 @@ export async function* runTask(
         taskMode: effectiveTaskMode(),
         permissionMode: options.permissionMode,
       })
+
+      /**
+       * 边执行边把长命令的输出抖出去（`tool.progress`）。
+       *
+       * 生成器在 `await` 期间无法 yield，所以不能直接 `await execute()`：
+       * 那样进度只能在命令**结束后**一次性补发，等于没有实时性。
+       * 这里让执行 Promise 自己跑，主循环最多等一个 tick 就醒一次 flush ——
+       * `Promise.race` 保证命令结束时立刻返回，短命令不会白等 200ms。
+       *
+       * 只有声明了 `streamsOutput` 的工具走这条路径：给每个只读调用都挂定时器，
+       * 会让它们在测试与交互里都多一份无意义的调度开销。
+       */
+      let outcome: ExecutionOutcome | undefined
+      let execError: unknown
+      if (tool?.streamsOutput) {
+        void execPromise.then(
+          (value) => {
+            outcome = value
+          },
+          (error) => {
+            execError = error
+          },
+        )
+        while (outcome === undefined && execError === undefined) {
+          await Promise.race([execPromise.catch(() => undefined), progressTick()])
+          for (const chunk of takeProgress(progressQueue)) {
+            yield await sink.emit("tool.progress", { callId, tool: call.toolName, ...chunk })
+          }
+        }
+      } else {
+        try {
+          outcome = await execPromise
+        } catch (error) {
+          execError = error
+        }
+      }
+
+      // 结束前最后 200ms 的输出不能被丢掉
+      for (const chunk of takeProgress(progressQueue)) {
+        yield await sink.emit("tool.progress", { callId, tool: call.toolName, ...chunk })
+      }
+      if (execError !== undefined) throw execError
+      if (outcome === undefined) {
+        throw new AppError("TOOL_FAILED", "Tool execution finished without returning a result")
+      }
 
       usage.toolCalls += 1
 
@@ -1357,6 +1540,40 @@ export function closeDanglingToolUses(messages: ModelMessage[]): boolean {
   return true
 }
 
+interface CompletedToolCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+/**
+ * 从断流错误里取出"已完整收到"的工具调用。
+ *
+ * 校验放在这里而不是信任 provider：details 是错误对象的一部分，任何地方都可能
+ * 塞东西进来。缺 id / 缺 name 的条目直接丢弃 —— 少恢复一个调用是可接受的损失，
+ * 把一条形状不对的 tool_use 写进历史则会让后续所有请求都 400。
+ */
+function readCompletedToolCalls(err: AppError): CompletedToolCall[] {
+  const raw = err.details?.toolCalls
+  if (!Array.isArray(raw)) return []
+  const out: CompletedToolCall[] = []
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue
+    const record = item as Record<string, unknown>
+    if (typeof record.id !== "string" || typeof record.name !== "string") continue
+    const input = record.input
+    out.push({
+      id: record.id,
+      name: record.name,
+      input:
+        typeof input === "object" && input !== null && !Array.isArray(input)
+          ? (input as Record<string, unknown>)
+          : {},
+    })
+  }
+  return out
+}
+
 /** 工具的 `ToolExecutionStatus` → 存储的 `ToolCallStatus`。 */
 function toolCallStatusFor(status: ToolExecutionResult["status"]): ToolCallStatus {
   switch (status) {
@@ -1397,6 +1614,7 @@ function buildToolContext(
   callId: string,
   onWrite: (file: string) => void,
   workspaceRoot: string,
+  onOutput?: (chunk: CommandOutputChunk) => void,
 ): ToolExecutionContext {
   const controller = new AbortController()
   if (options.signal) {
@@ -1415,6 +1633,7 @@ function buildToolContext(
     timeoutMs: deps.settings.limits.commandTimeoutMs,
     budgetTokens: deps.settings.limits.readMaxOutputTokens,
     runCommand: deps.runCommand,
+    ...(onOutput ? { onOutput } : {}),
     logger: deps.logger,
     trackRead: (p: string, mtimeMs: number, content: string) => {
       // 已读表由本任务的 EditEngine 持有（read-before-edit 的唯一来源）

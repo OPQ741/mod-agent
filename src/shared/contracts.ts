@@ -151,6 +151,17 @@ export const CommandResultSchema = z.object({
 })
 export type CommandResult = z.infer<typeof CommandResultSchema>
 
+/**
+ * 命令输出的一个增量片段（stdout / stderr 分开）。
+ *
+ * 与 `CommandResult` 的区别：这是**过程**（可能被截断、可能不完整、可能带 ANSI），
+ * 结果则是执行结束后清洗过、受硬上限约束的终态。消费端不该把片段当成最终结果。
+ */
+export interface CommandOutputChunk {
+  stream: "stdout" | "stderr"
+  text: string
+}
+
 /* ------------------------------------------------------------------ *
  * 工具契约（tools-and-extensions.md §2 / §3 / §2.5）
  * ------------------------------------------------------------------ */
@@ -219,7 +230,18 @@ export interface ToolExecutionContext {
   timeoutMs: number
   budgetTokens: number
   /** 执行有副作用的命令的命令运行器（sandbox 注入）。 */
-  runCommand: (req: CommandRequestInput) => Promise<CommandResult>
+  runCommand: (
+    req: CommandRequestInput,
+    options?: { onOutput?: (chunk: CommandOutputChunk) => void },
+  ) => Promise<CommandResult>
+  /**
+   * 长命令的增量输出回调。
+   *
+   * 工具只负责"把沙箱吐出的片段转给主循环"，不做节流、不做展示决策 ——
+   * 节流与事件形状属于主循环（它知道事件要落库、知道多大的批量合适）。
+   * 不提供时工具照常执行，只是拿不到实时输出。
+   */
+  onOutput?: (chunk: CommandOutputChunk) => void
   logger: ToolLogger
   /**
    * 记录本次调用读取了哪个文件（read-before-edit 的依据）。
@@ -320,6 +342,13 @@ export interface AgentTool<I = unknown> {
 
   /** 延迟加载：只给名字不给 schema，靠 tool_search 按需激活。 */
   deferred?: boolean
+  /**
+   * 该工具会执行长命令、值得把增量输出流给用户（`command.run` / `test.run`）。
+   *
+   * 主循环只对声明了它的工具做"边执行边 flush 进度"：给每个工具都加一个
+   * 200ms 定时器会让只读调用白等一个 tick，而它们的输出本来就是即时的。
+   */
+  streamsOutput?: boolean
   /** 是否在本轮启用（任务模式 / 功能开关）。 */
   isEnabled?: (ctx: { mode: TaskMode; permissionMode: PermissionMode }) => boolean
   /** 向系统提示词注入该工具的专属使用指南（内聚于工具，无需改全局渲染）。 */
@@ -389,13 +418,17 @@ export type ToolUseDecision = z.infer<typeof ToolUseDecisionSchema>
  * `agent.message_delta` 在流式落地后重新加回：`capabilities.streaming === true`
  * 的后端走 `gateway.stream()`，主循环把文本增量按阈值合并成该事件
  * （payload `{ turn, text }`）。注意它是**合并后的增量**，不是逐 token ——
- * 事件要落库，逐 token 会把事件表撑爆。`tool.progress` 仍未实现
- * （长命令增量输出不在本轮范围）。
+ * 事件要落库，逐 token 会把事件表撑爆。
+ *
+ * `tool.progress` 同理，按 `PROGRESS_TICK_MS` 节流：长命令（构建、测试）在执行
+ * 期间每 200ms 最多一条，payload `{ callId, tool, stream, text }`。
+ * 它描述的是"命令正在往外打什么"，不是工具结果 —— 结果仍然只走 `tool.completed`。
  */
 export const TASK_EVENT_TYPES = [
   "task.status_changed",
   "task.plan_ready",
   "tool.started",
+  "tool.progress",
   "tool.completed",
   /** data-and-events.md §1.2：模型流式输出的合并增量。 */
   "agent.message_delta",

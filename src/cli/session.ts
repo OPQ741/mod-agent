@@ -28,6 +28,8 @@ export interface SessionOptions {
   sqliteFile?: string
   logLevel?: LogLevel
   hasTty?: boolean
+  /** `--no-stream`：本次运行不走流式（回放、排查兼容端点时用）。 */
+  streaming?: boolean
   now?: () => Date
 }
 
@@ -77,6 +79,7 @@ export class CliSession {
       logger,
       metrics,
       hasTty: options.hasTty ?? options.io.isTty,
+      ...(options.streaming === false ? { streaming: false } : {}),
       ...(options.sqliteFile ? { sqliteFile: options.sqliteFile } : {}),
       ...(options.now ? { now: options.now } : {}),
     })

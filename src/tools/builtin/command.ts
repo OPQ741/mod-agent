@@ -70,17 +70,23 @@ export function createCommandRunTool(deps: { pathGuard: PathGuard }): AgentTool<
       onTimeout: input.onTimeout,
     }),
     policyPaths: (input) => [input.cwd],
+    // 长命令值得边跑边看输出（构建、测试），主循环据此开进度 flush
+    streamsOutput: true,
     async execute(input, ctx: ToolExecutionContext) {
       const cwd = deps.pathGuard.assertCwd(input.cwd)
-      const result = await ctx.runCommand({
-        executable: input.executable,
-        args: input.args,
-        cwd,
-        timeoutMs: Math.min(input.timeoutMs, ctx.timeoutMs || input.timeoutMs),
-        networkProfile: input.networkProfile,
-        reason: input.reason,
-        onTimeout: input.onTimeout,
-      })
+      const result = await ctx.runCommand(
+        {
+          executable: input.executable,
+          args: input.args,
+          cwd,
+          timeoutMs: Math.min(input.timeoutMs, ctx.timeoutMs || input.timeoutMs),
+          networkProfile: input.networkProfile,
+          reason: input.reason,
+          onTimeout: input.onTimeout,
+        },
+        // 增量输出只做转发：节流与事件形状由主循环决定（见 ToolExecutionContext.onOutput）
+        ctx.onOutput ? { onOutput: ctx.onOutput } : undefined,
+      )
 
       const rendered = renderCommandResult(result)
       return {
@@ -216,6 +222,8 @@ export function createTestRunTool(deps: {
     isReadOnly: false,
     isConcurrencySafe: () => false,
     policyPaths: (input) => [input.cwd],
+    // 验证命令通常最慢，增量输出最有价值
+    streamsOutput: true,
     policyCommand: (input) => ({
       executable: input.command?.[0] ?? "npm",
       // filter 会被拼进真实 argv，判定时必须一起算上，否则"批准的命令"和
@@ -274,15 +282,18 @@ export function createTestRunTool(deps: {
       }
       if (input.filter) args.push(input.filter)
 
-      const result = await ctx.runCommand({
-        executable,
-        args,
-        cwd,
-        timeoutMs: Math.min(input.timeoutMs, ctx.timeoutMs || input.timeoutMs),
-        networkProfile: "none",
-        reason: "Run project verification",
-        onTimeout: "move-to-background",
-      })
+      const result = await ctx.runCommand(
+        {
+          executable,
+          args,
+          cwd,
+          timeoutMs: Math.min(input.timeoutMs, ctx.timeoutMs || input.timeoutMs),
+          networkProfile: "none",
+          reason: "Run project verification",
+          onTimeout: "move-to-background",
+        },
+        ctx.onOutput ? { onOutput: ctx.onOutput } : undefined,
+      )
 
       const rendered = renderCommandResult(result)
       return {

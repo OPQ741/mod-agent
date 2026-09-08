@@ -59,6 +59,15 @@ export function renderEventText(event: TaskEvent): string | undefined {
       return `[验证] ${String(payload.status ?? "?")}`
     case "checkpoint.created":
       return `[检查点] v${String(payload.version ?? "?")}`
+    case "tool.progress":
+      /**
+       * 长命令的增量输出。
+       *
+       * 刻意**不在** text 格式里逐行打：`npm test` 的输出有几千行，混进状态行会
+       * 把终端冲得没法看，而完整结果本来就在 `tool.completed` 与最终答案里。
+       * 这条事件留给 stream-json 消费端（编辑器 / CI 需要判断"命令还活着"）。
+       */
+      return undefined
     case "agent.message_delta":
       /**
        * 增量正文由 session 直接打到 stdout（它属于结果，不属于状态行），

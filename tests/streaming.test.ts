@@ -28,6 +28,7 @@ import { AgentRuntime } from "../src/runtime/runtime.js"
 import { CliSession } from "../src/cli/session.js"
 import { createMemoryIo } from "../src/cli/io.js"
 import {
+  AppError,
   MemoryStore,
   Metrics,
   collect,
@@ -239,9 +240,7 @@ describe("model/anthropic: 流式与非流式结果一致", () => {
 
 /* ------------------------------------------------------------------ *
  * OpenAI 兼容流式
- * ------------------------------------------------------------------ */
-
-const OPENAI_NON_STREAM = {
+ * ------------------------------------------------------------------ */ const OPENAI_NON_STREAM = {
   id: "chatcmpl-1",
   model: "gpt-test",
   choices: [
@@ -533,5 +532,300 @@ describe("cli/session: 流式正文输出", () => {
     expect(io.stdoutText()).toContain("streamed answer")
     expect(io.stdoutText().split("streamed answer")).toHaveLength(2)
     await session.close()
+  })
+
+  it("streaming: false 时一条增量都不发，答案走收尾渲染", async () => {
+    const ws = await workspace()
+    const io = createMemoryIo()
+    // provider 本身支持流式，被运行级开关关掉
+    const provider = new ScriptedProvider([final("plain answer")], {
+      streaming: true,
+      streamChunkChars: 5,
+    })
+
+    const session = await CliSession.open({
+      workspaceRoot: ws.root,
+      settings: settingsWith({}),
+      provider,
+      io,
+      format: "text",
+      streaming: false,
+    })
+    const result = await session.runOnce({ prompt: "hi", noValidation: true })
+    expect(io.stdoutText()).toContain("plain answer")
+    await session.close()
+    expect(result.exitCode).toBe(0)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * stream_options.include_usage 与兼容降级
+ * ------------------------------------------------------------------ */
+
+describe("model/openai-compat: stream_options", () => {
+  it("流式请求默认带 stream_options.include_usage（否则永远拿不到账单口径的 usage）", async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>)
+        return sseResponse(openAISse(true))
+      }) as unknown as typeof fetch,
+    })
+
+    for await (const _chunk of provider.generateStream(baseRequest())) {
+      // 只为驱动请求
+    }
+    expect(bodies[0]?.stream).toBe(true)
+    expect(bodies[0]?.stream_options).toEqual({ include_usage: true })
+  })
+
+  it("端点 400 拒绝该字段时降级重发一次，且后续请求不再带（不重复踩坑）", async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    let calls = 0
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        calls += 1
+        bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>)
+        if (calls === 1) {
+          return new Response('{"error":"Unrecognized request argument: stream_options"}', {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        return sseResponse(openAISse(true))
+      }) as unknown as typeof fetch,
+    })
+
+    // 第一次调用：内部降级后成功
+    for await (const _chunk of provider.generateStream(baseRequest())) {
+      // 驱动请求
+    }
+    expect(calls).toBe(2)
+    expect(bodies[0]?.stream_options).toEqual({ include_usage: true })
+    expect(bodies[1]?.stream_options).toBeUndefined()
+
+    // 第二次调用：直接不带，不再多花一个往返
+    for await (const _chunk of provider.generateStream(baseRequest())) {
+      // 驱动请求
+    }
+    expect(calls).toBe(3)
+    expect(bodies[2]?.stream_options).toBeUndefined()
+  })
+
+  it("其它 400 不触发降级（真正的配置错误必须原样报出来）", async () => {
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      fetchImpl: (async () =>
+        new Response('{"error":"max_tokens is too large"}', {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    })
+
+    await expect(async () => {
+      for await (const _chunk of provider.generateStream(baseRequest())) {
+        // 驱动请求
+      }
+    }).rejects.toMatchObject({ code: "MODEL_BAD_REQUEST" })
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 断流恢复
+ * ------------------------------------------------------------------ */
+
+describe("model/anthropic: 断流携带已完成工具调用", () => {
+  it("吐过增量后断流：抛 MODEL_STREAM_INTERRUPTED，details 里是完整的 tool_use", async () => {
+    const provider = new AnthropicProvider({
+      apiKey: "test-key",
+      fetchImpl: (async () =>
+        sseResponse([
+          sseBlock("message_start", { type: "message_start", message: { usage: {} } }),
+          sseBlock("content_block_start", {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          }),
+          sseBlock("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "I will read the file" },
+          }),
+          sseBlock("content_block_stop", { type: "content_block_stop", index: 0 }),
+          sseBlock("content_block_start", {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_9", name: "repo.read_file", input: {} },
+          }),
+          sseBlock("content_block_delta", {
+            type: "content_block_delta",
+            index: 1,
+            delta: { type: "input_json_delta", partial_json: '{"path":"/a.ts"}' },
+          }),
+          sseBlock("content_block_stop", { type: "content_block_stop", index: 1 }),
+          sseBlock("error", { type: "error", error: { message: "connection reset" } }),
+        ])) as unknown as typeof fetch,
+    })
+
+    let caught: unknown
+    try {
+      for await (const _chunk of provider.generateStream(baseRequest())) {
+        // 驱动请求
+      }
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toMatchObject({ code: "MODEL_STREAM_INTERRUPTED" })
+    expect((caught as AppError).details?.toolCalls).toEqual([
+      { id: "toolu_9", name: "repo.read_file", input: { path: "/a.ts" } },
+    ])
+  })
+
+  it("一个增量都没吐就断：仍抛可重试的 MODEL_NETWORK（不能变成本地失败）", async () => {
+    const provider = new AnthropicProvider({
+      apiKey: "test-key",
+      fetchImpl: (async () =>
+        sseResponse([
+          sseBlock("error", { type: "error", error: { message: "connect failed" } }),
+        ])) as unknown as typeof fetch,
+    })
+
+    await expect(async () => {
+      for await (const _chunk of provider.generateStream(baseRequest())) {
+        // 驱动请求
+      }
+    }).rejects.toMatchObject({ code: "MODEL_NETWORK" })
+  })
+})
+
+/** 第一次断流（带一个完整工具调用），之后正常收尾。 */
+class InterruptThenFinalProvider implements ModelProvider {
+  readonly id = "interrupt-then-final"
+  readonly capabilities = {
+    toolCalling: true,
+    streaming: true,
+    structuredOutput: false,
+    vision: false,
+  } as const
+  calls = 0
+  readonly requests: ModelRequest[] = []
+
+  constructor(private readonly toolArgs: Record<string, unknown>) {}
+
+  async generate(): Promise<ModelResponse> {
+    throw new Error("generate() should not be used when streaming")
+  }
+
+  generateStream(input: ModelRequest): AsyncGenerator<ModelStreamChunk, void, void> {
+    this.calls += 1
+    this.requests.push(input)
+    return this.behavior(this.calls)
+  }
+
+  private async *behavior(call: number): AsyncGenerator<ModelStreamChunk, void, void> {
+    if (call === 1) {
+      yield { type: "text", text: "Reading the file first" }
+      throw new AppError("MODEL_STREAM_INTERRUPTED", "connection reset mid-stream", {
+        details: {
+          toolCalls: [{ id: "tu_recover", name: "repo.read_file", input: this.toolArgs }],
+        },
+      })
+    }
+    yield { type: "text", text: "done after recovery" }
+    yield {
+      type: "end",
+      response: emptyResponse({ text: "done after recovery" }),
+    }
+  }
+}
+
+describe("runtime/loop: 断流恢复", () => {
+  it("断流后把已完成的工具调用补成配对历史，模型继续跑完", async () => {
+    const ws = await workspace()
+    const file = await ws.write("a.ts", "export const a = 1\n")
+    const provider = new InterruptThenFinalProvider({ path: file })
+
+    const runtime = await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({}),
+      provider,
+      store: new MemoryStore(),
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "go", mode: "edit" })
+    const { events, outcome } = await collect(runtime.run(taskId, { validationChecks: [] }))
+
+    expect(outcome.status).toBe("completed")
+    expect(outcome.summary).toBe("done after recovery")
+    expect(provider.calls).toBe(2)
+
+    const warning = events.find(
+      (e) =>
+        e.type === "task.warning" &&
+        (e.payload as { reason?: string }).reason === "stream_interrupted",
+    )
+    expect(warning).toBeDefined()
+    expect((warning?.payload as { recoveredToolCalls?: number }).recoveredToolCalls).toBe(1)
+
+    // 第二次请求必须看到"那条调用收到了但没执行"的配对历史
+    const second = provider.requests[1]
+    const assistant = second?.messages.find((m) => m.role === "assistant")
+    expect(JSON.stringify(assistant?.content)).toContain("tu_recover")
+    const toolResult = second?.messages.find(
+      (m) => m.role === "user" && JSON.stringify(m.content).includes("tu_recover"),
+    )
+    expect(JSON.stringify(toolResult?.content)).toContain("Not executed")
+
+    // 恢复不是执行：这次调用从来没真正读过文件
+    const started = events.filter(
+      (e) =>
+        e.type === "tool.started" && (e.payload as { callId?: string }).callId === "tu_recover",
+    )
+    expect(started).toHaveLength(0)
+
+    await runtime.close()
+  })
+
+  it("恢复只做一次：第二次还断就直接失败，不无限续命", async () => {
+    const ws = await workspace()
+    let calls = 0
+    const alwaysInterrupt: ModelProvider = {
+      id: "always-interrupt",
+      capabilities: { toolCalling: true, streaming: true, structuredOutput: false, vision: false },
+      async generate() {
+        throw new Error("unused")
+      },
+      async *generateStream() {
+        calls += 1
+        yield { type: "text" as const, text: "half" }
+        throw new AppError("MODEL_STREAM_INTERRUPTED", "still down", {
+          details: { toolCalls: [{ id: "tu_loop", name: "repo.read_file", input: { path: "x" } }] },
+        })
+      },
+    }
+
+    const runtime = await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({}),
+      provider: alwaysInterrupt,
+      store: new MemoryStore(),
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "go", mode: "edit" })
+    const { outcome } = await collect(runtime.run(taskId, { validationChecks: [] }))
+
+    expect(outcome.status).toBe("failed")
+    expect(outcome.subtype).toBe("error_during_execution")
+    // 一次原始 + 一次恢复，第三轮不再尝试
+    expect(calls).toBe(2)
+
+    await runtime.close()
   })
 })

@@ -10,7 +10,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process"
-import type { CommandRequest, CommandResult } from "../shared/contracts.js"
+import type { CommandOutputChunk, CommandRequest, CommandResult } from "../shared/contracts.js"
 import { AppError } from "../shared/errors.js"
 import { filterEnv, isSensitiveEnvName, stripAnsi } from "../shared/sanitize.js"
 import { resolveExecutable } from "./executable-resolver.js"
@@ -21,6 +21,14 @@ export interface RunProcessOptions {
   /** 会话内累计输出字节上限，超过即 kill。 */
   maxTotalOutputBytes: number
   signal?: AbortSignal
+  /**
+   * 增量输出回调（每个 `data` chunk 一次，未节流）。
+   *
+   * 这里**只转发**、不做合并：调用方（主循环）才知道事件要落库、多大的批量合适。
+   * 也不在这里 `stripAnsi` —— 片段的 ANSI 可能是半个转义序列，逐片清洗会把
+   * 半个序列当正文发出去；终态结果仍然统一清洗一次。
+   */
+  onOutput?: (chunk: CommandOutputChunk) => void
 }
 
 export interface RunProcessResult extends CommandResult {
@@ -122,6 +130,7 @@ export async function runProcess(
       return
     }
     stdout = append(stdout, text)
+    options.onOutput?.({ stream: "stdout", text })
   })
   child.stderr?.on("data", (buf: Buffer) => {
     const text = buf.toString("utf8")
@@ -131,6 +140,7 @@ export async function runProcess(
       return
     }
     stderr = append(stderr, text)
+    options.onOutput?.({ stream: "stderr", text })
   })
 
   const timer = setTimeout(() => {

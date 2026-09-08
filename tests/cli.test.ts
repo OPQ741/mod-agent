@@ -313,6 +313,27 @@ describe("CLI · headless --print", () => {
     expect(parsed.some((p) => p.type === "task.status_changed")).toBe(true)
   })
 
+  it("--no-stream 关掉流式：事件流里没有增量行，结果照样完整", async () => {
+    const { cwd, homeDir } = await setup()
+    const script = await writeScript(homeDir, [{ type: "final", summary: "streamed" }])
+
+    // 默认（--script 回放也走流式）：应该能看到 agent.message_delta
+    const on = await run(["--print", "hi", "--script", script, "--output-format", "stream-json"], {
+      cwd,
+      homeDir,
+    })
+    expect(on.stdout).toContain("agent.message_delta")
+
+    const off = await run(
+      ["--print", "hi", "--script", script, "--output-format", "stream-json", "--no-stream"],
+      { cwd, homeDir },
+    )
+    expect(off.code).toBe(EXIT_OK)
+    expect(off.stdout).not.toContain("agent.message_delta")
+    const last = off.stdout.trim().split("\n").pop()
+    expect((JSON.parse(last ?? "{}") as { result?: string }).result).toBe("streamed")
+  })
+
   it("缺需求 → 退出码 1，且把原因写到 stderr", async () => {
     const { cwd, homeDir } = await setup()
     const result = await run(["--print", ""], { cwd, homeDir })

@@ -78,6 +78,32 @@ describe("sandbox/process-runner", () => {
     }
   })
 
+  it("onOutput 逐块收到 stdout / stderr（长命令进度的事件源头）", async () => {
+    const ws = await createTempWorkspace()
+    try {
+      const chunks: Array<{ stream: string; text: string }> = []
+      const result = await runProcess(
+        req(NODE, ["-e", "console.log('out-line'); console.error('err-line')"], ws.root),
+        {
+          maxOutputChars: 10_000,
+          maxTotalOutputBytes: 1_000_000,
+          onOutput: (chunk) => chunks.push({ stream: chunk.stream, text: chunk.text }),
+        },
+      )
+      // 片段是过程，不是结果：拼起来应当覆盖两路输出
+      const joined = chunks.map((c) => c.text).join("")
+      expect(joined).toContain("out-line")
+      expect(joined).toContain("err-line")
+      expect(chunks.some((c) => c.stream === "stdout")).toBe(true)
+      expect(chunks.some((c) => c.stream === "stderr")).toBe(true)
+      // 终态结果仍然完整，且与片段来源一致
+      expect(result.stdout).toContain("out-line")
+      expect(result.stderr).toContain("err-line")
+    } finally {
+      await ws.cleanup()
+    }
+  })
+
   it("退出码透传", async () => {
     const ws = await createTempWorkspace()
     try {

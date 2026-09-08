@@ -11,6 +11,7 @@
 import path from "node:path"
 import {
   normalizeCommandRequest,
+  type CommandOutputChunk,
   type CommandRequest,
   type CommandResult,
 } from "../shared/contracts.js"
@@ -64,7 +65,11 @@ export class RestrictedSubprocessBackend implements SandboxBackend {
     return true
   }
 
-  async exec(request: CommandRequest, signal?: AbortSignal): Promise<CommandResult> {
+  async exec(
+    request: CommandRequest,
+    signal?: AbortSignal,
+    options?: { onOutput?: (chunk: CommandOutputChunk) => void },
+  ): Promise<CommandResult> {
     // 规则 ②：命令 cwd 必须落在授权工作区内，不允许 `cd ..` 逃逸
     const cwd = this.options.assertCwd(request.cwd)
 
@@ -93,6 +98,7 @@ export class RestrictedSubprocessBackend implements SandboxBackend {
         maxOutputChars: this.options.maxOutputChars,
         maxTotalOutputBytes: this.options.maxTotalOutputBytes,
         ...(signal ? { signal } : {}),
+        ...(options?.onOutput ? { onOutput: options.onOutput } : {}),
       },
       this.budget.get(),
     )
@@ -180,7 +186,11 @@ export class DockerBackend implements SandboxBackend {
     return !probe.spawnError && probe.exitCode === 0
   }
 
-  async exec(request: CommandRequest, signal?: AbortSignal): Promise<CommandResult> {
+  async exec(
+    request: CommandRequest,
+    signal?: AbortSignal,
+    options?: { onOutput?: (chunk: CommandOutputChunk) => void },
+  ): Promise<CommandResult> {
     const image = this.options.image ?? "node:22-alpine"
     const args = [
       "run",
@@ -215,6 +225,7 @@ export class DockerBackend implements SandboxBackend {
         maxOutputChars: this.options.maxOutputChars,
         maxTotalOutputBytes: this.options.maxTotalOutputBytes,
         ...(signal ? { signal } : {}),
+        ...(options?.onOutput ? { onOutput: options.onOutput } : {}),
       },
     )
     if (result.spawnError) {

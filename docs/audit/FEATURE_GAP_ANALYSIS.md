@@ -42,17 +42,17 @@
 
 ### 2.2 Agent Core
 
-| 检查点       | 状态          | 说明                                                                                          |
-| ------------ | ------------- | --------------------------------------------------------------------------------------------- |
-| Agent Loop   | IMPLEMENTED   | 单一异步生成器，背压真实                                                                      |
-| 状态管理     | PARTIAL       | 14 态转换表存在，但 4 处直接赋值绕过（见 ARCHITECTURE_REVIEW §3）                             |
-| Tool Calling | **DEFECTIVE** | 并行工具调用只取第一个（AUD-001）                                                             |
-| 多轮执行     | IMPLEMENTED   | tool_result 回灌、配对维护、`turns` 计数                                                      |
-| 停止条件     | IMPLEMENTED   | 步数/成本/墙钟/输入 token/无进展 五维；`repairRounds` 刻意不硬刹车（有注释说明理由）          |
-| 最大迭代次数 | IMPLEMENTED   | `maxRounds` 默认 30，但可被 resume 绕过（AUD-005）                                            |
-| 异常恢复     | PARTIAL       | 工具错误即数据 ✅；模型错误 → 终止 ✅；**策略拒绝上限异常穿透**（AUD-002）                    |
-| 流式响应     | IMPLEMENTED   | SSE 流式已落地；`agent.message_delta` 按阈值合并后进事件流                                    |
-| 用户取消     | PARTIAL       | `AbortSignal` 贯穿到子进程 ✅；`cancelRequestedAt` 下一轮入口生效 ✅；并发取消撞锁（AUD-008） |
+| 检查点       | 状态          | 说明                                                                                                                |
+| ------------ | ------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Agent Loop   | IMPLEMENTED   | 单一异步生成器，背压真实                                                                                            |
+| 状态管理     | PARTIAL       | 14 态转换表存在，但 4 处直接赋值绕过（见 ARCHITECTURE_REVIEW §3）                                                   |
+| Tool Calling | **DEFECTIVE** | 并行工具调用只取第一个（AUD-001）                                                                                   |
+| 多轮执行     | IMPLEMENTED   | tool_result 回灌、配对维护、`turns` 计数                                                                            |
+| 停止条件     | IMPLEMENTED   | 步数/成本/墙钟/输入 token/无进展 五维；`repairRounds` 刻意不硬刹车（有注释说明理由）                                |
+| 最大迭代次数 | IMPLEMENTED   | `maxRounds` 默认 30，但可被 resume 绕过（AUD-005）                                                                  |
+| 异常恢复     | PARTIAL       | 工具错误即数据 ✅；模型错误 → 终止 ✅；**策略拒绝上限异常穿透**（AUD-002）                                          |
+| 流式响应     | IMPLEMENTED   | SSE 流式已落地；`agent.message_delta` 按阈值合并后进事件流，`tool.progress` 每 200ms 合并长命令输出，断流可恢复一次 |
+| 用户取消     | PARTIAL       | `AbortSignal` 贯穿到子进程 ✅；`cancelRequestedAt` 下一轮入口生效 ✅；并发取消撞锁（AUD-008）                       |
 
 ### 2.3 LLM Provider
 
@@ -144,6 +144,6 @@
 
 1. **扩展体系（Skills/MCP/Hooks/Subagents）**：0 → 1 的阶段，工作量最大，但地基已备。
 2. **规划落地**：工具存在、数据模型存在，缺"计划落盘 + 驱动执行 + 注入上下文"这条链。
-3. **流式响应**：已实现（SSE + `agent.message_delta`）。仍缺两项：`tool.progress`（长命令增量输出）与断流后从最近完成的工具块恢复。
+3. **流式响应**：已实现（SSE + `agent.message_delta`），长命令增量输出（`tool.progress`）与断流恢复也已在第五批补齐。剩下的边界是 OpenAI 兼容端点在"上游不发 `finish_reason`"时没有可恢复的工具块，以及计价仍按定价表估算（AUD-013）。
 4. **并行工具调用**：不是"优化"，是正确性问题——多文件任务会静默少做一半。
 5. **验证链路的策略接入**：安全前提，改动量很小（一处调用点）。

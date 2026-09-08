@@ -17,6 +17,15 @@ export const ERROR_CODES = [
   "MODEL_NETWORK",
   "MODEL_BAD_REQUEST",
   "MODEL_EXHAUSTED",
+  /**
+   * 流在**已经吐出增量之后**断了（连接重置、代理超时、上游 chunked 传输中断）。
+   *
+   * 与 `MODEL_NETWORK` 分开的理由：后者可以重试（一个增量都还没吐出去），
+   * 这里**不能重试**（重放会出现重复的半段文本）。它唯一有价值的处理方式是
+   * "把断流前已经完整收到的工具调用交给主循环，补配对后让模型继续"，
+   * 所以必须能被单独识别，不能被归到通用的网络错误里。
+   */
+  "MODEL_STREAM_INTERRUPTED",
   // 工具层
   "TOOL_TIMEOUT",
   "TOOL_PERMISSION_DENIED",

@@ -65,7 +65,7 @@ import { runTask, type LoopDeps, type LoopOptions, type LoopOutcome } from "./lo
 import { createUsage } from "../shared/contracts.js"
 import { canTransition, isResumable } from "./state-machine.js"
 import { updateTaskWithRetry } from "./task-write.js"
-import { stripInvisibleCharacters } from "../shared/sanitize.js"
+import { redactSecrets, stripInvisibleCharacters } from "../shared/sanitize.js"
 
 export interface RuntimeOptions {
   workspaceRoot: string
@@ -77,6 +77,13 @@ export interface RuntimeOptions {
   /** SQLite 文件路径；不传则用内存 store。 */
   sqliteFile?: string
   hasTty?: boolean
+  /**
+   * 关闭流式（`--no-stream`）。
+   *
+   * 只影响"这次运行用不用流式"，不改变 provider 的协议能力声明；
+   * 网关会把两者取交集后交给主循环判断。
+   */
+  streaming?: boolean
   now?: () => Date
 }
 
@@ -167,6 +174,7 @@ export class AgentRuntime {
       provider: options.provider,
       timeoutMs: this.settings.limits.modelTimeoutMs,
       maxRetries: this.settings.limits.modelMaxRetries,
+      ...(options.streaming === false ? { streaming: false } : {}),
       onRetry: (event) => {
         this.metrics.increment("model.retry")
         this.logger.info("retry.api", { ...event })
@@ -381,8 +389,29 @@ export class AgentRuntime {
       settings: this.settings,
       logger: this.logger,
       metrics: this.metrics,
-      runCommand: (req) =>
-        this.sandbox.exec(normalize(req, this.sandbox.defaultNetworkProfile), options.signal),
+      runCommand: (req, runOptions) =>
+        this.sandbox.exec(
+          normalize(req, this.sandbox.defaultNetworkProfile),
+          options.signal,
+          /**
+           * 增量输出在离开内核前就脱敏。
+           *
+           * 这条路径直接通往用户终端（`tool.progress`），不经过"工具结果回灌模型"
+           * 那一步的脱敏处理。若把 `npm run deploy` 打出来的 token 原样转发，
+           * 它就会同时出现在终端和事件表里 —— 两份都是不该留的副本。
+           */
+          {
+            ...(runOptions?.onOutput
+              ? {
+                  onOutput: (chunk) =>
+                    runOptions.onOutput?.({
+                      stream: chunk.stream,
+                      text: redactSecrets(chunk.text).text,
+                    }),
+                }
+              : {}),
+          },
+        ),
       isPlanModeActive: () => this.planModeActive,
     }
 

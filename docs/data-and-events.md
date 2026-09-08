@@ -36,11 +36,15 @@ interface TaskEvent<T = unknown> {
 }
 ```
 
-事件类型：`task.status_changed`、`task.plan_ready`、`tool.started`、`tool.completed`、`agent.message_delta`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`、`retry.api`。
+事件类型：`task.status_changed`、`task.plan_ready`、`tool.started`、`tool.progress`、`tool.completed`、`agent.message_delta`、`approval.required`、`approval.decided`、`file.changed`、`validation.started`、`validation.completed`、`checkpoint.created`、`task.warning`、`task.completed`、`task.failed`、`task.cancelled`、`retry.api`。
 
 `agent.message_delta` 已随真流式落地：`capabilities.streaming === true` 的后端走 `gateway.stream()`，主循环把文本增量按阈值（160 字符或 8 个 SSE 块）合并成该事件，payload 为 `{ turn, text }`。它是**合并后的增量**而不是逐 token —— 事件要落库，逐 token 会把事件表撑爆。消费端把它拼起来就是本轮正文，与最终 `task.completed` 里的 summary 一致。
 
-`tool.progress`（长命令增量输出）仍是设计项，当前**不在** `TASK_EVENT_TYPES` 里：契约只列真的会发出来的类型，列一个永远发不出来的事件等于给消费端一个假接口。
+`tool.progress` 用于长命令（构建、测试）的增量输出：沙箱每来一块 stdout/stderr 就回调一次，主循环按 `PROGRESS_TICK_MS = 200` 合并成一条事件，payload 为 `{ callId, tool, stream, text }`。三条边界：
+
+- 只有声明了 `streamsOutput` 的工具（`command.run` / `test.run`）会发，只读调用不发 —— 给每个工具挂定时器只是浪费调度；
+- 单条正文上限 4000 字符，超出截断；**完整输出仍然只在 `tool.completed` 里**，进度不是结果；
+- 增量在离开内核前就脱敏（`redactSecrets`），因为这条路径直接通向终端与事件表，不经过"工具结果回灌模型"那一步的清洗。
 
 一次真实任务在流水账上长什么样（这几行合起来就是当时到底发生了什么的全部证据）：
 

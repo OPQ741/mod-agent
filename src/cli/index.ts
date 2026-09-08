@@ -55,6 +55,8 @@ interface GlobalOptions {
   noValidation?: boolean
   maxRounds?: string
   maxCost?: string
+  /** `--no-stream` 时为 false；默认 true（provider 支持就流式）。 */
+  stream?: boolean
   verbose?: boolean
 }
 
@@ -94,6 +96,12 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
     .option("--continue", "接着本工作区最近一个任务跑")
     .option("--worktree / --no-worktree", "（暂未实现）独立 worktree；当前改动仍落在主检出")
     .option("--no-validation", "交付前不跑验证命令")
+    /**
+     * 只注册否定形式。commander 里 `--no-stream` 会自动把 `stream` 字段声明为
+     * 默认 `true` 的布尔值；再额外注册一个 `--stream` 会与它争同一个字段，
+     * 得不偿失。"能流就流"本来就是默认，不需要一个显式开启的开关。
+     */
+    .option("--no-stream", "关闭流式：等完整响应再输出（回放、排查不认 SSE 的兼容端点时用）")
     .option("--max-rounds <n>", "覆盖预算：最大轮次")
     .option("--max-cost <usd>", "覆盖预算：最大花费")
     .option("-v, --verbose", "输出调试日志")
@@ -232,6 +240,7 @@ async function executeMain(input: ExecuteMainInput): Promise<number> {
     sqliteFile: defaultStateFile(workspaceRoot, env, input.homeDir),
     logLevel: options.verbose ? "debug" : "warn",
     hasTty: io.isTty,
+    ...(options.stream === false ? { streaming: false } : {}),
     ...(input.now ? { now: input.now } : {}),
   })
 

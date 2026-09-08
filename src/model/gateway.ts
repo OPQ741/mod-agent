@@ -55,6 +55,15 @@ export interface GatewayOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
   /** 每次退避重试都发一条 retry.api 事件（data-and-events.md §1.3 ②）。 */
   onRetry?: (event: RetryEvent) => void
+  /**
+   * 是否允许流式（默认 true）。
+   *
+   * `false` 时 `stream()` 退化成一次 `generate()`，`capabilities.streaming` 也如实报
+   * `false` —— 主循环看的是能力声明，不需要在每个调用点重复判断开关。
+   * 开关放在网关而不是 provider：provider 声明的是"这个协议能不能流"，
+   * 而"这次运行要不要流"是运行时策略（`--no-stream`、回放、排查兼容端点）。
+   */
+  streaming?: boolean
   now?: () => number
 }
 
@@ -87,6 +96,7 @@ export class ModelGateway {
   private readonly random: () => number
   private readonly sleepFn: (ms: number, signal?: AbortSignal) => Promise<void>
   private readonly onRetry?: (event: RetryEvent) => void
+  private readonly streamingEnabled: boolean
   private readonly now: () => number
   private totals: UsageTotals = { ...EMPTY_USAGE }
 
@@ -99,6 +109,7 @@ export class ModelGateway {
     this.random = options.random ?? Math.random
     this.sleepFn = options.sleep ?? defaultSleep
     this.onRetry = options.onRetry
+    this.streamingEnabled = options.streaming !== false
     this.now = options.now ?? Date.now
   }
 
@@ -106,8 +117,15 @@ export class ModelGateway {
     return this.provider.id
   }
 
+  /**
+   * 能力声明：协议能力与本次运行的开关**取交集**。
+   *
+   * 主循环只问这一处"能不能流"。若这里原样透传 provider 的 `streaming: true`，
+   * `--no-stream` 就只关掉了 `stream()` 的分支，主循环照样走流式路径。
+   */
   get capabilities(): ModelProvider["capabilities"] {
-    return this.provider.capabilities
+    if (this.streamingEnabled) return this.provider.capabilities
+    return { ...this.provider.capabilities, streaming: false }
   }
 
   get usage(): UsageTotals {
@@ -192,7 +210,9 @@ export class ModelGateway {
     signal?: AbortSignal,
     options?: { onRetry?: (event: RetryEvent) => void },
   ): AsyncGenerator<ModelStreamEvent, void, void> {
-    const generateStream = this.provider.generateStream?.bind(this.provider)
+    const generateStream = this.streamingEnabled
+      ? this.provider.generateStream?.bind(this.provider)
+      : undefined
     if (!generateStream || this.provider.capabilities.streaming !== true) {
       const response = await this.generate(input, signal, options)
       yield { type: "done", response }

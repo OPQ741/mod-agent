@@ -382,6 +382,67 @@ describe("主循环 · 工具执行", () => {
 })
 
 /* ------------------------------------------------------------------ *
+ * 长命令增量输出（tool.progress）
+ * ------------------------------------------------------------------ */
+
+describe("主循环 · tool.progress", () => {
+  it("长命令执行期间就有进度事件，不是等命令结束才补发", async () => {
+    const ws = await workspace({
+      // 逐行打印 + 间隔：让执行跨越至少一个 flush tick（200ms）
+      "scripts/chatty.js":
+        "const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));\n" +
+        "(async()=>{console.log('step-1');await sleep(150);" +
+        "console.log('step-2');await sleep(150);console.log('step-3');})();\n",
+    })
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [
+        toolUse("command.run", {
+          executable: process.execPath,
+          // 不用 `-e`：那种形状会被策略判为"不可静态解析"而 deny，与本节无关
+          args: [ws.abs("scripts/chatty.js")],
+          cwd: ws.root,
+          reason: "watch incremental output",
+          timeoutMs: 30_000,
+          networkProfile: "none",
+          onTimeout: "kill",
+        }),
+        final("watched"),
+      ],
+      // 绕过审批，专注进度事件本身
+      settings: settingsWith({ mode: "edit", permissionMode: "bypassPermissions" }),
+    })
+
+    const { events, outcome } = await collect(runtime.run(taskId))
+    expect(outcome.status).toBe("completed")
+
+    const progress = events.filter((e) => e.type === "tool.progress")
+    expect(progress.length).toBeGreaterThan(0)
+    const joined = progress
+      .map((e) => String((e.payload as { text?: unknown }).text ?? ""))
+      .join("")
+    expect(joined).toContain("step-1")
+    // 进度事件必须挂在这次调用上，而不是一条无主日志
+    expect((progress[0]?.payload as { tool?: string }).tool).toBe("command.run")
+    expect((progress[0]?.payload as { callId?: string }).callId).toBeTruthy()
+
+    // 完整结果仍然只走 tool.completed
+    const completed = events.find((e) => e.type === "tool.completed")
+    expect((completed?.payload as { status?: string }).status).toBe("succeeded")
+  })
+
+  it("不声明 streamsOutput 的工具不产生进度事件（只读调用不白等 tick）", async () => {
+    const ws = await workspace({ "src/a.ts": "x\n" })
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [toolUse("repo.read_file", { path: ws.abs("src/a.ts") }), final("ok")],
+    })
+    const { events } = await collect(runtime.run(taskId))
+    expect(events.some((e) => e.type === "tool.progress")).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ *
  * 审批
  * ------------------------------------------------------------------ */
 

@@ -51,7 +51,11 @@ export async function resolveProvider(
   if (options.script && options.script.length > 0) {
     notes.push("scripted provider: 回放固定决策，不联网")
     return {
-      provider: new ScriptedProvider(options.script, { model: settings.model ?? "scripted" }),
+      provider: new ScriptedProvider(options.script, {
+        model: settings.model ?? "scripted",
+        // 回放也走流式：否则 CLI 的流式渲染路径只能用真实端点验证，离线测试覆盖不到
+        streaming: true,
+      }),
       id: "scripted",
       credentialsPresent: true,
       notes,

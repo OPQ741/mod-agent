@@ -40,6 +40,7 @@ $ mod --help
   --worktree / --no-worktree 是否为任务开独立 worktree
   --resume <id> / --continue 恢复 / 续跑会话
   --bare                     无人值守最小面
+  --no-stream                关闭流式（等完整响应再输出；默认流式）
   --version, -V              版本
   --help, -h                 本帮助
 ```
@@ -118,23 +119,26 @@ mod-agent 把"agent 的手能伸多远"分成四档：`ask`、`plan`、`edit`、
 
 ### 4.2 启动参数（CLI flags）
 
-| 参数                                            | 作用                                                     | 依据                                      |
-| ----------------------------------------------- | -------------------------------------------------------- | ----------------------------------------- |
-| `--print "<需求>"`                              | headless 单次跑到底，把结果打到 stdout，供脚本/CI 调用   | ADR-7 · coding-agents.md §5.9             |
-| `--output-format text\|json\|stream-json`       | headless 输出格式，`json` 带成本、`stream-json` 逐事件吐 | [agent-loop.md §6.3](./agent-loop.md)     |
-| `--auto low\|medium\|high`                      | 静态放权档位，决定哪些动作预批为放行                     | [security.md §3.1](./security.md)         |
-| `--mode <四档>`                                 | 启动即选定任务模式                                       | 本文约定                                  |
-| `--model <id>` `--provider <id>`                | 指定模型与供应商                                         | [model-gateway.md §1](./model-gateway.md) |
-| `--worktree` / `--no-worktree`                  | 是否为本次任务开独立 Git worktree（默认开）              | [code-editing.md §3](./code-editing.md)   |
-| `--cwd <dir>`                                   | 指定工作区目录                                           | 本文约定                                  |
-| `--resume <id>` / `--continue`                  | 恢复指定会话 / 接着上次会话跑                            | 本文约定                                  |
-| `--settings <file\|json>` `--mcp-config <file>` | 显式注入配置与 MCP（CI 推荐）                            | [security.md §3.1](./security.md)         |
-| `--bare`                                        | 无人值守最小面，不自动加载任何仓库自带扩展与规则         | [security.md §3.1](./security.md)         |
-| `--skip-permissions-unsafe`                     | 移除全部护栏，仅限一次性隔离容器                         | [security.md §3.1](./security.md)         |
+| 参数                                            | 作用                                                     | 依据                                                      |
+| ----------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| `--print "<需求>"`                              | headless 单次跑到底，把结果打到 stdout，供脚本/CI 调用   | ADR-7 · coding-agents.md §5.9                             |
+| `--output-format text\|json\|stream-json`       | headless 输出格式，`json` 带成本、`stream-json` 逐事件吐 | [agent-loop.md §6.3](./agent-loop.md)                     |
+| `--auto low\|medium\|high`                      | 静态放权档位，决定哪些动作预批为放行                     | [security.md §3.1](./security.md)                         |
+| `--mode <四档>`                                 | 启动即选定任务模式                                       | 本文约定                                                  |
+| `--model <id>` `--provider <id>`                | 指定模型与供应商                                         | [model-gateway.md §1](./model-gateway.md)                 |
+| `--worktree` / `--no-worktree`                  | 是否为本次任务开独立 Git worktree（默认开）              | [code-editing.md §3](./code-editing.md)                   |
+| `--cwd <dir>`                                   | 指定工作区目录                                           | 本文约定                                                  |
+| `--resume <id>` / `--continue`                  | 恢复指定会话 / 接着上次会话跑                            | 本文约定                                                  |
+| `--settings <file\|json>` `--mcp-config <file>` | 显式注入配置与 MCP（CI 推荐）                            | [security.md §3.1](./security.md)                         |
+| `--bare`                                        | 无人值守最小面，不自动加载任何仓库自带扩展与规则         | [security.md §3.1](./security.md)                         |
+| `--no-stream`                                   | 关闭流式，退回一次性响应（默认流式）                     | [model-gateway.md §6.1](./model-gateway.md#_6-1-流式-sse) |
+| `--skip-permissions-unsafe`                     | 移除全部护栏，仅限一次性隔离容器                         | [security.md §3.1](./security.md)                         |
 
 带"本文约定"的行是本页第一次把它们写死，实现时若与专题冲突以专题为准。`--print` 与 `--output-format` 的语义不是拍脑袋：headless 是 ADR-7 定的 CLI-first 一等公民，事件流直接序列化成 `stream-json`，退出码即成败（0 成功、非 0 失败，2 表示被人主动打断，[agent-loop.md §6.3](./agent-loop.md)）。
 
 当前实现已走真流式：声明了 `streaming` 能力的模型后端边生成边输出，`text` 格式把正文直接写 stdout（正文就是结果，状态行仍走 stderr），`stream-json` 则每条 `agent.message_delta` 一行。收尾不会再把整段正文复读一遍；中途取消时已输出的半段保留在原处。
+
+`--no-stream` 关的是**这次运行**用不用流式，不是改 Provider 的能力声明：网关会把"协议能不能流"与"这次要不要流"取交集，主循环据此走非流式分支。三类场景会用到它——排查不认 SSE 的兼容端点、希望日志里只有一个完整响应的脚本、以及离线回放想对比两条路径的输出。
 
 ### 4.3 配置文件（settings.json）
 

@@ -53,6 +53,15 @@ export class OpenAICompatProvider implements ModelProvider {
   private readonly doFetch: typeof fetch
   private readonly organization: string | undefined
 
+  /**
+   * 流式请求是否带 `stream_options.include_usage`。
+   *
+   * OpenAI 官方认这个字段（不带它，流里就没有 usage 块）；但"兼容"端点对未知
+   * 请求参数的容忍度各不相同，少数实现会直接 400。所以策略是：默认带上，
+   * 一旦被 400 拒绝就降级一次并记住，后续请求不再重复这半个往返。
+   */
+  private includeUsage = true
+
   constructor(options: OpenAICompatOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "")
     this.apiKey = options.apiKey
@@ -78,7 +87,21 @@ export class OpenAICompatProvider implements ModelProvider {
     input: ModelRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<ModelStreamChunk, void, void> {
-    const response = await this.post(buildOpenAIBody(input, true), signal)
+    let response: Response
+    try {
+      response = await this.post(buildOpenAIBody(input, true, this.includeUsage), signal)
+    } catch (err) {
+      /**
+       * 端点不认 `stream_options` 时的降级。
+       *
+       * 只在"确实是这个字段被拒"时降级：HTTP 400 且错误体里出现了字段名。
+       * 其它 400（模型名写错、max_tokens 超限）照样抛 —— 把它们也当兼容问题
+       * 重发一次，只会让真正的配置错误多绕一个来回，还把原因藏起来。
+       */
+      if (!this.includeUsage || !isUnsupportedStreamOption(err)) throw err
+      this.includeUsage = false
+      response = await this.post(buildOpenAIBody(input, true, false), signal)
+    }
     if (!response.body) {
       throw new AppError(
         "MODEL_INVALID_OUTPUT",
@@ -115,8 +138,12 @@ export class OpenAICompatProvider implements ModelProvider {
   }
 }
 
-/** 请求体：非流式与流式只差 `stream` 开关，其余字段完全一致。 */
-function buildOpenAIBody(input: ModelRequest, stream: boolean): Record<string, unknown> {
+/** 请求体：非流式与流式只差 `stream` 开关（以及流式时是否要 usage 块），其余字段完全一致。 */
+function buildOpenAIBody(
+  input: ModelRequest,
+  stream: boolean,
+  includeUsage = true,
+): Record<string, unknown> {
   const messages: unknown[] = []
   if (input.system) messages.push({ role: "system", content: input.system })
   for (const message of input.messages) {
@@ -130,6 +157,13 @@ function buildOpenAIBody(input: ModelRequest, stream: boolean): Record<string, u
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.stopSequences ? { stop: input.stopSequences } : {}),
     ...(stream ? { stream: true } : {}),
+    /**
+     * `stream_options.include_usage`：不加这一条，OpenAI 的流里**不会**出现 usage 块，
+     * 流式一次调用的计价就只能靠本地估算（AUD-013）。带上它，官方端点会额外吐一个
+     * `choices: []` 的尾块，里面只有 usage —— 解析侧已经把这个尾块当成普通 chunk
+     * 处理（没有 delta 就只更新 usage），不需要特判。
+     */
+    ...(stream && includeUsage ? { stream_options: { include_usage: true } } : {}),
   }
   if (input.tools.length > 0) {
     body.tools = input.tools.map((tool) => ({
@@ -335,49 +369,53 @@ async function* parseOpenAIStream(
   let usageRaw: Record<string, unknown> | undefined
   const toolCalls = new Map<number, StreamToolCall>()
 
-  for await (const event of readSseEvents(body)) {
-    const data = event.data.trim()
-    if (data === "[DONE]") break
-    const json = parseSseJson(data)
-    if (!json) continue
+  try {
+    for await (const event of readSseEvents(body)) {
+      const data = event.data.trim()
+      if (data === "[DONE]") break
+      const json = parseSseJson(data)
+      if (!json) continue
 
-    if (typeof json.model === "string") model = json.model
-    if (typeof json.id === "string") requestId = json.id
-    const usage = asRecord(json.usage)
-    if (Object.keys(usage).length > 0) usageRaw = usage
+      if (typeof json.model === "string") model = json.model
+      if (typeof json.id === "string") requestId = json.id
+      const usage = asRecord(json.usage)
+      if (Object.keys(usage).length > 0) usageRaw = usage
 
-    const choices = Array.isArray(json.choices) ? json.choices : []
-    const choice = asRecord(choices[0])
-    const delta = asRecord(choice.delta)
-    if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason
+      const choices = Array.isArray(json.choices) ? json.choices : []
+      const choice = asRecord(choices[0])
+      const delta = asRecord(choice.delta)
+      if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason
 
-    if (typeof delta.content === "string" && delta.content.length > 0) {
-      content += delta.content
-      yield { type: "text", text: delta.content }
-    }
-
-    const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : []
-    for (const raw of rawCalls) {
-      const call = asRecord(raw)
-      const fn = asRecord(call.function)
-      const index = typeof call.index === "number" ? call.index : toolCalls.size
-      const id =
-        typeof call.id === "string" && call.id.length > 0
-          ? call.id
-          : (toolCalls.get(index)?.id ?? `call_${index}`)
-      const name = typeof fn.name === "string" ? fn.name : ""
-      const partialJson = typeof fn.arguments === "string" ? fn.arguments : ""
-
-      const existing = toolCalls.get(index)
-      if (!existing) {
-        toolCalls.set(index, { id, name, arguments: partialJson })
-        yield { type: "tool_start", index, id, name }
-      } else {
-        if (existing.name.length === 0 && name.length > 0) existing.name = name
-        existing.arguments += partialJson
+      if (typeof delta.content === "string" && delta.content.length > 0) {
+        content += delta.content
+        yield { type: "text", text: delta.content }
       }
-      if (partialJson.length > 0) yield { type: "tool_args", index, partialJson }
+
+      const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : []
+      for (const raw of rawCalls) {
+        const call = asRecord(raw)
+        const fn = asRecord(call.function)
+        const index = typeof call.index === "number" ? call.index : toolCalls.size
+        const id =
+          typeof call.id === "string" && call.id.length > 0
+            ? call.id
+            : (toolCalls.get(index)?.id ?? `call_${index}`)
+        const name = typeof fn.name === "string" ? fn.name : ""
+        const partialJson = typeof fn.arguments === "string" ? fn.arguments : ""
+
+        const existing = toolCalls.get(index)
+        if (!existing) {
+          toolCalls.set(index, { id, name, arguments: partialJson })
+          yield { type: "tool_start", index, id, name }
+        } else {
+          if (existing.name.length === 0 && name.length > 0) existing.name = name
+          existing.arguments += partialJson
+        }
+        if (partialJson.length > 0) yield { type: "tool_args", index, partialJson }
+      }
     }
+  } catch (err) {
+    throw interruptedOpenAIStream(err, { content, toolCalls, finishReason })
   }
 
   const message: Record<string, unknown> = { content }
@@ -420,6 +458,54 @@ function estimateStreamUsage(
   let completion = estimateTokens(content)
   for (const call of toolCalls.values()) completion += estimateTokens(call.arguments)
   return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion }
+}
+
+/**
+ * 流中断时抛出什么（与 Anthropic 侧同语义，判据不同）。
+ *
+ * chat-completions 的分片协议**没有**"某个 tool_call 结束"信号：
+ * 参数分片只有靠 `finish_reason` 出现才算收齐。所以只有已经看到
+ * `finish_reason` 时，才敢把累积出的调用当成"完整"交出去；
+ * 更早的断流一律没有可恢复的工具块 —— 这时宁可整轮失败，
+ * 也不能把半截参数当成调用补进历史（模型会以为它执行过）。
+ */
+function interruptedOpenAIStream(
+  err: unknown,
+  state: {
+    content: string
+    toolCalls: ReadonlyMap<number, StreamToolCall>
+    finishReason: string | undefined
+  },
+): AppError {
+  const original: AppError =
+    err instanceof AppError
+      ? err
+      : new AppError("MODEL_NETWORK", `Model stream failed: ${String(err)}`, { cause: err })
+
+  const progressed = state.content.length > 0 || state.toolCalls.size > 0 || state.finishReason
+  if (!progressed) return original
+
+  const toolCalls =
+    state.finishReason === undefined
+      ? []
+      : [...state.toolCalls.values()].map((call) => {
+          const parsed = parseArgsSafely(call.arguments)
+          return { id: call.id, name: call.name, input: parsed.ok ? parsed.value : {} }
+        })
+
+  return new AppError(
+    "MODEL_STREAM_INTERRUPTED",
+    `Model stream interrupted mid-response: ${original.message}`,
+    {
+      cause: err,
+      details: {
+        toolCalls,
+        // 参数分片没收齐的调用数量：只用于诊断，不拿去执行
+        incompleteToolCalls: state.finishReason === undefined ? state.toolCalls.size : 0,
+        upstreamCode: original.code,
+      },
+    },
+  )
 }
 
 export function mapFinishReason(reason: string | undefined): StopReason {
@@ -517,4 +603,16 @@ async function safeReadBody(response: Response): Promise<string> {
 
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")
+}
+
+/**
+ * 400 是不是"不认 stream_options"造成的。
+ *
+ * 判据只有一条：错误体里出现了这个字段名。分类时正文被截到 200 字符，
+ * 但字段名通常就在错误段落里；截断后看不到字段名的情况，宁可让错误抛出去，
+ * 也不猜 —— 猜错的代价是把真正的配置错误重发一遍。
+ */
+function isUnsupportedStreamOption(err: unknown): boolean {
+  if (!(err instanceof AppError) || err.code !== "MODEL_BAD_REQUEST") return false
+  return /stream_options|include_usage/i.test(err.message)
 }

@@ -5,7 +5,12 @@
  * 或云端长任务时不用改内核。
  */
 
-import type { CommandRequest, CommandResult, NetworkProfile } from "../shared/contracts.js"
+import type {
+  CommandOutputChunk,
+  CommandRequest,
+  CommandResult,
+  NetworkProfile,
+} from "../shared/contracts.js"
 
 /**
  * 后端**实际具备**的隔离能力。
@@ -29,7 +34,11 @@ export interface SandboxBackend {
   /** 后端是否真的可用（Docker 在不在、bubblewrap 装没装）。 */
   isAvailable(): Promise<boolean>
   /** 执行命令。后端不可用时必须抛 SANDBOX_UNAVAILABLE，由调用方决定是否 fail-closed。 */
-  exec(request: CommandRequest, signal?: AbortSignal): Promise<CommandResult>
+  exec(
+    request: CommandRequest,
+    signal?: AbortSignal,
+    options?: { onOutput?: (chunk: CommandOutputChunk) => void },
+  ): Promise<CommandResult>
 }
 
 export interface SandboxProbeResult {

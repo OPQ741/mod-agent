@@ -191,7 +191,8 @@
 - `retry.api`：`runtime.ts:158-161` 的 `onRetry` 需要 `sink.emit`，而不只是 `logger.info`。
   这需要把 sink 传进 gateway 回调，或由循环在 `generate` 前后比对 `gateway.usage.retries` 增量补发；
 - `task.plan_ready`：C1 完成后自然有 emit 点；
-- `agent.message_delta`：已随流式落地（见 D1）；`tool.progress` 仍待做。
+- `agent.message_delta`：已随流式落地（见 D1）；
+- `tool.progress`：已落地（长命令输出每 200ms 合并一条，只有声明 `streamsOutput` 的工具会发），见 [CODEBASE_AUDIT.md §7.4](./CODEBASE_AUDIT.md#_7-4-修复记录-第五批-流式边界补全)。
 
 ---
 
@@ -199,7 +200,9 @@
 
 ### D1. 流式响应（AUD-012，P1 体验）
 
-**状态：已完成**（`tests/streaming.test.ts` ×14；`capabilities.streaming` 已在两个 provider 上为 `true`）。落地时做了两处与初版计划的修正：一是流式增量先拼回**与非流式同形状**的原始响应再复用同一个 `parseXxxResponse`（一致性由构造保证，不靠测试盯）；二是主循环对 `agent.message_delta` 做阈值合并，避免逐 token 落库。仍未做：`tool.progress` 与"断流后从最近完成的工具块恢复"。
+**状态：已完成**（`tests/streaming.test.ts`；`capabilities.streaming` 已在两个 provider 上为 `true`）。落地时做了两处与初版计划的修正：一是流式增量先拼回**与非流式同形状**的原始响应再复用同一个 `parseXxxResponse`（一致性由构造保证，不靠测试盯）；二是主循环对 `agent.message_delta` 做阈值合并，避免逐 token 落库。
+
+后续的边界补全（断流恢复、`tool.progress`、`stream_options.include_usage`、`--no-stream`）已完成，见 [CODEBASE_AUDIT.md §7.4](./CODEBASE_AUDIT.md#_7-4-修复记录-第五批-流式边界补全)。
 
 **改动**：
 
@@ -305,8 +308,8 @@ Hook 执行必须有超时（默认 5s）与失败策略（pre 失败 → fail-c
 
 ### F2. 可观测性补齐（P2）
 
-- `approval.blocked_ms`：在 `driveTask` 里用 `metrics.startTimer` 包住 `resolver()` 调用；
-- `tool.progress`：长命令（>5s）定期 emit 一次输出增量；
+- `approval.blocked_ms`：在 `driveTask` 里用 `metrics.startTimer` 包住 `resolver()` 调用;
+- `tool.progress`：已完成（200ms 合并，见 [CODEBASE_AUDIT.md §7.4](./CODEBASE_AUDIT.md#_7-4-修复记录-第五批-流式边界补全)）；后续可选优化是把阈值做成配置项；
 - `doctor` 增加"未覆盖能力"声明（网络出口、文件系统可见性）。
 
 ### F3. 安全声明对齐（P2）
