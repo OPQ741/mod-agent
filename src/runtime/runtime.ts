@@ -29,6 +29,7 @@ import { PolicyEngine } from "../policy/engine.js"
 import { EditEngine } from "../patch/edit.js"
 import { ToolRegistry } from "../tools/registry.js"
 import { ToolExecutor } from "../tools/executor.js"
+import { HookManager, type HookDefinition } from "../tools/hooks.js"
 import {
   createCommandRunTool,
   createTestRunTool,
@@ -73,6 +74,14 @@ export interface RuntimeOptions {
   store?: Store
   logger?: Logger
   metrics?: Metrics
+  /**
+   * 工具钩子（观察 / 入参改写 / 安全拦截 / 审计）。
+   *
+   * 由调用方注入而不是从仓库文件加载：Hook 本质上是可执行代码，
+   * 让工作区里的配置文件自动获得执行权，等于把"读代码"变成"跑代码"。
+   * 加载外部 Hook 需要单独的信任与审批设计，不在这一层偷偷做。
+   */
+  hooks?: readonly HookDefinition[]
   /** SQLite 文件路径；不传则用内存 store。 */
   sqliteFile?: string
   hasTty?: boolean
@@ -202,6 +211,11 @@ export class AgentRuntime {
 
     this.executor = new ToolExecutor({
       registry: this.registry,
+      ...(options.hooks && options.hooks.length > 0
+        ? {
+            hooks: new HookManager({ hooks: options.hooks, logger: this.logger }).toToolHooks(),
+          }
+        : {}),
       policyVersion: this.policyVersion(),
       persistThresholdTokens: Math.floor(this.settings.limits.readMaxOutputTokens / 3),
     })

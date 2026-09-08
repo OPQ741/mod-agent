@@ -33,6 +33,7 @@ import {
 import type { CommandResult } from "../src/shared/contracts.js"
 import type { ToolExecutionContext } from "../src/shared/contracts.js"
 import type { ModelRequest } from "../src/model/types.js"
+import type { HookDefinition } from "../src/tools/hooks.js"
 import { AppError } from "../src/shared/errors.js"
 
 /* ------------------------------------------------------------------ *
@@ -122,6 +123,8 @@ export async function createTestRuntime(options: {
   streaming?: boolean
   /** 录制模型收到的请求，用于断言"第二轮能看到上一轮的工具结果"。 */
   onRequest?: (request: ModelRequest, stepIndex: number) => void
+  /** 注入工具钩子（观察 / 入参改写 / 安全拦截）。 */
+  hooks?: readonly HookDefinition[]
 }): Promise<TestRuntime> {
   const provider = new ScriptedProvider(options.script, {
     ...(options.onRequest ? { onRequest: options.onRequest } : {}),
@@ -138,6 +141,7 @@ export async function createTestRuntime(options: {
     metrics,
     ...(options.hasTty !== undefined ? { hasTty: options.hasTty } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.hooks ? { hooks: options.hooks } : {}),
   })
   return Object.assign(runtime, {
     provider,
