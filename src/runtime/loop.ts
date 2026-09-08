@@ -93,6 +93,13 @@ export interface LoopDeps {
    * 写工具照样可用、文件照样被写 —— 而工具描述在告诉模型"写工具已不可用"。
    */
   isPlanModeActive?: () => boolean
+  /**
+   * 本任务已被 `tool_search` 激活的延迟工具。
+   *
+   * 每轮装配都必须读这个集合：否则 `tool_search` 只在系统提示词里报了个名字，
+   * 下一轮请求里仍然没有完整 schema —— 模型知道工具存在，却拿不到参数格式。
+   */
+  activatedDeferred?: () => ReadonlySet<string>
   now?: () => Date
 }
 
@@ -552,7 +559,15 @@ export async function* runTask(
     const assembled = deps.registry.assemble({
       taskMode: effectiveTaskMode(),
       permissionMode: options.permissionMode,
+      ...(deps.activatedDeferred ? { activatedDeferred: deps.activatedDeferred() } : {}),
     })
+    /**
+     * 本轮真正"可被请求到"的工具集合。
+     *
+     * 装配层已经按任务模式与延迟激活算过一遍；执行层必须用同一份清单收口，
+     * 否则只读档与 `tool_search` 都只是给模型看的提示，谁点名谁就能跑。
+     */
+    const availableToolNames = new Set(assembled.executable)
     const contextMessages: ModelMessage[] = [
       { role: "system", content: options.systemPrompt },
       { role: "user", content: options.dynamicContext(turns + 1) },
@@ -1111,6 +1126,46 @@ export async function* runTask(
           isError: true,
         })
         deps.metrics.increment("tool.invalid_args")
+        continue
+      }
+
+      /**
+       * 工具**已注册但不在本轮工具表里** → 不执行，回一条可读的错误。
+       *
+       * 注意判据是 `tool` 存在：完全不存在的工具名交给执行器回 "Unknown tool"，
+       * 那条路径要保留 `tool.completed` 事件与 failed 计数（模型自编名字是可观测的）。
+       *
+       * 两种过滤来源要分开说，因为补救动作不同：
+       * - 延迟工具未激活 → 让模型先 `tool_search`；
+       * - 被任务模式/策略过滤 → 让模型换个做法，并计入 permissionDenials。
+       *
+       * 放在 `tool.started` 之前：没有真正开始执行，就不该留下一条 started 记录，
+       * 否则崩溃恢复时会把它当成"可能已执行过的非幂等调用"。
+       */
+      if (tool && !availableToolNames.has(call.toolName)) {
+        const deferredNotActivated = tool?.deferred === true
+        batchResults.push({
+          type: "tool_result",
+          toolUseId: callId,
+          content: deferredNotActivated
+            ? `Tool "${call.toolName}" is deferred and has not been activated for this task. ` +
+              "Call tool_search with a keyword to activate it, then re-issue this call on your next turn."
+            : `Tool "${call.toolName}" is not available in the current task mode (write/command tools are filtered out). ` +
+              "Nothing was executed. Choose a read-only approach.",
+          isError: true,
+        })
+        deps.metrics.increment("tool.unavailable")
+        /**
+         * 只有"被模式过滤"才算一次权限拒绝；延迟工具未激活是流程问题，
+         * 混进 permissionDenials 会让交付报告多出一条并不存在的策略拒绝。
+         */
+        if (!deferredNotActivated) {
+          deps.metrics.increment("policy.decision.deny")
+          permissionDenials.push({
+            toolName: call.toolName,
+            reason: "Tool is filtered out by the current mode",
+          })
+        }
         continue
       }
 

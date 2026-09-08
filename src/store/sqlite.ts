@@ -143,6 +143,59 @@ interface StatementSyncLike {
   all(...params: unknown[]): unknown[]
 }
 
+/**
+ * 一条版本化迁移。
+ *
+ * 为什么不再用"散落的 `ensureColumn`"：Agent 持续增加 MCP / Skills / Worktree /
+ * Session / Plugin 之后，表结构变更会越来越多；没有版本记录时，
+ * 既无法判断"这个库到底升级到哪一步"，也无法保证"一次迁移要么全成、要么全不成"。
+ */
+interface Migration {
+  version: number
+  name: string
+  apply: (db: DatabaseSyncLike) => void
+}
+
+/** 迁移记录表。启动时先建它，再按版本号顺序补。 */
+const MIGRATIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+`
+
+const MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    name: "initial-schema",
+    /**
+     * 全部 `CREATE ... IF NOT EXISTS`，因此对"已经在用但没有迁移记录"的旧库也安全：
+     * 它只会补上缺失的表/索引，不会覆盖已有数据。
+     */
+    apply: (db) => db.exec(SCHEMA),
+  },
+  {
+    version: 2,
+    name: "task-checkpoints-changed-files",
+    /** 旧库的 `task_checkpoints` 没有 `changed_files_json`，少了它 saveCheckpoint 直接报错。 */
+    apply: (db) =>
+      ensureColumnOn(db, "task_checkpoints", "changed_files_json", "TEXT NOT NULL DEFAULT '[]'"),
+  },
+]
+
+/**
+ * 幂等补列：列已存在就跳过，可重复执行。
+ *
+ * 只允许在**迁移脚本内部**使用：`table` / `column` 必须取自本文件的字面量，
+ * 不能接受外部输入（PRAGMA / ALTER TABLE 的标识符拼接没有参数化路径）。
+ */
+function ensureColumnOn(db: DatabaseSyncLike, table: string, column: string, ddl: string): void {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>
+  if (rows.some((row) => String(row.name) === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+}
+
 /** 打开结果：成功给 store，失败给一句人能看懂的原因。 */
 export interface OpenResult {
   store?: SqliteStore
@@ -165,17 +218,53 @@ export class SqliteStore implements Store {
     this.db = db
     this.db.exec("PRAGMA journal_mode = WAL")
     this.db.exec("PRAGMA foreign_keys = ON")
-    this.db.exec(SCHEMA)
-    // `CREATE TABLE IF NOT EXISTS` 不会给已经存在的旧表补列。
-    // 少了这一步，用旧库文件启动会在 saveCheckpoint 上抛 "no such column"。
-    this.ensureColumn("task_checkpoints", "changed_files_json", "TEXT NOT NULL DEFAULT '[]'")
+    this.migrate()
   }
 
-  /** 幂等补列：列已存在就跳过，可重复执行。 */
-  private ensureColumn(table: string, column: string, ddl: string): void {
-    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>
-    if (rows.some((row) => String(row.name) === column)) return
-    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+  /**
+   * 按版本顺序执行未应用的迁移。
+   *
+   * 每条迁移在**单独事务**里执行：迁移中途失败就整体回滚，库停在上一版本，
+   * 不会出现"表改了一半、版本号也没记上"的中间态。失败直接抛出，
+   * 由 `open()` 转成可读原因 —— 迁移失败时拒绝进入正常运行状态，
+   * 比带着半升级的库继续跑安全得多。
+   */
+  private migrate(): void {
+    this.db.exec(MIGRATIONS_TABLE)
+    const rows = this.db.prepare("SELECT version FROM schema_migrations").all() as Array<{
+      version?: unknown
+    }>
+    const applied = new Set(rows.map((row) => Number(row.version)))
+
+    for (const migration of MIGRATIONS) {
+      if (applied.has(migration.version)) continue
+      this.db.exec("BEGIN IMMEDIATE")
+      try {
+        migration.apply(this.db)
+        this.db
+          .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+          .run(migration.version, migration.name, new Date().toISOString())
+        this.db.exec("COMMIT")
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK")
+        } catch {
+          // 回滚失败不该掩盖原始迁移错误
+        }
+        throw new Error(
+          `Schema migration ${migration.version} (${migration.name}) failed: ${messageOf(err)}`,
+          { cause: err },
+        )
+      }
+    }
+  }
+
+  /** 当前已应用的最高版本号（`doctor` 与测试用）。 */
+  schemaVersion(): number {
+    this.assertOpen()
+    const row = this.db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as
+      { v?: unknown } | undefined
+    return Number(row?.v ?? 0)
   }
 
   /**

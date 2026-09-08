@@ -261,7 +261,7 @@ describe("shared/json-schema", () => {
   it("数组 / 联合 / record / 字面量都能转换", () => {
     expect(toJsonSchema(z.array(z.string())).type).toBe("array")
     expect(toJsonSchema(z.union([z.string(), z.number()])).anyOf).toBeDefined()
-    expect(toJsonSchema(z.record(z.string())).type).toBe("object")
+    expect(toJsonSchema(z.record(z.string(), z.string())).type).toBe("object")
     expect(toJsonSchema(z.literal("x")).const).toBe("x")
   })
 

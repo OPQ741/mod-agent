@@ -98,7 +98,7 @@ export const CommandRequestSchema = z.object({
   executable: z.string().min(1),
   args: z.array(z.string()).default([]),
   cwd: z.string().min(1),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
   /** 默认与 `settings.limits.commandTimeoutMs` 对齐；省略时由 normalize 补齐。 */
   timeoutMs: z.number().int().positive().max(600_000).default(120_000),
   /**
@@ -389,7 +389,7 @@ export const ToolUseDecisionSchema = z.object({
   type: z.literal("tool_use"),
   callId: z.string(),
   toolName: z.string(),
-  args: z.record(z.unknown()),
+  args: z.record(z.string(), z.unknown()),
 })
 
 export const AskDecisionSchema = z.object({
@@ -613,7 +613,9 @@ export const RepoProfileSchema = z.object({
   frameworks: z.array(z.string()).default([]),
   monorepo: z.boolean().default(false),
   packages: z
-    .array(z.object({ name: z.string(), path: z.string(), scripts: z.record(z.string()) }))
+    .array(
+      z.object({ name: z.string(), path: z.string(), scripts: z.record(z.string(), z.string()) }),
+    )
     .default([]),
   checks: z
     .array(z.object({ id: z.string(), command: z.array(z.string()), confidence: z.number() }))

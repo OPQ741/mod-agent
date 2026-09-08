@@ -18,7 +18,11 @@ import {
   killTree,
   runProcess,
 } from "../src/sandbox/process-runner.js"
-import { RestrictedSubprocessBackend, selectSandbox } from "../src/sandbox/index.js"
+import {
+  RestrictedSubprocessBackend,
+  buildDockerRunArgs,
+  selectSandbox,
+} from "../src/sandbox/index.js"
 import { MemoryStore } from "../src/store/memory.js"
 import { SqliteStore, createStore } from "../src/store/sqlite.js"
 import { VersionConflictError } from "../src/store/types.js"
@@ -373,6 +377,43 @@ describe("sandbox/index: fail-closed 选择与能力声明", () => {
     } finally {
       await ws.cleanup()
     }
+  })
+})
+
+describe("sandbox/docker: 加固参数不依赖镜像默认值", () => {
+  it("默认丢弃全部 capabilities、禁止提权；network=none 真的断出口", () => {
+    const args = buildDockerRunArgs({
+      workspaceRoot: "workspace",
+      cwd: "workspace/sub",
+      image: "node:22-alpine",
+      networkProfile: "none",
+      executable: "npm",
+      args: ["test"],
+    })
+
+    expect(args).toContain("--cap-drop=ALL")
+    expect(args).toContain("--security-opt=no-new-privileges")
+    expect(args.slice(args.indexOf("--network"), args.indexOf("--network") + 2)).toEqual([
+      "--network",
+      "none",
+    ])
+    // 工作目录映射到容器内相对路径
+    expect(args).toContain("/workspace/sub")
+    // 用户命令以 argv 形式透传，不经过 shell 拼字符串
+    expect(args.slice(-2)).toEqual(["npm", "test"])
+  })
+
+  it("非 none 档位显式映射为 bridge（不是把 --network 整个省掉）", () => {
+    const args = buildDockerRunArgs({
+      workspaceRoot: "workspace",
+      cwd: "workspace",
+      image: "node:22-alpine",
+      networkProfile: "inherit",
+      executable: "node",
+      args: ["-e", "0"],
+    })
+    const networkAt = args.indexOf("--network")
+    expect(args[networkAt + 1]).toBe("bridge")
   })
 })
 
@@ -851,6 +892,106 @@ describe("store/sqlite: 回落与实例结构", () => {
       const listed = await store!.listTasks()
       expect(listed.map((t) => t.id)).toEqual([task.id])
       await store!.close()
+    } finally {
+      await ws.cleanup()
+    }
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 版本化迁移
+ * ------------------------------------------------------------------ */
+
+/** 用原生驱动直接看库文件：验证"迁移记录"这种只有 SQL 能回答的事实。 */
+async function rawDb(file: string): Promise<{
+  exec(sql: string): void
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; get(...p: unknown[]): unknown }
+  close(): void
+}> {
+  const mod = (await import("node:sqlite")) as unknown as {
+    DatabaseSync: new (file: string) => {
+      exec(sql: string): void
+      prepare(sql: string): { all(...params: unknown[]): unknown[]; get(...p: unknown[]): unknown }
+      close(): void
+    }
+  }
+  return new mod.DatabaseSync(file)
+}
+
+describe("store/sqlite: 版本化迁移", () => {
+  it("新库记录全部迁移版本；重开同一文件不会重复执行", async () => {
+    const ws = await createTempWorkspace("mod-sqlite-")
+    try {
+      const file = path.join(ws.root, "state.sqlite")
+      const first = (await SqliteStore.open(file)).store
+      const version = first!.schemaVersion()
+      expect(version).toBeGreaterThanOrEqual(1)
+      await first!.close()
+
+      const second = (await SqliteStore.open(file)).store
+      expect(second!.schemaVersion()).toBe(version)
+      await second!.close()
+
+      const db = await rawDb(file)
+      try {
+        const rows = db
+          .prepare("SELECT version FROM schema_migrations ORDER BY version")
+          .all() as Array<{ version?: unknown }>
+        const versions = rows.map((row) => Number(row.version))
+        // 版本号递增且不重复：重复执行迁移会把 DDL 反复跑一遍，也可能插入重复记录
+        expect(versions).toEqual([...new Set(versions)].sort((a, b) => a - b))
+        expect(versions[versions.length - 1]).toBe(version)
+      } finally {
+        db.close()
+      }
+    } finally {
+      await ws.cleanup()
+    }
+  })
+
+  it("旧库缺少 changed_files_json：打开时补列并记账，而不是等到 saveCheckpoint 才报错", async () => {
+    const ws = await createTempWorkspace("mod-sqlite-")
+    try {
+      const file = path.join(ws.root, "state.sqlite")
+      // 模拟"上一个版本建的表"：结构存在，但没有 changed_files_json
+      const legacy = await rawDb(file)
+      legacy.exec(`
+        CREATE TABLE task_checkpoints (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          plan_json TEXT,
+          completed_steps_json TEXT NOT NULL DEFAULT '[]',
+          context_summary_json TEXT,
+          workspace_snapshot_ref TEXT,
+          message_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          UNIQUE (task_id, version)
+        );
+      `)
+      legacy.close()
+
+      const opened = await SqliteStore.open(file)
+      expect(opened.store).toBeDefined()
+      expect(opened.reason).toBeUndefined()
+      await opened.store!.close()
+
+      const db = await rawDb(file)
+      try {
+        const columns = db.prepare("PRAGMA table_info(task_checkpoints)").all() as Array<{
+          name?: unknown
+        }>
+        expect(columns.map((column) => String(column.name))).toContain("changed_files_json")
+        const versions = (
+          db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
+            version?: unknown
+          }>
+        ).map((row) => Number(row.version))
+        expect(versions).toContain(2)
+      } finally {
+        db.close()
+      }
     } finally {
       await ws.cleanup()
     }

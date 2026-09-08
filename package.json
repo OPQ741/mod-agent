@@ -27,7 +27,7 @@
     "developer-tools"
   ],
   "engines": {
-    "node": ">=22",
+    "node": ">=22.5.0",
     "npm": ">=10"
   },
   "bin": {

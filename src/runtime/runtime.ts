@@ -15,7 +15,6 @@ import os from "node:os"
 import type {
   Budget,
   CommandResult,
-  ExecutionPlan,
   PermissionMode,
   TaskEvent,
   TaskMode,
@@ -55,7 +54,7 @@ import type { SandboxSelection } from "../sandbox/index.js"
 import { ModelGateway } from "../model/gateway.js"
 import type { ModelProvider } from "../model/types.js"
 import { createStore } from "../store/sqlite.js"
-import type { Store } from "../store/types.js"
+import type { Store, TaskState } from "../store/types.js"
 import { Logger, Metrics } from "../observability/logger.js"
 import { bundleRules } from "../context/rules.js"
 import { buildDynamicContext, buildStaticSystemPrompt } from "../context/system-prompt.js"
@@ -108,6 +107,12 @@ export interface RunOptions {
   skipProjectRules?: boolean
 }
 
+/** 单个任务独占的运行态；任务结束即销毁，不复用到下一个任务。 */
+interface TaskScopedState {
+  planModeActive: boolean
+  activatedDeferred: Set<string>
+}
+
 export class AgentRuntime {
   readonly settings: Settings
   readonly store: Store
@@ -122,14 +127,25 @@ export class AgentRuntime {
 
   private readonly sandboxSelection: SandboxSelection
   private readonly sandbox: SandboxBackend
-  private readonly activatedDeferred = new Set<string>()
   /**
-   * 计划模式是否激活。
+   * **任务级**运行态：计划模式开关 + 已被 `tool_search` 激活的延迟工具。
    *
-   * 会话级状态（不是任务级）：`plan.enter_plan_mode` 是模型在任务中途调用的，
-   * 激活后主循环下一轮装配工具就按只读档过滤，`exit` 时解除。
+   * 曾经这里是两个 runtime 级字段（`planModeActive` 布尔 + 全局
+   * `activatedDeferred` 集合）。只要上层把同一个 Runtime 交给两个任务
+   * （SDK、调度器、并行 CLI），就会互相污染：任务 A 进了计划模式，
+   * 任务 B 也被降成只读；A 激活的延迟工具，B 的上下文里也会多出 schema。
+   * 计划模式与延迟加载本来都只对"当前这个任务"有意义，作用域必须是 taskId。
    */
-  private planModeActive = false
+  private readonly taskStates = new Map<string, TaskScopedState>()
+  /**
+   * 正在运行的任务集合（单飞锁）。
+   *
+   * 主循环对同一个 taskId 跑两次会同时请求模型、同时执行工具，
+   * 事件序号按"已有事件数 + 1"分配、`(task_id, seq)` 又是唯一约束：
+   * 两个循环会撞序号、重复副作用、互相覆盖状态。Runtime 一旦暴露给 SDK，
+   * 这是必须明确的并发契约 —— 第一版先拒绝，而不是"看起来能用"。
+   */
+  private readonly runningTasks = new Set<string>()
   private readonly storeDegradedReason: string | undefined
   private readonly now: () => Date
 
@@ -263,27 +279,44 @@ export class AgentRuntime {
     this.registry.register(
       createToolSearchTool({
         listDeferred: () => this.deferredToolEntries(),
-        activate: (names) => {
-          for (const name of names) this.activatedDeferred.add(name)
+        activate: (names, taskId) => {
+          const state = this.taskState(taskId)
+          for (const name of names) state.activatedDeferred.add(name)
         },
       }),
     )
   }
 
+  /**
+   * 取（必要时创建）某个任务的运行态。
+   *
+   * 只有真正跑起来的任务才会走到这里；`run()` 结束时会删掉对应条目，
+   * 所以 Map 的大小与"当前活跃任务数"成正比，不会随历史任务无限增长。
+   */
+  private taskState(taskId: string): TaskScopedState {
+    let state = this.taskStates.get(taskId)
+    if (!state) {
+      state = { planModeActive: false, activatedDeferred: new Set<string>() }
+      this.taskStates.set(taskId, state)
+    }
+    return state
+  }
+
   private planController(): PlanController {
     return {
-      enter: () => {
-        this.planModeActive = true
-        this.logger.info("plan.entered", { workspaceRoot: this.workspaceRoot })
+      enter: (taskId) => {
+        this.taskState(taskId).planModeActive = true
+        this.logger.info("plan.entered", { taskId, workspaceRoot: this.workspaceRoot })
         return { active: true as const }
       },
-      exit: (plan: ExecutionPlan) => {
-        if (!this.planModeActive) throw new AppError("INVALID_INPUT", "Not in plan mode")
-        this.planModeActive = false
-        this.logger.info("plan.submitted", { steps: plan.steps.length })
+      exit: (plan, taskId) => {
+        const state = this.taskStates.get(taskId)
+        if (!state?.planModeActive) throw new AppError("INVALID_INPUT", "Not in plan mode")
+        state.planModeActive = false
+        this.logger.info("plan.submitted", { taskId, steps: plan.steps.length })
         return { status: "submitted" as const, steps: plan.steps.length }
       },
-      isActive: () => this.planModeActive,
+      isActive: (taskId) => this.taskStates.get(taskId)?.planModeActive ?? false,
     }
   }
 
@@ -334,14 +367,50 @@ export class AgentRuntime {
 
   /**
    * 运行任务。返回 async generator —— 消费端不消费就不会继续跑（背压）。
+   *
+   * 这一层只负责两件事：**单飞锁**与**任务级状态的生命周期**。
+   * 真正的循环逻辑在 `runInternal`；把锁放在生成器体里（而不是 `run()` 调用时），
+   * 保证"创建了生成器但从未消费"不会占用锁，也不会残留计划模式状态。
    */
   async *run(
     taskId: string,
     options: RunOptions = {},
   ): AsyncGenerator<TaskEvent, LoopOutcome, void> {
-    const state = await this.store.getTask(taskId)
-    if (!state) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
+    const existing = await this.store.getTask(taskId)
+    if (!existing) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
+    if (this.runningTasks.has(taskId)) {
+      throw new AppError(
+        "INVALID_INPUT",
+        `Task ${taskId} is already running in this runtime. ` +
+          "Two concurrent loops on the same task would duplicate tool side effects and collide on event seq. " +
+          "Wait for the current run to finish (or cancel it) before starting another.",
+        { details: { taskId } },
+      )
+    }
 
+    this.runningTasks.add(taskId)
+    const scoped = this.taskState(taskId)
+    try {
+      return yield* this.runInternal(taskId, existing, options, scoped)
+    } finally {
+      /**
+       * 任务收尾即销毁任务级状态。
+       *
+       * 计划模式是"这个任务此刻只读"的表达，不是会话设置：任务以取消、失败、
+       * 预算耗尽等任何方式结束时，都必须把开关收回去。否则一个没来得及调用
+       * `exit_plan_mode` 的任务会让**下一个**任务也变成只读 —— 而且是静默的。
+       */
+      this.runningTasks.delete(taskId)
+      this.taskStates.delete(taskId)
+    }
+  }
+
+  private async *runInternal(
+    taskId: string,
+    state: TaskState,
+    options: RunOptions,
+    scoped: TaskScopedState,
+  ): AsyncGenerator<TaskEvent, LoopOutcome, void> {
     // 规则只注入一次：审批后 `--resume` 会再次调用 run()，
     // 若每次都拼一份规则提醒，上下文里会攒出 N 份同样的 AGENTS.md。
     //
@@ -356,7 +425,7 @@ export class AgentRuntime {
     const assembled = this.registry.assemble({
       taskMode: state.mode,
       permissionMode: this.settings.permissionMode ?? "default",
-      activatedDeferred: this.activatedDeferred,
+      activatedDeferred: scoped.activatedDeferred,
     })
 
     const systemPrompt = buildStaticSystemPrompt({
@@ -412,7 +481,8 @@ export class AgentRuntime {
               : {}),
           },
         ),
-      isPlanModeActive: () => this.planModeActive,
+      isPlanModeActive: () => scoped.planModeActive,
+      activatedDeferred: () => scoped.activatedDeferred,
     }
 
     const loopOptions: LoopOptions = {

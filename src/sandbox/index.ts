@@ -14,6 +14,7 @@ import {
   type CommandOutputChunk,
   type CommandRequest,
   type CommandResult,
+  type NetworkProfile,
 } from "../shared/contracts.js"
 import { AppError } from "../shared/errors.js"
 import type { Settings } from "../config/settings.js"
@@ -192,26 +193,14 @@ export class DockerBackend implements SandboxBackend {
     options?: { onOutput?: (chunk: CommandOutputChunk) => void },
   ): Promise<CommandResult> {
     const image = this.options.image ?? "node:22-alpine"
-    const args = [
-      "run",
-      "--rm",
-      "-i",
-      "--network",
-      request.networkProfile === "none" ? "none" : "bridge",
-      "--pids-limit",
-      "256",
-      "--memory",
-      "2g",
-      "--cpus",
-      "1",
-      "-v",
-      `${this.options.workspaceRoot}:/workspace:rw`,
-      "-w",
-      `/workspace/${toPosixRelative(this.options.workspaceRoot, request.cwd)}`,
+    const args = buildDockerRunArgs({
+      workspaceRoot: this.options.workspaceRoot,
+      cwd: request.cwd,
       image,
-      request.executable,
-      ...request.args,
-    ]
+      networkProfile: request.networkProfile,
+      executable: request.executable,
+      args: request.args,
+    })
     const result = await runProcess(
       normalizeCommandRequest({
         executable: "docker",
@@ -242,6 +231,51 @@ export class DockerBackend implements SandboxBackend {
       outputLimitExceeded: result.outputLimitExceeded,
     }
   }
+}
+
+/**
+ * 构造 `docker run` 参数（纯函数，便于逐项审计与单测）。
+ *
+ * 加固基线**不能依赖镜像的隐式默认值**：
+ * - `--cap-drop=ALL`：不放任镜像自带 capabilities（`chown`/`setuid`/`mknod` 等）；
+ * - `--security-opt=no-new-privileges`：禁止 setuid 程序提权；
+ * - 网络按档位映射：`none` 真的断出口，其他档位给 `bridge`。
+ *
+ * 仍有两项**刻意不做**，因为会改变用户命令的可行性、且无法在本仓库离线验证：
+ * - 不写 `--user`：uid/gid 必须与挂载目录属主一致，写死会让 `<workspace>` 变成只读；
+ * - 不写 `--read-only`：`npm` / `pip` 等会在 `$HOME` 落缓存，只读根文件系统需要
+ *   额外规划 tmpfs 与 HOME。这两项应在真实 Docker 环境验证后再加，而不是先猜。
+ */
+export function buildDockerRunArgs(spec: {
+  workspaceRoot: string
+  cwd: string
+  image: string
+  networkProfile: NetworkProfile
+  executable: string
+  args: readonly string[]
+}): string[] {
+  return [
+    "run",
+    "--rm",
+    "-i",
+    "--network",
+    spec.networkProfile === "none" ? "none" : "bridge",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--pids-limit",
+    "256",
+    "--memory",
+    "2g",
+    "--cpus",
+    "1",
+    "-v",
+    `${spec.workspaceRoot}:/workspace:rw`,
+    "-w",
+    `/workspace/${toPosixRelative(spec.workspaceRoot, spec.cwd)}`,
+    spec.image,
+    spec.executable,
+    ...spec.args,
+  ]
 }
 
 function toPosixRelative(root: string, target: string): string {
@@ -310,10 +344,11 @@ export async function selectSandbox(options: {
     return {
       backend: docker,
       coverage: [
-        "container isolation (non-root, network off by default)",
+        "container isolation: network off by default, all Linux capabilities dropped, no-new-privileges",
         "mount: only the authorized workspace",
         "pids / memory / cpu limits",
         "process lifecycle and output limits",
+        "NOT covered: container runs as the image's default user; root filesystem stays writable",
       ],
       degraded: false,
     }

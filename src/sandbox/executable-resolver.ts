@@ -101,7 +101,8 @@ async function findWindowsExecutable(
   for (const base of bases) {
     if (path.extname(base).length > 0) {
       // 显式带扩展名：直接验证该文件存在（避免把 `npm.cmd` 变成 `npm.cmd.exe`）
-      if (await isFile(base)) return base
+      const explicit = await findFile(base)
+      if (explicit) return explicit
       continue
     }
 
@@ -111,10 +112,44 @@ async function findWindowsExecutable(
     // 而同目录下的 `npm.cmd` 才是 Windows 可用的入口。
     for (const ext of pathext) {
       const candidate = `${base}${ext}`
-      if (await isFile(candidate)) return candidate
+      const found = await findFile(candidate)
+      if (found) return found
     }
   }
   return undefined
+}
+
+/**
+ * 按 **Windows 语义**查找文件：先精确匹配，再忽略大小写匹配。
+ *
+ * Windows 文件系统本身不区分大小写，所以 `npm.CMD` 与 `npm.cmd` 是同一个文件。
+ * 但解析器也会在 Linux 上被调用（CI 的 Ubuntu 作业、跨平台测试 fixture）：
+ * 那里的文件系统区分大小写，`PATHEXT=".CMD"` 配 `npm.cmd` 会直接找不到 ——
+ * 表现成"Windows 解析在 Linux 上失败"，而真实 Windows 上不可能出现这种组合。
+ * 显式补一次不敏感查找，让解析结果与平台语义一致，而不是让测试迁就实现。
+ *
+ * 只在精确匹配失败时才 readdir：真实 Windows 上绝大多数查找一次 stat 就命中，
+ * 不会为这条兜底付出目录扫描成本。
+ */
+async function findFile(candidate: string): Promise<string | undefined> {
+  if (await isFile(candidate)) return candidate
+  return findCaseInsensitive(candidate)
+}
+
+async function findCaseInsensitive(candidate: string): Promise<string | undefined> {
+  const dir = path.dirname(candidate)
+  const base = path.basename(candidate)
+  if (base.length === 0 || base === "." || base === "..") return undefined
+  try {
+    const entries = await fs.readdir(dir)
+    const hit = entries.find((entry) => entry.toLowerCase() === base.toLowerCase())
+    if (!hit) return undefined
+    const full = path.join(dir, hit)
+    return (await isFile(full)) ? full : undefined
+  } catch {
+    // 目录不存在 / 不可读：按"没找到"处理，交给 spawn 报 ENOENT
+    return undefined
+  }
 }
 
 async function isFile(candidate: string): Promise<boolean> {

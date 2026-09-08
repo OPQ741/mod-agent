@@ -85,6 +85,34 @@ describe("sandbox/executable-resolver", () => {
     expect(resolved.args).toEqual(["--flag"])
   })
 
+  /**
+   * 回归：CI 只在 Linux 失败的那一条。
+   *
+   * Windows 的 NTFS 不区分大小写，`PATHEXT=".EXE"` 能命中磁盘上的 `tool.exe`；
+   * Linux 的 ext4 区分大小写，同一个 fixture 会直接找不到 —— 测试虽然传了
+   * `platform: "win32"`，底层 readdir/stat 仍发生在 Linux 上。
+   * 解析器必须自己补一次不敏感匹配，而不是让 fixture 迁就实现。
+   */
+  it("Windows：PATHEXT 与文件扩展名大小写不一致时仍能命中", async () => {
+    const dir = await tempDir()
+    await fs.writeFile(path.join(dir, "tool.EXE"), "", "utf8")
+
+    const resolved = await resolveExecutable("tool", ["--flag"], {
+      platform: "win32",
+      env: {
+        PATH: dir,
+        PATHEXT: ".com;.exe;.bat;.cmd",
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      },
+      cwd: dir,
+    })
+
+    expect(resolved.viaCmdHost).toBe(false)
+    // 命中的必须是真实文件（大小写按平台语义解释，Windows 本身不区分）
+    expect(path.basename(resolved.command).toLowerCase()).toBe("tool.exe")
+    expect(resolved.args).toEqual(["--flag"])
+  })
+
   it("Windows：含 cmd 元字符的参数直接拒绝，不做转义尝试", async () => {
     const dir = await tempDir()
     await fs.writeFile(path.join(dir, "npm.cmd"), "@echo off\r\n", "utf8")

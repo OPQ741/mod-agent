@@ -13,9 +13,16 @@ import { ExecutionPlanSchema, type ExecutionPlan } from "../../shared/contracts.
 
 /** 规划模式控制器：由 runtime 提供，工具本身不持有状态。 */
 export interface PlanController {
-  enter(): { active: true }
-  exit(plan: ExecutionPlan): { status: "submitted"; steps: number }
-  isActive(): boolean
+  /**
+   * 进入计划模式。
+   *
+   * `taskId` 不是可选的装饰：计划模式是**任务级**状态。同一个 Runtime 可能
+   * 被 SDK / 调度器同时跑多个任务，用 runtime 级布尔值会让任务 A 一进计划模式，
+   * 任务 B 的下一次请求也变成只读 —— 一个任务的状态污染另一个任务。
+   */
+  enter(taskId: string): { active: true }
+  exit(plan: ExecutionPlan, taskId: string): { status: "submitted"; steps: number }
+  isActive(taskId: string): boolean
 }
 
 /* ------------------------------------------------------------------ *
@@ -39,8 +46,8 @@ export function createEnterPlanModeTool(controller: PlanController): AgentTool<E
     deferred: true,
     isReadOnly: true,
     isConcurrencySafe: () => true,
-    async execute(input, _ctx: ToolExecutionContext) {
-      controller.enter()
+    async execute(input, ctx: ToolExecutionContext) {
+      controller.enter(ctx.taskId)
       return {
         active: true,
         reason: input.reason,
@@ -73,8 +80,8 @@ export function createExitPlanModeTool(controller: PlanController): AgentTool<Ex
     deferred: true,
     isReadOnly: true,
     isConcurrencySafe: () => false,
-    validate(input) {
-      if (!controller.isActive()) {
+    validate(input, ctx) {
+      if (!controller.isActive(ctx.taskId)) {
         throw new AppError("INVALID_INPUT", "Not in plan mode. Nothing to submit.")
       }
       const ids = new Set<string>()
@@ -95,8 +102,8 @@ export function createExitPlanModeTool(controller: PlanController): AgentTool<Ex
         }
       }
     },
-    async execute(input, _ctx: ToolExecutionContext) {
-      const { status, steps } = controller.exit(input.plan)
+    async execute(input, ctx: ToolExecutionContext) {
+      const { status, steps } = controller.exit(input.plan, ctx.taskId)
       return {
         status,
         steps,
@@ -126,8 +133,14 @@ export interface DeferredToolEntry {
 export function createToolSearchTool(options: {
   /** 列出所有延迟加载工具。 */
   listDeferred: () => DeferredToolEntry[]
-  /** 激活命中的工具名，下一轮请求才带上完整 schema。 */
-  activate: (names: string[]) => void
+  /**
+   * 激活命中的工具名，下一轮请求才带上完整 schema。
+   *
+   * 激活同样是**任务级**状态：任务 A 为了做计划激活了 `plan.*`，
+   * 任务 B 的工具表不该因此多出这两个 schema —— 延迟加载的意义是
+   * 按当前任务的需要控制上下文体积，不是全局开一次就永远开着。
+   */
+  activate: (names: string[], taskId: string) => void
 }): AgentTool<ToolSearchInput> {
   return {
     name: "tool_search",
@@ -139,7 +152,7 @@ export function createToolSearchTool(options: {
     timeoutMs: 5_000,
     isReadOnly: true,
     isConcurrencySafe: () => true,
-    async execute(input, _ctx: ToolExecutionContext) {
+    async execute(input, ctx: ToolExecutionContext) {
       const query = input.query.toLowerCase()
       const scored = options
         .listDeferred()
@@ -157,7 +170,7 @@ export function createToolSearchTool(options: {
       }
 
       const names = scored.map((item) => item.entry.name)
-      options.activate(names)
+      options.activate(names, ctx.taskId)
       return {
         query: input.query,
         activated: names,

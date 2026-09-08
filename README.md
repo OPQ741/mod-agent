@@ -3,7 +3,7 @@
 [![CI](https://github.com/OPQ741/mod-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/OPQ741/mod-agent/actions/workflows/ci.yml)
 [![Docs](https://github.com/OPQ741/mod-agent/actions/workflows/deploy-docs.yml/badge.svg)](https://opq741.github.io/mod-agent/)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/Node.js-%3E%3D22-brightgreen.svg)](./.nvmrc)
+[![Node](https://img.shields.io/badge/Node.js-%3E%3D22.5-brightgreen.svg)](./.nvmrc)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/OPQ741/mod-agent/badge)](https://api.securityscorecards.dev/projects/github.com/OPQ741/mod-agent)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://conventionalcommits.org)
 
@@ -25,7 +25,7 @@ node dist/cli/main.js doctor     # 只读自检：配置 / 存储 / 沙箱 / 工
 不接真实模型也能跑：`--script <file>` 按文件里的决策序列离线回放，测试全部依赖这条通道，所以 `npm test` 不需要网络与 API Key。
 
 ```bash
-npm test          # vitest run，481 条用例，离线
+npm test          # vitest run，490 条用例，离线
 npm run typecheck # tsc --noEmit（strict）
 npm run build     # 编译到 dist/
 ```
@@ -34,7 +34,7 @@ npm run build     # 编译到 dist/
 
 ## 环境要求
 
-- Node.js >= 22（见 `.nvmrc` 与 `package.json` 的 `engines`）
+- Node.js >= 22.5（`node:sqlite` 自 22.5 提供；见 `.nvmrc` 与 `package.json` 的 `engines`）
 - npm >= 10
 
 ## 文档站
