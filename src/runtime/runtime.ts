@@ -450,7 +450,10 @@ export class AgentRuntime {
     const existingMessages = await this.store.getMessages(taskId)
     const isFirstRun = existingMessages.length === 0
     const wantRules = isFirstRun && options.skipProjectRules !== true
-    const rules = wantRules ? await bundleRules(this.workspaceRoot) : { combined: "" }
+    const ruleTarget = wantRules
+      ? await inferRuleTarget(state.userRequest, this.workspaceRoot)
+      : undefined
+    const rules = wantRules ? await bundleRules(this.workspaceRoot, ruleTarget) : { combined: "" }
     const assembled = this.registry.assemble({
       taskMode: state.mode,
       permissionMode: this.settings.permissionMode ?? "default",
@@ -890,6 +893,71 @@ function sameWorkspace(left: string, right: string): boolean {
   const a = path.resolve(left)
   const b = path.resolve(right)
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/**
+ * 从用户请求里提到的路径推断"就近规则"的目标目录。
+ *
+ * 为什么不做全仓库扫描：把所有子目录的 AGENTS.md 一次性塞进上下文，
+ * 等于用无关部门的约定污染当前任务，还会挤掉真正的任务信息。用户明确
+ * 点名了 `src/cli/index.ts`，才有理由去读 `src/AGENTS.md`。
+ *
+ * 规则：
+ * - 只认带路径分隔符的 token（`src/a.ts`、`docs/guide.md`），避免把
+ *   `README.md` 这类根目录文件名当成子目录线索（反正根规则一定会读）；
+ * - 路径必须落在工作区内，`../` 一律忽略，不因为一句请求就把目标目录
+ *   推到仓库外面；
+ * - 文件不存在也接受（新建文件的场景），此时用它的父目录；
+ * - 多个路径取**公共祖先**：改 `src/a.ts` 与 `src/b.ts` 时读 `src/AGENTS.md`，
+ *   跨 `src/` 与 `docs/` 时退回根规则，不拼一份互相矛盾的混合规则。
+ */
+async function inferRuleTarget(
+  request: string,
+  workspaceRoot: string,
+): Promise<string | undefined> {
+  const root = path.resolve(workspaceRoot)
+  const tokenPattern = /(?:[A-Za-z0-9_.@-]+[\\/])+[A-Za-z0-9_.@-]+/g
+  const dirs: string[] = []
+  for (const match of request.matchAll(tokenPattern)) {
+    const candidate = path.resolve(root, match[0])
+    if (!sameWorkspaceOrInside(candidate, root)) continue
+    try {
+      const stat = await fs.stat(candidate)
+      dirs.push(stat.isDirectory() ? candidate : path.dirname(candidate))
+    } catch {
+      // 新建文件：父目录存在才认为是有效线索
+      const parent = path.dirname(candidate)
+      try {
+        if ((await fs.stat(parent)).isDirectory()) dirs.push(parent)
+      } catch {
+        // 这条 token 不是真的路径，跳过
+      }
+    }
+  }
+  if (dirs.length === 0) return undefined
+  let common = dirs[0] as string
+  for (const dir of dirs.slice(1)) common = commonAncestor(common, dir)
+  return sameWorkspaceOrInside(common, root) ? common : undefined
+}
+
+/** `candidate` 是否等于根或位于根内部（大小写按平台语义）。 */
+function sameWorkspaceOrInside(candidate: string, root: string): boolean {
+  const rel = path.relative(root, candidate)
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+}
+
+function commonAncestor(left: string, right: string): string {
+  const a = path.resolve(left).split(path.sep)
+  const b = path.resolve(right).split(path.sep)
+  const shared: string[] = []
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const segmentA = process.platform === "win32" ? a[i]?.toLowerCase() : a[i]
+    const segmentB = process.platform === "win32" ? b[i]?.toLowerCase() : b[i]
+    if (segmentA !== segmentB) break
+    shared.push(a[i] as string)
+  }
+  const joined = shared.join(path.sep)
+  return joined.length > 0 ? joined : path.parse(left).root
 }
 
 function toKind(id: string): ValidationCheck["kind"] {

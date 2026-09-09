@@ -29,7 +29,7 @@
 
 ## 1. 项目当前阶段
 
-TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于代码阶段**：`src/` 下已有可运行的 Agent Runtime（`runtime/loop.ts` 唯一主循环 → `tools/executor.ts` → `policy/` → `sandbox/` → `store/`），`tests/` 有 525 条离线用例（`npm test` 不联网、不烧 API 额度）；`docs/`（24 篇源文档）与实现并行维护，文档写目标架构，代码是它的落地。判断"某能力是否存在"一律以 `src/` 为准，不要只读文档下结论。
+TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。**当前处于代码阶段**：`src/` 下已有可运行的 Agent Runtime（`runtime/loop.ts` 唯一主循环 → `tools/executor.ts` → `policy/` → `sandbox/` → `store/`），`tests/` 有 526 条离线用例（`npm test` 不联网、不烧 API 额度）；`docs/`（24 篇源文档）与实现并行维护，文档写目标架构，代码是它的落地。判断"某能力是否存在"一律以 `src/` 为准，不要只读文档下结论。
 
 ## 2. 开始任何任务前
 
@@ -52,7 +52,7 @@ TypeScript + Node.js 实现的 AI Coding Agent CLI，形态对标 Claude Code。
 - `npm run format:check` — 仅检查格式，不写文件。
 - `npm run typecheck` — TypeScript strict 类型检查（`tsc --noEmit`）。
 - `npm run build` — 编译到 `dist/`（`tsc -p tsconfig.build.json`）。
-- `npm run test` — 全量离线测试（`vitest run`，525 用例，不联网、不需要 API Key）。
+- `npm run test` — 全量离线测试（`vitest run`，526 用例，不联网、不需要 API Key）。
 - `npm run test:watch` — 监听模式，改一处跑相关用例时用。
 - `npm run cli` — 跑编译产物 `node dist/cli/main.js`（需先 `npm run build`）。
 - `npm run verify` — `typecheck` + `test`；改代码后至少跑这一条。

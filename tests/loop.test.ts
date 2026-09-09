@@ -61,6 +61,7 @@ async function boot(options: {
   budget?: Partial<typeof DEFAULT_BUDGET>
   mode?: "ask" | "plan" | "edit" | "autopilot"
   now?: () => Date
+  userRequest?: string
 }): Promise<{ ws: TempWorkspace; runtime: TestRuntime; taskId: string }> {
   const { ws } = options
   const runtime = await createTestRuntime({
@@ -73,7 +74,7 @@ async function boot(options: {
   })
   const taskId = await runtime.createTask({
     title: "test task",
-    userRequest: "do the thing",
+    userRequest: options.userRequest ?? "do the thing",
     mode: options.mode ?? options.settings?.mode ?? "edit",
     ...(options.budget ? { budget: options.budget } : {}),
   })
@@ -932,6 +933,23 @@ describe("主循环 · 检查点与恢复", () => {
 
     expect(afterFirst).toBe(1)
     expect(await count()).toBe(1)
+  })
+
+  it("请求点名了子目录文件时，就近的 AGENTS.md 也会进规则（不是只读根规则）", async () => {
+    const ws = await workspace({
+      "src/AGENTS.md": "# src 规则\n\n- 改动必须带测试\n",
+      "AGENTS.md": "# 根规则\n\n- 提交信息用 Conventional Commits\n",
+    })
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [final("ok")],
+      userRequest: "请修改 src/app.ts 里的解析逻辑",
+    })
+    await collect(runtime.run(taskId))
+    const messages = JSON.stringify(await runtime.store.getMessages(taskId))
+    // 从根到目标目录逐级拼接，近处排在后面
+    expect(messages).toContain("提交信息用 Conventional Commits")
+    expect(messages).toContain("改动必须带测试")
   })
 })
 
