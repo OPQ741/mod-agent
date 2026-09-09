@@ -25,7 +25,7 @@ node dist/cli/main.js doctor     # 只读自检：配置 / 存储 / 沙箱 / 工
 不接真实模型也能跑：`--script <file>` 按文件里的决策序列离线回放，测试全部依赖这条通道，所以 `npm test` 不需要网络与 API Key。
 
 ```bash
-npm test          # vitest run，497 条用例，离线
+npm test          # vitest run，512 条用例，离线
 npm run typecheck # tsc --noEmit（strict）
 npm run build     # 编译到 dist/
 ```

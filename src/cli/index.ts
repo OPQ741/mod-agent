@@ -28,6 +28,15 @@ import { parseOutputFormat } from "./render.js"
 import { CliSession } from "./session.js"
 import { runRepl } from "./repl.js"
 import { createInteractivePrompter } from "./approval.js"
+import { resolveContextWindowTokens, resolveModelProfile } from "../model/catalog.js"
+import {
+  createWorktree,
+  findRepoRoot,
+  listWorktrees,
+  removeWorktree,
+  worktreeStatus,
+  type WorktreeInfo,
+} from "../worktree/index.js"
 
 export interface CliContext {
   env?: NodeJS.ProcessEnv
@@ -94,7 +103,7 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
     .option("-C, --cwd <dir>", "工作区目录")
     .option("--resume <id>", "从检查点恢复指定任务")
     .option("--continue", "接着本工作区最近一个任务跑")
-    .option("--worktree / --no-worktree", "（暂未实现）独立 worktree；当前改动仍落在主检出")
+    .option("--worktree / --no-worktree", "在独立 git worktree 中执行任务，改动不落在主检出")
     .option("--no-validation", "交付前不跑验证命令")
     /**
      * 只注册否定形式。commander 里 `--no-stream` 会自动把 `stream` 字段声明为
@@ -109,22 +118,19 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
     .configureOutput({ writeOut: (text) => io.out(text), writeErr: (text) => io.err(text) })
     .action(async (promptArgs: string[], options: GlobalOptions) => {
       /**
-       * 显式传入 `--worktree` / `--no-worktree` 时要**说出来**它没实现。
-       *
-       * 参数保留是为了不打断已有的脚本与肌肉记忆，但"接受一个参数然后忽略它"
-       * 是最糟的一种兼容：用户以为开了隔离，实际所有改动都写进主检出 ——
-       * 这正是后期最难查的一类事故。用 `getOptionValueSource` 区分
-       * "用户显式要求"与"默认值"，只在前者提示，不污染正常输出。
+       * 只有用户**显式**写了 `--worktree` / `--no-worktree` 才把它当作用户意图；
+       * 没写时交给配置里的 `worktree` 决定。用 `getOptionValueSource` 区分两者，
+       * 否则"默认值 false"会覆盖项目配置里打开的 worktree。
        */
-      if (program.getOptionValueSource("worktree") === "cli") {
-        io.err("[提示] --worktree 尚未实现：本次不会创建独立 worktree，所有改动都落在主检出。\n")
-      }
+      const worktreeExplicit =
+        program.getOptionValueSource("worktree") === "cli" ? options.worktree === true : undefined
       exitCode = await executeMain({
         promptArgs,
         options,
         io,
         env,
         cwd,
+        ...(worktreeExplicit !== undefined ? { worktreeExplicit } : {}),
         ...(context.homeDir ? { homeDir: context.homeDir } : {}),
         ...(context.now ? { now: context.now } : {}),
         ...(context.signal ? { signal: context.signal } : {}),
@@ -163,6 +169,34 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
       })
     })
 
+  const worktree = program
+    .command("worktree")
+    .description("管理 --worktree 创建的独立检出（只清理 .mod-worktrees 下的托管目录）")
+  worktree
+    .command("list")
+    .description("列出当前仓库托管的所有 worktree")
+    .option("--json", "输出 JSON")
+    .option("-C, --cwd <dir>", "工作区目录")
+    .action(async (options: { json?: boolean; cwd?: string }) => {
+      exitCode = await executeWorktreeList({
+        io,
+        cwd: resolveCwd(options, program, cwd),
+        asJson: Boolean(options.json),
+      })
+    })
+  worktree
+    .command("clean")
+    .description("删除托管 worktree；有未提交改动 / 未合并提交时默认跳过")
+    .option("--force", "连同未提交改动、未合并分支一起删除（会丢工作）")
+    .option("-C, --cwd <dir>", "工作区目录")
+    .action(async (options: { force?: boolean; cwd?: string }) => {
+      exitCode = await executeWorktreeClean({
+        io,
+        cwd: resolveCwd(options, program, cwd),
+        force: Boolean(options.force),
+      })
+    })
+
   try {
     await program.parseAsync(argv, { from: "user" })
     return exitCode
@@ -185,6 +219,8 @@ interface ExecuteMainInput {
   io: CliIo
   env: NodeJS.ProcessEnv
   cwd: string
+  /** 用户显式给了 `--worktree` / `--no-worktree`；undefined 表示交给配置。 */
+  worktreeExplicit?: boolean
   homeDir?: string
   now?: () => Date
   signal?: AbortSignal
@@ -192,11 +228,12 @@ interface ExecuteMainInput {
 
 async function executeMain(input: ExecuteMainInput): Promise<number> {
   const { io, env, options } = input
-  const workspaceRoot = path.resolve(options.cwd ?? input.cwd)
+  /** 用户所在的主检出：配置、状态文件、worktree 的基准都以它为准。 */
+  const baseWorkspaceRoot = path.resolve(options.cwd ?? input.cwd)
   const format = parseOutputFormat(options.outputFormat)
 
   const loaded = await loadSettings({
-    cwd: workspaceRoot,
+    cwd: baseWorkspaceRoot,
     ...(options.settings ? { cliSettings: options.settings } : {}),
     ...(input.homeDir ? { homeDir: input.homeDir } : {}),
   })
@@ -223,6 +260,20 @@ async function executeMain(input: ExecuteMainInput): Promise<number> {
     mode = parsed.data
   }
 
+  /**
+   * 独立 worktree：CLI 显式开关优先，其次读项目配置。
+   *
+   * 会话与任务都跑在 worktree 里，但**状态文件留在主检出**：
+   * worktree 随时可能被删除，把任务历史写进去等于把历史一起删掉。
+   */
+  let workspaceRoot = baseWorkspaceRoot
+  let worktree: WorktreeInfo | undefined
+  const wantWorktree = input.worktreeExplicit ?? settings.worktree ?? false
+  if (wantWorktree && (options.resume || options.continue)) {
+    io.err("--worktree 不能与 --resume / --continue 组合：恢复的任务属于它原本的工作区。\n")
+    return EXIT_ERROR
+  }
+
   const script = options.script ? await loadScriptFile(options.script) : undefined
   const resolution = await resolveProvider({
     settings,
@@ -231,13 +282,26 @@ async function executeMain(input: ExecuteMainInput): Promise<number> {
   })
   for (const note of resolution.notes) io.err(`[模型] ${note}\n`)
 
+  // 模型解析成功后再建 worktree：前面的失败不该在仓库旁边留下一个空检出
+  if (wantWorktree) {
+    try {
+      worktree = await createWorktree({ cwd: baseWorkspaceRoot })
+    } catch (err) {
+      io.err(`${err instanceof Error ? err.message : String(err)}\n`)
+      return EXIT_ERROR
+    }
+    workspaceRoot = worktree.path
+    io.err(`[worktree] 独立工作区：${worktree.path}\n`)
+    io.err(`[worktree] 分支 ${worktree.branch}（基于 ${worktree.baseCommit.slice(0, 12)}）\n`)
+  }
+
   const session = await CliSession.open({
     workspaceRoot,
     settings,
     provider: resolution.provider,
     io,
     format,
-    sqliteFile: defaultStateFile(workspaceRoot, env, input.homeDir),
+    sqliteFile: defaultStateFile(baseWorkspaceRoot, env, input.homeDir),
     logLevel: options.verbose ? "debug" : "warn",
     hasTty: io.isTty,
     ...(options.stream === false ? { streaming: false } : {}),
@@ -290,6 +354,99 @@ async function executeMain(input: ExecuteMainInput): Promise<number> {
     })
   } finally {
     await session.close()
+    if (worktree) {
+      io.err(`[worktree] 改动保留在 ${worktree.path}；用 git -C "${worktree.path}" diff 查看。\n`)
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * worktree
+ * ------------------------------------------------------------------ */
+
+async function executeWorktreeList(input: {
+  io: CliIo
+  cwd: string
+  asJson: boolean
+}): Promise<number> {
+  let repoRoot: string
+  try {
+    repoRoot = await findRepoRoot(input.cwd)
+  } catch (err) {
+    input.io.err(`${err instanceof Error ? err.message : String(err)}\n`)
+    return EXIT_ERROR
+  }
+
+  try {
+    const items = await listWorktrees(repoRoot)
+    if (input.asJson) {
+      input.io.out(`${JSON.stringify(items, null, 2)}\n`)
+      return EXIT_OK
+    }
+    if (items.length === 0) {
+      input.io.out("（没有由 mod-agent 创建的 worktree）\n")
+      return EXIT_OK
+    }
+    for (const item of items) {
+      input.io.out(`${item.path}\n`)
+      input.io.out(`  分支 ${item.branch} · 基于 ${item.baseCommit.slice(0, 12)}\n`)
+    }
+    return EXIT_OK
+  } catch (err) {
+    input.io.err(`${err instanceof Error ? err.message : String(err)}\n`)
+    return EXIT_ERROR
+  }
+}
+
+async function executeWorktreeClean(input: {
+  io: CliIo
+  cwd: string
+  force: boolean
+}): Promise<number> {
+  let repoRoot: string
+  try {
+    repoRoot = await findRepoRoot(input.cwd)
+  } catch (err) {
+    input.io.err(`${err instanceof Error ? err.message : String(err)}\n`)
+    return EXIT_ERROR
+  }
+
+  try {
+    const items = await listWorktrees(repoRoot)
+    if (items.length === 0) {
+      input.io.out("（没有需要清理的 worktree）\n")
+      return EXIT_OK
+    }
+
+    let skipped = 0
+    for (const info of items) {
+      const status = await worktreeStatus(info)
+      if ((status.dirty || status.unmergedCommits > 0) && !input.force) {
+        skipped += 1
+        const reasons: string[] = []
+        if (status.dirty) reasons.push(`${status.changedFiles} 个未提交改动`)
+        if (status.unmergedCommits > 0) reasons.push(`${status.unmergedCommits} 个未合并提交`)
+        input.io.err(
+          `[跳过] ${info.path}：${reasons.join("，")}。确认丢弃请加 --force（分支上已提交的内容会保留）。\n`,
+        )
+        continue
+      }
+      /** 有未合并提交时保留分支：删 checkout 可以，删提交不行。 */
+      const removeBranch = status.unmergedCommits === 0
+      await removeWorktree(info, { removeBranch })
+      input.io.out(
+        `已删除 ${info.path}${removeBranch ? `（分支 ${info.branch}）` : `（分支 ${info.branch} 保留，含未合并提交）`}\n`,
+      )
+    }
+
+    if (skipped > 0) {
+      input.io.err(`${skipped} 个 worktree 仍有改动，未删除。\n`)
+      return EXIT_ERROR
+    }
+    return EXIT_OK
+  } catch (err) {
+    input.io.err(`${err instanceof Error ? err.message : String(err)}\n`)
+    return EXIT_ERROR
   }
 }
 
@@ -330,8 +487,30 @@ async function executeDoctor(input: {
       credentialsPresent: resolution.credentialsPresent,
       notes: resolution.notes,
     }
+    /**
+     * 实际生效的窗口与单价：压缩阈值与预算门禁都按这两个值算。
+     * doctor 必须把"用的是配置还是画像"说清楚，否则用户看到 128k 的模型
+     * 却以为还在按 200k 压缩，就无从判断该不该改配置。
+     */
+    const profile = resolveModelProfile(loaded.settings.model)
+    const contextWindowTokens = resolveContextWindowTokens(
+      loaded.settings.limits.contextWindowTokens,
+      loaded.settings.model,
+    )
+    const pricing = loaded.settings.pricing ?? profile.pricing
+    const model = {
+      name: loaded.settings.model ?? "(provider default)",
+      contextWindowTokens,
+      windowSource: loaded.settings.limits.contextWindowTokens
+        ? "settings"
+        : `profile:${profile.id}`,
+      pricing,
+      pricingSource: loaded.settings.pricing ? "settings" : `profile:${profile.id}`,
+    }
     if (input.asJson) {
-      io.out(`${JSON.stringify({ ...report, credentials, warnings: loaded.warnings }, null, 2)}\n`)
+      io.out(
+        `${JSON.stringify({ ...report, credentials, model, warnings: loaded.warnings }, null, 2)}\n`,
+      )
     } else {
       io.out(`工作区      ${report.workspaceRoot}\n`)
       io.out(`运行时      node ${report.node} · ${report.platform}\n`)
@@ -344,6 +523,12 @@ async function executeDoctor(input: {
         `模型后端    ${credentials.provider} · 凭证 ${credentials.credentialsPresent ? "已配置" : "缺失"}\n`,
       )
       for (const note of credentials.notes) io.out(`            ${note}\n`)
+      io.out(
+        `模型窗口    ${model.name} · ${contextWindowTokens} tokens（${model.windowSource === "settings" ? "配置覆盖" : `画像 ${profile.id}`}）\n`,
+      )
+      io.out(
+        `计费单价    $${pricing.inputUsdPerMTok}/M 输入 · $${pricing.outputUsdPerMTok}/M 输出（${model.pricingSource === "settings" ? "配置覆盖" : "参考价"}）\n`,
+      )
       io.out(`工具        ${report.tools.join(", ")}\n`)
       io.out(
         `验证命令    ${report.discoveredChecks.length > 0 ? report.discoveredChecks.map((c) => `${c.id}(${c.command.join(" ")})`).join(" · ") : "(未发现)"}\n`,

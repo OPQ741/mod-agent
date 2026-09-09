@@ -21,6 +21,7 @@ import {
   type ModelStreamChunk,
   type ModelToolCall,
   type ModelUsage,
+  type ModelPricing,
   type StopReason,
 } from "./types.js"
 import { asRecord, classifyHttpError, numberOr, parseArgsSafely } from "./openai-compat.js"
@@ -31,6 +32,8 @@ export interface AnthropicOptions {
   apiKey?: string
   anthropicVersion?: string
   fetchImpl?: typeof fetch
+  /** 费用估算单价；不传则用内置默认价（见 `model/catalog.ts`）。 */
+  pricing?: ModelPricing
 }
 
 export class AnthropicProvider implements ModelProvider {
@@ -50,18 +53,20 @@ export class AnthropicProvider implements ModelProvider {
   private readonly apiKey: string | undefined
   private readonly version: string
   private readonly doFetch: typeof fetch
+  private readonly pricing: ModelPricing
 
   constructor(options: AnthropicOptions = {}) {
     this.baseUrl = (options.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "")
     this.apiKey = options.apiKey
     this.version = options.anthropicVersion ?? "2023-06-01"
     this.doFetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
+    this.pricing = options.pricing ?? DEFAULT_PRICING
   }
 
   async generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
     const response = await this.post(buildAnthropicBody(input, false), signal)
     const json: unknown = await response.json()
-    return parseAnthropicResponse(json, input.model)
+    return parseAnthropicResponse(json, input.model, this.pricing)
   }
 
   /**
@@ -82,7 +87,7 @@ export class AnthropicProvider implements ModelProvider {
         "Anthropic returned a streaming response without a body",
       )
     }
-    yield* parseAnthropicStream(response.body, input.model)
+    yield* parseAnthropicStream(response.body, input.model, this.pricing)
   }
 
   private async post(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
@@ -225,7 +230,11 @@ function stringifyBlocks(blocks: readonly ContentBlock[]): string {
     .join("\n")
 }
 
-export function parseAnthropicResponse(json: unknown, fallbackModel: string): ModelResponse {
+export function parseAnthropicResponse(
+  json: unknown,
+  fallbackModel: string,
+  pricing: ModelPricing = DEFAULT_PRICING,
+): ModelResponse {
   const root = asRecord(json)
   const content = Array.isArray(root.content) ? root.content : []
 
@@ -279,7 +288,7 @@ export function parseAnthropicResponse(json: unknown, fallbackModel: string): Mo
     usage,
     model: typeof root.model === "string" ? root.model : fallbackModel,
     ...(typeof root.id === "string" ? { requestId: root.id } : {}),
-    costUsd: estimateCost(usage, DEFAULT_PRICING),
+    costUsd: estimateCost(usage, pricing),
   }
 }
 
@@ -322,6 +331,7 @@ type StreamBlock =
 async function* parseAnthropicStream(
   body: ReadableStream<Uint8Array>,
   fallbackModel: string,
+  pricing: ModelPricing = DEFAULT_PRICING,
 ): AsyncGenerator<ModelStreamChunk, void, void> {
   let model = fallbackModel
   let requestId: string | undefined
@@ -440,6 +450,7 @@ async function* parseAnthropicStream(
     response: parseAnthropicResponse(
       { id: requestId, model, content, stop_reason: stopReason, usage },
       fallbackModel,
+      pricing,
     ),
   }
 }

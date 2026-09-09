@@ -23,6 +23,7 @@ import {
   type ModelResponse,
   type ModelStreamChunk,
   type ModelUsage,
+  type ModelPricing,
   type StopReason,
 } from "./types.js"
 
@@ -81,6 +82,8 @@ export interface ScriptedProviderOptions {
   streaming?: boolean
   /** 流式回放时每个文本增量的字符数。 */
   streamChunkChars?: number
+  /** 费用估算单价；不传则用内置默认价。 */
+  pricing?: ModelPricing
 }
 
 export class ScriptExhaustedError extends AppError {
@@ -103,6 +106,7 @@ export class ScriptedProvider implements ModelProvider {
   private readonly modelName: string
   private readonly onRequest?: (request: ModelRequest, stepIndex: number) => void
   private readonly streamChunkChars: number
+  private readonly pricing: ModelPricing
 
   constructor(steps: readonly ScriptStep[], options: ScriptedProviderOptions = {}) {
     this.steps = [...steps]
@@ -110,6 +114,7 @@ export class ScriptedProvider implements ModelProvider {
     this.modelName = options.model ?? "scripted-model"
     this.onRequest = options.onRequest
     this.streamChunkChars = Math.max(1, options.streamChunkChars ?? 40)
+    this.pricing = options.pricing ?? DEFAULT_PRICING
     this.caps = {
       toolCalling: true,
       streaming: options.streaming === true,
@@ -202,7 +207,7 @@ export class ScriptedProvider implements ModelProvider {
         stopReason: decision.stopReason,
         usage,
         model: this.modelName,
-        costUsd: estimateCost(usage, DEFAULT_PRICING),
+        costUsd: estimateCost(usage, this.pricing),
         ...(decision.decisionHint ? { decisionHint: decision.decisionHint } : {}),
       }
     }
@@ -218,7 +223,7 @@ export class ScriptedProvider implements ModelProvider {
         stopReason: "tool_use",
         usage,
         model: this.modelName,
-        costUsd: estimateCost(usage, DEFAULT_PRICING),
+        costUsd: estimateCost(usage, this.pricing),
       }
     }
 
@@ -230,7 +235,7 @@ export class ScriptedProvider implements ModelProvider {
           stopReason: "end_turn",
           usage,
           model: this.modelName,
-          costUsd: estimateCost(usage, DEFAULT_PRICING),
+          costUsd: estimateCost(usage, this.pricing),
         }
       case "tool_use":
         return {
@@ -245,7 +250,7 @@ export class ScriptedProvider implements ModelProvider {
           stopReason: "tool_use",
           usage,
           model: this.modelName,
-          costUsd: estimateCost(usage, DEFAULT_PRICING),
+          costUsd: estimateCost(usage, this.pricing),
         }
       case "ask":
         return {
@@ -254,7 +259,7 @@ export class ScriptedProvider implements ModelProvider {
           stopReason: "end_turn",
           usage,
           model: this.modelName,
-          costUsd: estimateCost(usage, DEFAULT_PRICING),
+          costUsd: estimateCost(usage, this.pricing),
           // 显式告诉主循环：这是提问，别当成交付结论
           decisionHint: "ask",
         }

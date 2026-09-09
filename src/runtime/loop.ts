@@ -43,6 +43,7 @@ import { AppError, toAppError } from "../shared/errors.js"
 import { newCallId, newCheckpointId } from "../shared/ids.js"
 import { parameterHash, sha256, stableStringify } from "../shared/hash.js"
 import type { ContentBlock, ModelMessage, ModelRequest, ModelResponse } from "../model/types.js"
+import { resolveContextWindowTokens } from "../model/catalog.js"
 import type { ModelGateway, RetryEvent } from "../model/gateway.js"
 import type { Store } from "../store/types.js"
 import { updateTaskWithRetry } from "./task-write.js"
@@ -577,7 +578,10 @@ export async function* runTask(
     let sentMessages = contextMessages
     if (options.compactionEnabled !== false) {
       const compacted = await compact(dedupeMessages(contextMessages), {
-        contextWindowTokens: deps.settings.limits.contextWindowTokens,
+        contextWindowTokens: resolveContextWindowTokens(
+          deps.settings.limits.contextWindowTokens,
+          deps.settings.model,
+        ),
         threshold: deps.settings.limits.compactionThreshold,
       })
       if (compacted.compacted) {

@@ -22,6 +22,7 @@ import {
   type ModelStreamChunk,
   type ModelToolCall,
   type ModelUsage,
+  type ModelPricing,
   type StopReason,
 } from "./types.js"
 import { parseSseJson, readSseEvents } from "./streaming.js"
@@ -33,6 +34,8 @@ export interface OpenAICompatOptions {
   fetchImpl?: typeof fetch
   /** 组织头，可选。 */
   organization?: string
+  /** 费用估算单价；不传则用内置默认价（见 `model/catalog.ts`）。 */
+  pricing?: ModelPricing
 }
 
 export class OpenAICompatProvider implements ModelProvider {
@@ -52,6 +55,7 @@ export class OpenAICompatProvider implements ModelProvider {
   private readonly apiKey: string | undefined
   private readonly doFetch: typeof fetch
   private readonly organization: string | undefined
+  private readonly pricing: ModelPricing
 
   /**
    * 流式请求是否带 `stream_options.include_usage`。
@@ -67,12 +71,13 @@ export class OpenAICompatProvider implements ModelProvider {
     this.apiKey = options.apiKey
     this.doFetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
     this.organization = options.organization
+    this.pricing = options.pricing ?? DEFAULT_PRICING
   }
 
   async generate(input: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
     const response = await this.post(buildOpenAIBody(input, false), signal)
     const json: unknown = await response.json()
-    return parseOpenAIResponse(json, input.model)
+    return parseOpenAIResponse(json, input.model, this.pricing)
   }
 
   /**
@@ -108,7 +113,7 @@ export class OpenAICompatProvider implements ModelProvider {
         "OpenAI-compatible endpoint returned a streaming response without a body",
       )
     }
-    yield* parseOpenAIStream(response.body, input)
+    yield* parseOpenAIStream(response.body, input, this.pricing)
   }
 
   private async post(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
@@ -263,7 +268,11 @@ function stringifyBlocks(blocks: readonly ContentBlockLike[]): string {
  * 响应解析
  * ------------------------------------------------------------------ */
 
-export function parseOpenAIResponse(json: unknown, fallbackModel: string): ModelResponse {
+export function parseOpenAIResponse(
+  json: unknown,
+  fallbackModel: string,
+  pricing: ModelPricing = DEFAULT_PRICING,
+): ModelResponse {
   const root = asRecord(json)
   const choices = Array.isArray(root.choices) ? root.choices : []
   const choice = asRecord(choices[0])
@@ -300,7 +309,7 @@ export function parseOpenAIResponse(json: unknown, fallbackModel: string): Model
     usage,
     model: typeof root.model === "string" ? root.model : fallbackModel,
     ...(typeof root.id === "string" ? { requestId: root.id } : {}),
-    costUsd: estimateCost(usage, DEFAULT_PRICING),
+    costUsd: estimateCost(usage, pricing),
   }
 }
 
@@ -361,6 +370,7 @@ interface StreamToolCall {
 async function* parseOpenAIStream(
   body: ReadableStream<Uint8Array>,
   input: ModelRequest,
+  pricing: ModelPricing = DEFAULT_PRICING,
 ): AsyncGenerator<ModelStreamChunk, void, void> {
   let model = input.model
   let requestId: string | undefined
@@ -445,6 +455,7 @@ async function* parseOpenAIStream(
         usage: usageRaw ?? estimateStreamUsage(input, content, toolCalls),
       },
       input.model,
+      pricing,
     ),
   }
 }

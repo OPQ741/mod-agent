@@ -11,9 +11,11 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest"
+import { execFile } from "node:child_process"
 import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { promisify } from "node:util"
 
 import { runCli } from "../src/cli/index.js"
 import { createMemoryIo } from "../src/cli/io.js"
@@ -75,6 +77,18 @@ async function writeScript(dir: string, steps: unknown[]): Promise<string> {
   return file
 }
 
+/** 把临时目录变成有提交的 Git 仓库（worktree 用例的前提）。 */
+async function initGitRepo(dir: string): Promise<void> {
+  const git = async (args: readonly string[]) =>
+    promisify(execFile)("git", args as string[], { cwd: dir, windowsHide: true, shell: false })
+  await git(["init", "-b", "main"])
+  await git(["config", "user.email", "test@example.com"])
+  await git(["config", "user.name", "Test"])
+  await fs.writeFile(path.join(dir, "README.md"), "# repo\n", "utf8")
+  await git(["add", "."])
+  await git(["commit", "-m", "init"])
+}
+
 async function setup(): Promise<{ cwd: string; homeDir: string; workspace: TempWorkspace }> {
   const homeDir = await tempDir("mod-home-")
   const raw = await fs.mkdtemp(path.join(os.tmpdir(), "mod-cliws-"))
@@ -120,18 +134,40 @@ describe("CLI · 元命令", () => {
     expect(result.stdout).toContain("--output-format")
     expect(result.stdout).toContain("doctor")
     expect(result.stdout).toContain("config")
-    // 未实现的开关必须在 --help 里就写清楚，不能只写"是否开独立 worktree"
-    expect(result.stdout).toContain("暂未实现")
+    // worktree 是一个真实能力，--help 里不该再写"暂未实现"
+    expect(result.stdout).toContain("--worktree")
+    expect(result.stdout).not.toContain("暂未实现")
   })
 
-  it("显式 --worktree 会提示尚未实现，但任务照常跑完", async () => {
+  it("显式 --worktree：创建独立检出执行任务，并打印保存改动的位置", async () => {
+    const { cwd, homeDir } = await setup()
+    await initGitRepo(cwd)
+    const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
+    const result = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
+
+    expect(result.code).toBe(EXIT_OK)
+    // 提示走 stderr：stdout 必须保持机器可读
+    expect(result.stderr).toContain("独立工作区")
+    expect(result.stdout).not.toContain("独立工作区")
+
+    const printed = /独立工作区：(.+)/.exec(result.stderr)?.[1]?.trim()
+    expect(printed).toBeTruthy()
+    const wtPath = printed as string
+    temps.push(wtPath)
+    await expect(fs.access(wtPath)).resolves.toBeUndefined()
+    // 检出必须在主检出之外，否则隔离名存实亡
+    expect(wtPath.startsWith(`${cwd}${path.sep}`)).toBe(false)
+    // 结束时会告诉用户改动留在哪里
+    expect(result.stderr).toContain("改动保留在")
+  })
+
+  it("--worktree 在非 Git 目录中失败，并说明需要 Git 仓库", async () => {
     const { cwd, homeDir } = await setup()
     const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
     const result = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
-    expect(result.code).toBe(EXIT_OK)
-    // 提示走 stderr：stdout 必须保持机器可读
-    expect(result.stderr).toContain("尚未实现")
-    expect(result.stdout).not.toContain("尚未实现")
+
+    expect(result.code).toBe(EXIT_ERROR)
+    expect(result.stderr).toContain("Git 仓库")
   })
 
   it("--version 输出 package.json 里的版本", async () => {
@@ -145,6 +181,52 @@ describe("CLI · 元命令", () => {
     const { cwd, homeDir } = await setup()
     const result = await run(["definitely-not-a-command"], { cwd, homeDir })
     expect(result.code).not.toBe(EXIT_OK)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * worktree 管理
+ * ------------------------------------------------------------------ */
+
+describe("CLI · worktree 管理", () => {
+  it("list 能看到托管检出；clean 在干净时删除它", async () => {
+    const { cwd, homeDir } = await setup()
+    await initGitRepo(cwd)
+    const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
+    const first = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
+    expect(first.code).toBe(EXIT_OK)
+    const wtPath = (/独立工作区：(.+)/.exec(first.stderr)?.[1] ?? "").trim()
+    expect(wtPath).not.toBe("")
+
+    const listed = await run(["worktree", "list", "--json"], { cwd, homeDir })
+    expect(listed.code).toBe(EXIT_OK)
+    const items = JSON.parse(listed.stdout) as Array<{ path: string; branch: string }>
+    expect(items.map((item) => item.path)).toContain(wtPath)
+    expect(items[0]?.branch).toMatch(/^mod-agent\//)
+
+    const cleaned = await run(["worktree", "clean"], { cwd, homeDir })
+    expect(cleaned.code).toBe(EXIT_OK)
+    expect(cleaned.stdout).toContain("已删除")
+    await expect(fs.access(wtPath)).rejects.toThrow()
+  })
+
+  it("clean 默认不删有未提交改动的检出，--force 才丢工作", async () => {
+    const { cwd, homeDir } = await setup()
+    await initGitRepo(cwd)
+    const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
+    const first = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
+    const wtPath = (/独立工作区：(.+)/.exec(first.stderr)?.[1] ?? "").trim()
+    await fs.writeFile(path.join(wtPath, "dirty.txt"), "keep me\n", "utf8")
+    temps.push(wtPath)
+
+    const refused = await run(["worktree", "clean"], { cwd, homeDir })
+    expect(refused.code).toBe(EXIT_ERROR)
+    expect(refused.stderr).toContain("未提交改动")
+    await expect(fs.access(wtPath)).resolves.toBeUndefined()
+
+    const forced = await run(["worktree", "clean", "--force"], { cwd, homeDir })
+    expect(forced.code).toBe(EXIT_OK)
+    await expect(fs.access(wtPath)).rejects.toThrow()
   })
 })
 
@@ -163,6 +245,8 @@ describe("CLI · doctor 与 config", () => {
     expect(result.stdout).toContain("沙箱")
     expect(result.stdout).toContain("工具")
     expect(result.stdout).toContain("策略版本")
+    expect(result.stdout).toContain("模型窗口")
+    expect(result.stdout).toContain("计费单价")
   })
 
   it("doctor --json：可被 JSON.parse，且沙箱覆盖声明是数组", async () => {
@@ -170,10 +254,16 @@ describe("CLI · doctor 与 config", () => {
     const result = await run(["doctor", "--json"], { cwd, homeDir })
     expect(result.code).toBe(EXIT_OK)
     const parsed: unknown = JSON.parse(result.stdout)
-    const report = parsed as { sandbox: { coverage: string[] }; tools: string[]; storeKind: string }
+    const report = parsed as {
+      sandbox: { coverage: string[] }
+      tools: string[]
+      storeKind: string
+      model: { contextWindowTokens: number; windowSource: string }
+    }
     expect(Array.isArray(report.sandbox.coverage)).toBe(true)
     expect(report.tools.length).toBeGreaterThan(0)
     expect(["memory", "sqlite"]).toContain(report.storeKind)
+    expect(report.model.contextWindowTokens).toBeGreaterThan(0)
   })
 
   it("doctor 明确声明沙箱未覆盖的部分（不许把受限子进程说成完整沙箱）", async () => {

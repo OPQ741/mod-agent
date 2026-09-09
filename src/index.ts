@@ -50,6 +50,12 @@ export { OpenAICompatProvider } from "./model/openai-compat.js"
 export { ScriptedProvider, ScriptExhaustedError, toolUse, final, ask } from "./model/scripted.js"
 export type { ScriptStep } from "./model/scripted.js"
 export { estimateCost, DEFAULT_PRICING } from "./model/types.js"
+export {
+  resolveModelProfile,
+  resolveContextWindowTokens,
+  DEFAULT_MODEL_PROFILE,
+} from "./model/catalog.js"
+export type { ModelProfile } from "./model/catalog.js"
 export type {
   ModelProvider,
   ModelMessage,

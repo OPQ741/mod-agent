@@ -616,6 +616,50 @@ describe("model/gateway: 重试、退避、记账", () => {
   })
 })
 
+describe("model: 单价可注入（按模型画像/配置记账）", () => {
+  it("Anthropic：注入单价后 costUsd 按它计算", async () => {
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      pricing: { inputUsdPerMTok: 1, outputUsdPerMTok: 2 },
+      fetchImpl: (async () =>
+        okResponse({
+          id: "msg_1",
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1_000, output_tokens: 1_000 },
+        })) as never,
+    })
+    const response = await provider.generate(baseRequest())
+    expect(response.costUsd).toBeCloseTo(0.003, 6)
+  })
+
+  it("OpenAI 兼容：注入单价后 costUsd 按它计算", async () => {
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://api.test/v1",
+      pricing: { inputUsdPerMTok: 0.5, outputUsdPerMTok: 1 },
+      fetchImpl: (async () =>
+        okResponse({
+          id: "chatcmpl_1",
+          model: "gpt-4o",
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1_000, completion_tokens: 1_000 },
+        })) as never,
+    })
+    const response = await provider.generate(baseRequest())
+    expect(response.costUsd).toBeCloseTo(0.0015, 6)
+  })
+
+  it("ScriptedProvider 也能按注入单价记账，便于预算门禁用例复现", async () => {
+    const provider = new ScriptedProvider([final("ok")], {
+      tokensPerStep: 1_000,
+      pricing: { inputUsdPerMTok: 0, outputUsdPerMTok: 2 },
+    })
+    const response = await provider.generate({ ...baseRequest(), messages: [] })
+    expect(response.costUsd).toBeCloseTo(0.002, 6)
+  })
+})
+
 describe("model/scripted: 离线回放", () => {
   it("按脚本顺序产出决策", async () => {
     const provider = new ScriptedProvider([

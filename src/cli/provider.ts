@@ -13,6 +13,7 @@ import { ScriptedProvider } from "../model/scripted.js"
 import type { ModelProvider } from "../model/types.js"
 import type { ScriptStep } from "../model/scripted.js"
 import type { Settings } from "../config/settings.js"
+import { resolveModelProfile } from "../model/catalog.js"
 import { DecisionSchema } from "../shared/contracts.js"
 
 export type ProviderId = "anthropic" | "openai-compat" | "scripted"
@@ -47,6 +48,13 @@ export async function resolveProvider(
 ): Promise<ProviderResolution> {
   const { settings, env } = options
   const notes: string[] = []
+  /**
+   * 费用单价：显式配置 > 模型画像参考价。
+   *
+   * 放在这里统一求值，而不是让每个 provider 自己查模型名 —— provider 只知道协议，
+   * 不该知道"这个模型卖多少钱"。
+   */
+  const pricing = settings.pricing ?? resolveModelProfile(settings.model).pricing
 
   if (options.script && options.script.length > 0) {
     notes.push("scripted provider: 回放固定决策，不联网")
@@ -55,6 +63,7 @@ export async function resolveProvider(
         model: settings.model ?? "scripted",
         // 回放也走流式：否则 CLI 的流式渲染路径只能用真实端点验证，离线测试覆盖不到
         streaming: true,
+        pricing,
       }),
       id: "scripted",
       credentialsPresent: true,
@@ -69,7 +78,7 @@ export async function resolveProvider(
     if (!apiKey)
       notes.push(`缺少环境变量 ${CREDENTIAL_ENV.anthropicKey}：调用模型前请先在配置或环境里配好`)
     return {
-      provider: new AnthropicProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) }),
+      provider: new AnthropicProvider({ apiKey, pricing, ...(baseUrl ? { baseUrl } : {}) }),
       id,
       credentialsPresent: Boolean(apiKey),
       notes,
@@ -81,7 +90,7 @@ export async function resolveProvider(
     settings.baseUrl ?? env[CREDENTIAL_ENV.openaiBaseUrl] ?? "https://api.openai.com/v1"
   if (!apiKey) notes.push(`缺少环境变量 ${CREDENTIAL_ENV.openaiKey}（部分兼容端点允许为空）`)
   return {
-    provider: new OpenAICompatProvider({ baseUrl, ...(apiKey ? { apiKey } : {}) }),
+    provider: new OpenAICompatProvider({ baseUrl, pricing, ...(apiKey ? { apiKey } : {}) }),
     id,
     credentialsPresent: Boolean(apiKey),
     notes,

@@ -36,11 +36,12 @@ export const SettingsSchema = z.object({
     .enum(["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"])
     .optional(),
   /**
-   * 是否为任务开独立 worktree。
+   * 是否为任务开独立 git worktree。
    *
-   * **当前只是占位，没有任何消费方**：`--worktree` 与这项配置都不改变执行，
-   * 改动一律落在主检出。默认给 `false` 而不是 `true` —— 一个没人实现的开关
-   * 声称"默认开启"，比声称"默认关闭"更容易让人误判隔离状态。
+   * 开启后 CLI 会在仓库的兄弟目录 `.mod-worktrees/` 下创建检出，
+   * 会话与工具都以它为工作区根：改动不落在主检出，主检出始终保持干净。
+   * 默认 `false`：隔离会改变"改动在哪"，必须让用户显式选择；
+   * 且要求当前目录位于一个 Git 仓库内，否则报错而不是静默退回主检出。
    */
   worktree: z.boolean().optional(),
   respectGitignore: z.boolean().optional(),
@@ -82,7 +83,14 @@ export const SettingsSchema = z.object({
       modelTimeoutMs: z.number().int().positive().default(600_000),
       modelMaxRetries: z.number().int().nonnegative().default(10),
       compactionThreshold: z.number().min(0.1).max(0.99).default(0.8),
-      contextWindowTokens: z.number().int().positive().default(200_000),
+      /**
+       * 显式覆盖模型上下文窗口（token）。
+       *
+       * 不给默认值是有意的：默认值会让"用户没配置"和"用户配了 200k"
+       * 无法区分，模型画像就永远轮不到生效（见 `model/catalog.ts`）。
+       * 未配置时由 `resolveContextWindowTokens()` 按模型名解析。
+       */
+      contextWindowTokens: z.number().int().positive().optional(),
     })
     .default({}),
   /** 沙箱：默认 fail-closed（security.md §3.1）。 */
@@ -95,6 +103,20 @@ export const SettingsSchema = z.object({
       networkMode: z.enum(["full", "limited"]).default("limited"),
     })
     .default({}),
+  /**
+   * 费用估算用的单价（每百万 token）。
+   *
+   * 覆盖模型画像里的参考价：接的是代理、企业协议价或自建端点时，
+   * 内置价格表不可能对得上的。配置后 `costUsd` 与预算门禁都按它算。
+   */
+  pricing: z
+    .object({
+      inputUsdPerMTok: z.number().nonnegative(),
+      outputUsdPerMTok: z.number().nonnegative(),
+      cacheReadUsdPerMTok: z.number().nonnegative().optional(),
+      cacheWriteUsdPerMTok: z.number().nonnegative().optional(),
+    })
+    .optional(),
   excludeDirs: z
     .array(z.string())
     .default([
@@ -138,7 +160,6 @@ export const DEFAULT_SETTINGS: Settings = {
     modelTimeoutMs: 600_000,
     modelMaxRetries: 10,
     compactionThreshold: 0.8,
-    contextWindowTokens: 200_000,
   },
   sandbox: {
     enabled: false,
