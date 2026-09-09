@@ -26,6 +26,7 @@ import type {
   PermissionMode,
   TaskEvent,
   CommandOutputChunk,
+  ExecutionPlan,
   TaskMode,
   ToolExecutionContext,
   ToolExecutionResult,
@@ -109,8 +110,14 @@ export interface LoopOptions {
   mode: TaskMode
   permissionMode: PermissionMode
   systemPrompt: string
-  /** 动态上下文（每轮重新生成）。 */
-  dynamicContext: (round: number) => string
+  /**
+   * 动态上下文（每轮重新生成）。
+   *
+   * 第二个参数是**当前生效的计划**：计划提交后，后续每一轮的上下文都要带上
+   * 未完成步骤。之前这个签名只有 `round`，于是计划提交完成只发了一条事件，
+   * 下一轮模型拿到的环境里完全没有"我刚刚承诺要做哪几步" —— 计划不驱动执行。
+   */
+  dynamicContext: (round: number, plan?: ExecutionPlan) => string
   signal?: AbortSignal
   /** 验收条件，用于交付报告的 acceptance 映射。 */
   acceptanceCriteria?: ReadonlyArray<{ id: string; description: string }>
@@ -302,6 +309,13 @@ export async function* runTask(
    */
   const resumedCheckpoint = await deps.store.latestCheckpoint(options.taskId)
   const changedFiles = new Set<string>(resumedCheckpoint?.changedFiles ?? [])
+  /**
+   * 当前生效的计划。
+   *
+   * 恢复时从检查点读回来是必须的：计划在审批点之前提交、恢复发生在审批之后，
+   * 若不继承，续跑的每一轮上下文都没有 pending-steps，等于恢复即丢失计划。
+   */
+  let activePlan: ExecutionPlan | undefined = resumedCheckpoint?.plan
   /** 已发过 file.changed 事件的文件，避免恢复后重复播报。 */
   const emittedChangedFiles = new Set<string>(resumedCheckpoint?.changedFiles ?? [])
   const isFreshTask = state.messages.length === 0
@@ -571,7 +585,7 @@ export async function* runTask(
     const availableToolNames = new Set(assembled.executable)
     const contextMessages: ModelMessage[] = [
       { role: "system", content: options.systemPrompt },
-      { role: "user", content: options.dynamicContext(turns + 1) },
+      { role: "user", content: options.dynamicContext(turns + 1, activePlan) },
       ...messages,
     ]
 
@@ -1002,6 +1016,7 @@ export async function* runTask(
               messages,
               changedFiles,
               sink,
+              activePlan,
             )
             yield repaired
             continue
@@ -1343,6 +1358,7 @@ export async function* runTask(
           messages,
           changedFiles,
           sink,
+          activePlan,
         )
         yield awaiting
         yield await sink.emit("approval.required", {
@@ -1415,6 +1431,9 @@ export async function* runTask(
       // 计划提交成功 → 对外发一条可审计的 `task.plan_ready`
       if (call.toolName === "plan.exit_plan_mode" && result.status === "succeeded") {
         const submitted = result.output as { steps?: number; plan?: unknown } | undefined
+        // 计划必须交回主循环：它要进检查点、进下一轮的动态上下文。
+        const plan = submitted?.plan as ExecutionPlan | undefined
+        if (plan) activePlan = plan
         yield await sink.emit("task.plan_ready", {
           steps: submitted?.steps ?? 0,
           plan: submitted?.plan ?? null,
@@ -1493,7 +1512,15 @@ export async function* runTask(
 
     /* ---- ⑩ 检查点 ---- */
     currentStatus = (await deps.store.getTask(options.taskId))?.status ?? currentStatus
-    const check = await saveCheckpoint(deps, options, currentStatus, messages, changedFiles, sink)
+    const check = await saveCheckpoint(
+      deps,
+      options,
+      currentStatus,
+      messages,
+      changedFiles,
+      sink,
+      activePlan,
+    )
     yield check
 
     const pressure = budgetPressure(state.budget, usage, now().getTime())
@@ -1747,6 +1774,7 @@ async function saveCheckpoint(
   messages: readonly ModelMessage[],
   changedFiles: ReadonlySet<string>,
   sink: EventSink,
+  plan?: ExecutionPlan,
 ): Promise<TaskEvent> {
   const existing = await deps.store.latestCheckpoint(options.taskId)
   const version = (existing?.version ?? 0) + 1
@@ -1763,6 +1791,15 @@ async function saveCheckpoint(
     completedStepIds: existing?.completedStepIds ?? [],
     changedFiles: [...changedFiles],
     messageCount: messages.length,
+    /**
+     * 计划随检查点落库。
+     *
+     * 之前这里**从不写 `plan`**，于是 `plan.exit_plan_mode` 提交的结构化计划
+     * 只活在这一轮的 `task.plan_ready` 事件里：进程退出后再 `--resume`，
+     * 计划就没了，后续每一轮上下文也拿不到待办步骤。没有传新计划的调用点
+     * （比如压缩前的检查点）沿用上一个计划，不要凭空清空。
+     */
+    ...(plan ? { plan } : existing?.plan ? { plan: existing.plan } : {}),
     createdAt: new Date().toISOString(),
   } satisfies Checkpoint
   await deps.store.saveCheckpoint(checkpoint)

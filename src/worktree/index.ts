@@ -36,7 +36,7 @@ export interface WorktreeInfo {
   path: string
   /** 为任务创建的分支名。 */
   branch: string
-  /** worktree 的基准提交。 */
+  /** 创建时返回基准提交；从 `git worktree list` 读回来的是该检出当前的 HEAD。 */
   baseCommit: string
 }
 
@@ -186,17 +186,34 @@ export async function worktreeStatus(info: WorktreeInfo): Promise<WorktreeStatus
    */
   const porcelain = await git(info.path, ["status", "--porcelain", "--", ".", ":(exclude).mod"])
   const lines = porcelain.length > 0 ? porcelain.split("\n") : []
-  const count = await git(info.repoRoot, [
-    "rev-list",
-    "--count",
-    `${info.baseCommit}..${info.branch}`,
-  ])
+  /**
+   * 用 `HEAD..<branch>` 而不是 `baseCommit..<branch>`：`listWorktrees` 里能拿到的
+   * HEAD 是**检出当前**的提交，不是分叉点。拿它当基准的话，任务在 worktree 里
+   * 提交过一次之后 `A..A` 恒为 0，`clean` 就会把带未合并提交的分支一起删掉。
+   * 以主检出的 HEAD 为基准，未合并提交 = 只存在于这条分支上的提交。
+   */
+  const count = await git(info.repoRoot, ["rev-list", "--count", `HEAD..${info.branch}`])
   return {
     dirty: lines.length > 0,
     changedFiles: lines.length,
     unmergedCommits: Number(count),
     summary: lines.slice(0, 3).join(" | "),
   }
+}
+
+/**
+ * 查看某个托管检出里的**未提交改动**（`git diff`）。
+ *
+ * 为什么不 diff 分支：agent 的改动默认不提交，"改了什么"就是工作区里那份 diff；
+ * 已提交的内容由 `worktreeStatus.unmergedCommits` 单独报告，`clean` 也会拦。
+ * 未跟踪文件不在 `git diff` 里 —— 这里不偷偷 `git add`，那会改变用户的工作区状态。
+ */
+export async function worktreeDiff(
+  info: WorktreeInfo,
+  options: { stat?: boolean } = {},
+): Promise<string> {
+  const args = ["diff", ...(options.stat ? ["--stat"] : [])]
+  return git(info.path, args)
 }
 
 function isManagedPath(candidate: string): boolean {

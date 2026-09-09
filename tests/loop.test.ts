@@ -60,6 +60,7 @@ async function boot(options: {
   onRequest?: (request: ModelRequest, stepIndex: number) => void
   budget?: Partial<typeof DEFAULT_BUDGET>
   mode?: "ask" | "plan" | "edit" | "autopilot"
+  now?: () => Date
 }): Promise<{ ws: TempWorkspace; runtime: TestRuntime; taskId: string }> {
   const { ws } = options
   const runtime = await createTestRuntime({
@@ -68,6 +69,7 @@ async function boot(options: {
     ...(options.settings ? { settings: options.settings } : {}),
     ...(options.hasTty !== undefined ? { hasTty: options.hasTty } : {}),
     ...(options.onRequest ? { onRequest: options.onRequest } : {}),
+    ...(options.now ? { now: options.now } : {}),
   })
   const taskId = await runtime.createTask({
     title: "test task",
@@ -494,11 +496,18 @@ describe("主循环 · 审批分支", () => {
     const seen: TaskEvent[] = []
     const result = await driveTask(runtime, taskId, {
       onEvent: (e) => seen.push(e),
-      resolveApproval: async () => ({ decision: "allowed", by: "tester" }),
+      resolveApproval: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        return { decision: "allowed", by: "tester" }
+      },
     })
 
     expect(result.exitCode).toBe(EXIT_OK)
     expect(result.outcome?.status).toBe("completed")
+    // 等审批的时间要落进指标：这是用户等待的真实成本，不能只算模型耗时。
+    const blocked = result.metrics.timings["approval.blocked_ms"]
+    expect(blocked?.count).toBe(1)
+    expect(blocked?.totalMs).toBeGreaterThanOrEqual(20)
     const stored = await runtime.store.readAllEvents(taskId)
     expect(stored.some((e) => e.type === "approval.decided")).toBe(true)
     expect(seen.some((e) => e.type === "task.completed")).toBe(true)
@@ -594,6 +603,74 @@ describe("主循环 · 审批分支", () => {
         parameterHash: "deadbeef",
       }),
     ).rejects.toThrow(/Parameter hash mismatch/)
+  })
+
+  it("审批过期后不再生效：决策返回 expired，会话放行表也不会被写入", async () => {
+    const ws = await workspace()
+    // 从"现在"起步：预算按墙钟计时，时钟倒拨会被判成 BUDGET_EXCEEDED
+    let clock = new Date()
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [toolUse("command.run", commandArgs(ws))],
+      settings: settingsWith({ mode: "edit", permissionMode: "default" }),
+      hasTty: true,
+      now: () => clock,
+    })
+    const { events } = await collect(runtime.run(taskId))
+    const payload = events.find((e) => e.type === "approval.required")!.payload as {
+      approvalId: string
+    }
+
+    // 30 分钟 TTL 已过：批准必须失效，而不是"后台没清理所以还能批"
+    clock = new Date(clock.getTime() + 31 * 60_000)
+    expect(await runtime.decideApproval(payload.approvalId, "allowed", "tester")).toBe("expired")
+    expect(await runtime.store.getApproval(payload.approvalId)).toMatchObject({
+      status: "expired",
+    })
+    expect(await runtime.isApproved("command.run", commandArgs(ws))).toBe(false)
+  })
+
+  it("driver：用户过期后才点允许 → 停在审批点，不恢复执行", async () => {
+    const ws = await workspace()
+    // 从"现在"起步：预算按墙钟计时，时钟倒拨会被判成 BUDGET_EXCEEDED
+    let clock = new Date()
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [toolUse("command.run", commandArgs(ws))],
+      settings: settingsWith({ mode: "edit", permissionMode: "default" }),
+      hasTty: true,
+      now: () => clock,
+    })
+    const result = await driveTask(runtime, taskId, {
+      resolveApproval: async () => {
+        // 模拟"用户第二天才回来点允许"
+        clock = new Date(clock.getTime() + 24 * 60 * 60_000)
+        return { decision: "allowed", by: "tester" }
+      },
+    })
+    expect(result.exitCode).toBe(EXIT_BLOCKED)
+    expect(result.outcome?.status).toBe("awaiting_approval")
+    expect(await runtime.isApproved("command.run", commandArgs(ws))).toBe(false)
+  })
+
+  it("resume 会清掉过期审批：pending 不会一直挂在库里", async () => {
+    const ws = await workspace()
+    let clock = new Date()
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [toolUse("command.run", commandArgs(ws))],
+      settings: settingsWith({ mode: "edit", permissionMode: "default" }),
+      hasTty: true,
+      now: () => clock,
+    })
+    const { events } = await collect(runtime.run(taskId))
+    const payload = events.find((e) => e.type === "approval.required")!.payload as {
+      approvalId: string
+    }
+
+    clock = new Date(clock.getTime() + 31 * 60_000)
+    await runtime.resume(taskId)
+    expect((await runtime.store.getApproval(payload.approvalId))?.status).toBe("expired")
   })
 
   it("退出码映射：success→0，失败→1，取消/审批→2", () => {
@@ -877,6 +954,62 @@ describe("主循环 · 任务模式", () => {
     const { outcome } = await collect(runtime.run(taskId))
     expect(outcome.permissionDenials.length).toBeGreaterThan(0)
     expect(await ws.exists("src/x.ts")).toBe(false)
+  })
+
+  it("plan 模式提交计划后：计划落检查点、未完成步骤进每轮上下文", async () => {
+    const ws = await workspace()
+    const requests: ModelRequest[] = []
+    const plan = {
+      summary: "split the parser and cover it",
+      assumptions: [],
+      steps: [
+        {
+          id: "s1",
+          objective: "extract parseStep",
+          filesLikelyAffected: ["src/parser.ts"],
+          toolsAllowed: ["repo.edit_file"],
+          dependencies: [],
+          doneWhen: ["parser tests pass"],
+          risk: "low",
+        },
+      ],
+      validation: [],
+      requiresApproval: false,
+    }
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [
+        toolUse("tool_search", { query: "plan" }),
+        toolUse("plan.enter_plan_mode", { reason: "multi-file change" }),
+        toolUse("plan.exit_plan_mode", { plan }),
+        final("done"),
+      ],
+      settings: settingsWith({ permissionMode: "bypassPermissions" }),
+      onRequest: (request) => requests.push(request),
+    })
+    const { outcome, events } = await collect(runtime.run(taskId))
+    expect(outcome.status).toBe("completed")
+
+    // 1) 检查点里必须有计划正文：否则进程退出后 --resume 就丢计划。
+    const latest = await runtime.store.latestCheckpoint(taskId)
+    expect(latest?.plan?.steps.map((step) => step.id)).toEqual(["s1"])
+    expect(latest?.completedStepIds).toEqual([])
+
+    // 2) 提交后的第一轮请求就带上待办步骤（模型不必回头翻历史工具调用）。
+    const lastRequest = requests.at(-1)
+    const afterSubmit = String(
+      lastRequest?.messages.map((message) => String(message.content)).join("\n") ?? "",
+    )
+    expect(afterSubmit).toContain("pending-steps: s1: extract parseStep")
+    // 提交前（第一轮）不能凭空出现计划步骤。
+    expect(
+      String(requests[0]?.messages.map((message) => String(message.content)).join("\n") ?? ""),
+    ).not.toContain("pending-steps:")
+
+    // 3) 事件流仍要留下可审计的 plan_ready。
+    expect(eventTypes(events)).toContain("task.plan_ready")
+    const ready = events.find((event) => event.type === "task.plan_ready")
+    expect((ready?.payload as { steps?: number } | undefined)?.steps).toBe(1)
   })
 
   it("ask 模式同样是只读", async () => {

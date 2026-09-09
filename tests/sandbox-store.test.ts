@@ -238,6 +238,62 @@ describe("sandbox/process-runner", () => {
     }
   })
 
+  it("配置的 envAllowlist 是补充项：默认变量仍在，额外的父进程变量按配置透传", async () => {
+    const ws = await createTempWorkspace()
+    const previous = process.env.MOD_AGENT_PROBE
+    process.env.MOD_AGENT_PROBE = "from-parent"
+    try {
+      const script = "console.log(process.env.MOD_AGENT_PROBE ?? 'missing')"
+      const blocked = await runProcess(req(NODE, ["-e", script], ws.root), {
+        maxOutputChars: 10_000,
+        maxTotalOutputBytes: 1_000_000,
+      })
+      expect(blocked.stdout.trim()).toBe("missing")
+
+      const allowed = await runProcess(req(NODE, ["-e", script], ws.root), {
+        maxOutputChars: 10_000,
+        maxTotalOutputBytes: 1_000_000,
+        envAllowlist: ["MOD_AGENT_PROBE"],
+      })
+      expect(allowed.stdout.trim()).toBe("from-parent")
+      // 补充项不能顶掉默认项：PATH 没丢，node 才起得来（起不来会走 spawnError）
+      expect(allowed.spawnError).toBeUndefined()
+    } finally {
+      if (previous === undefined) delete process.env.MOD_AGENT_PROBE
+      else process.env.MOD_AGENT_PROBE = previous
+      await ws.cleanup()
+    }
+  })
+
+  it("settings.envAllowlist 真的传到命令执行层（配置不是摆设）", async () => {
+    const ws = await createTempWorkspace()
+    const envName = "MOD_AGENT_ENV_ALLOWLIST_PROBE"
+    const previous = process.env[envName]
+    process.env[envName] = "visible"
+    try {
+      const script = `console.log(process.env.${envName} ?? "hidden")`
+      const strict = await selectSandbox({
+        settings: settingsWith({}),
+        workspaceRoot: ws.root,
+        assertCwd: (cwd) => new PathGuard({ workspaceRoot: ws.root }).assertCwd(cwd),
+      })
+      const hidden = await strict.backend.exec(req(NODE, ["-e", script], ws.root))
+      expect(hidden.stdout.trim()).toBe("hidden")
+
+      const configured = await selectSandbox({
+        settings: settingsWith({ envAllowlist: [envName] }),
+        workspaceRoot: ws.root,
+        assertCwd: (cwd) => new PathGuard({ workspaceRoot: ws.root }).assertCwd(cwd),
+      })
+      const visible = await configured.backend.exec(req(NODE, ["-e", script], ws.root))
+      expect(visible.stdout.trim()).toBe("visible")
+    } finally {
+      if (previous === undefined) delete process.env[envName]
+      else process.env[envName] = previous
+      await ws.cleanup()
+    }
+  })
+
   it("AbortSignal 能中断正在跑的命令", async () => {
     const ws = await createTempWorkspace()
     try {
@@ -736,6 +792,23 @@ function storeTests(
           version: 1,
           status: "executing",
           completedStepIds: ["s1"],
+          plan: {
+            summary: "plan",
+            assumptions: [],
+            steps: [
+              {
+                id: "s1",
+                objective: "do it",
+                filesLikelyAffected: [],
+                toolsAllowed: [],
+                dependencies: [],
+                doneWhen: [],
+                risk: "low",
+              },
+            ],
+            validation: [],
+            requiresApproval: false,
+          },
           changedFiles: ["D:/w/src/a.ts"],
           messageCount: 4,
           createdAt: new Date().toISOString(),
@@ -744,6 +817,9 @@ function storeTests(
         expect(latest?.id).toBe("cp_1")
         expect(latest?.changedFiles).toEqual(["D:/w/src/a.ts"])
         expect(latest?.completedStepIds).toEqual(["s1"])
+        // 计划正文要能原样读回：恢复时靠它把 pending-steps 注入上下文。
+        expect(latest?.plan?.steps.map((step) => step.id)).toEqual(["s1"])
+        expect(latest?.plan?.summary).toBe("plan")
         expect(latest).not.toHaveProperty("diff")
       } finally {
         await cleanup()

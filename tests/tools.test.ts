@@ -936,6 +936,47 @@ describe("tools/builtin: command / test", () => {
     })
   })
 
+  it("command.run 的超时来自 settings：默认值与上限都生效，策略层与执行层一致", async () => {
+    await withWorkspace(async (ws) => {
+      const seen: number[] = []
+      const runner = async (request: { timeoutMs: number }) => {
+        seen.push(request.timeoutMs)
+        return {
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+          durationMs: 1,
+          timedOut: false,
+          truncated: false,
+          cancelled: false,
+          outputLimitExceeded: false,
+        }
+      }
+      const tool = createCommandRunTool({
+        pathGuard: makePathGuard(ws),
+        limits: { defaultTimeoutMs: 500, maxTimeoutMs: 1_000 },
+      })
+      const base = {
+        executable: "node",
+        args: ["-e", "1"],
+        cwd: ws.root,
+        networkProfile: "none" as const,
+        reason: "r",
+        onTimeout: "kill" as const,
+      }
+      // 未指定 → 配置的默认值
+      expect(tool.policyCommand?.(base)?.timeoutMs).toBe(500)
+      // 指定超过上限 → 被配置封顶，而不是按 schema 里的硬编码 600s 放行
+      expect(tool.policyCommand?.({ ...base, timeoutMs: 5_000 })?.timeoutMs).toBe(1_000)
+
+      await tool.execute(
+        { ...base, timeoutMs: 5_000 },
+        makeToolContext({ workspace: ws, runCommand: runner as never }),
+      )
+      expect(seen).toEqual([1_000])
+    })
+  })
+
   it("command.run 在非零退出时给出可操作提示", async () => {
     await withWorkspace(async (ws) => {
       const runner = fakeCommandRunner({ stdout: "", stderr: "boom", exitCode: 1 })

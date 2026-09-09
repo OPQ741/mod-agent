@@ -614,6 +614,20 @@ describe("model/gateway: 重试、退避、记账", () => {
     const gateway = new ModelGateway({ provider: flakyProvider([], okReply), maxRetries: 999 })
     expect(gateway.usage.calls).toBe(0)
   })
+  it("429 也遵守 Anthropic 返回的 Retry-After（不再退回指数退避）", async () => {
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      fetchImpl: (async () =>
+        new Response('{"error":{"message":"rate limited"}}', {
+          status: 429,
+          headers: { "retry-after": "3" },
+        })) as never,
+    })
+    await expect(provider.generate(baseRequest(), undefined)).rejects.toMatchObject({
+      code: "MODEL_RATE_LIMIT",
+      details: { retryAfterMs: 3_000 },
+    })
+  })
 })
 
 describe("model: 单价可注入（按模型画像/配置记账）", () => {

@@ -24,7 +24,13 @@ import {
   type ModelPricing,
   type StopReason,
 } from "./types.js"
-import { asRecord, classifyHttpError, numberOr, parseArgsSafely } from "./openai-compat.js"
+import {
+  asRecord,
+  classifyHttpError,
+  numberOr,
+  parseArgsSafely,
+  parseRetryAfter,
+} from "./openai-compat.js"
 import { parseSseJson, readSseEvents } from "./streaming.js"
 
 export interface AnthropicOptions {
@@ -116,7 +122,7 @@ export class AnthropicProvider implements ModelProvider {
 
     if (!response.ok) {
       const detail = await response.text().catch(() => "")
-      throw classifyHttpError(response.status, detail)
+      throw classifyHttpError(response.status, detail, parseRetryAfter(response))
     }
     return response
   }

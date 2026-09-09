@@ -248,6 +248,11 @@ export class AgentRuntime {
     if (settings.respectGitignore) {
       runtime.pathGuard.setGitignorePatterns(await loadGitignorePatterns(runtime.workspaceRoot))
     }
+    /**
+     * 启动时清一次过期审批：否则进程重启后，上周那条 `pending` 还会被 `--resume`
+     * 当成"还等着批"，用户直到点击才发现它早已失效。
+     */
+    await runtime.store.expireApprovals(runtime.now())
     return runtime
   }
 
@@ -279,11 +284,21 @@ export class AgentRuntime {
     this.registry.register(createEditFileTool(editDeps))
     this.registry.register(createWriteFileTool(editDeps))
 
-    this.registry.register(createCommandRunTool({ pathGuard: this.pathGuard }))
+    this.registry.register(
+      createCommandRunTool({
+        pathGuard: this.pathGuard,
+        limits: {
+          defaultTimeoutMs: this.settings.limits.commandTimeoutMs,
+          maxTimeoutMs: this.settings.limits.commandMaxTimeoutMs,
+        },
+      }),
+    )
     this.registry.register(
       createTestRunTool({
         pathGuard: this.pathGuard,
         readPackageJson: async (cwd) => readPackageJson(cwd),
+        // 验证命令的默认时长单独一档（300s），只让配置封顶，不把默认压回 120s
+        limits: { maxTimeoutMs: this.settings.limits.commandMaxTimeoutMs },
       }),
     )
 
@@ -504,7 +519,7 @@ export class AgentRuntime {
       mode: state.mode,
       permissionMode: this.settings.permissionMode ?? "default",
       systemPrompt,
-      dynamicContext: (round) =>
+      dynamicContext: (round, plan) =>
         buildDynamicContext({
           cwd: this.workspaceRoot,
           workspaceRoot: this.workspaceRoot,
@@ -515,6 +530,11 @@ export class AgentRuntime {
           // 恢复续跑时表现为"模型突然觉得只剩几轮了"，开始草率收尾。
           roundsLeft: Math.max(0, state.budget.maxRounds - round),
           changedFiles: editEngine.trackedFiles,
+          // 计划提交后每轮都带上待办步骤，计划才真正驱动执行：模型不用回头翻
+          // 历史里的那次工具调用，就能看到还剩哪几步。
+          ...(plan && plan.steps.length > 0
+            ? { pendingSteps: plan.steps.map((step) => `${step.id}: ${step.objective}`) }
+            : {}),
           now: this.now().toISOString(),
         }),
       ...(options.signal ? { signal: options.signal } : {}),
@@ -601,6 +621,21 @@ export class AgentRuntime {
     const state = await this.store.getTask(taskId)
     if (!state) throw new AppError("INVALID_INPUT", `Task not found: ${taskId}`)
     /**
+     * 任务必须回到**它自己的**工作区里继续。
+     *
+     * `--resume` 用的是当前进程的工作区根；任务如果不是在这里创建的（例如
+     * 上一个会话用了 `--worktree`，或者用 `-C` 在别的目录建的），直接续跑会让
+     * 所有工具对着错误的目录读写 —— 改动落在主检出、diff 和验证也全错位。
+     * 这种"静默跑错地方"比报错危险得多，所以一律拒绝并告诉用户该去哪。
+     */
+    if (!sameWorkspace(state.workspaceRoot, this.workspaceRoot)) {
+      throw new AppError(
+        "INVALID_INPUT",
+        `Task ${taskId} belongs to workspace ${state.workspaceRoot}, not ${this.workspaceRoot}. ` +
+          `Resume it from that directory (for example \`mod -C "${state.workspaceRoot}" --resume ${taskId}\`).`,
+      )
+    }
+    /**
      * 停在 `cancelling` 的任务不该可恢复。
      *
      * 这通常意味着"取消请求已经落库、但收口没来得及执行"（进程在中间被杀）。
@@ -630,6 +665,13 @@ export class AgentRuntime {
         `Task ${taskId} is in status "${state.status}" and cannot be resumed`,
       )
     }
+
+    /**
+     * 恢复时顺手清掉过期审批：不然一个三天前停在审批点的任务，重新跑起来时
+     * 那条 `pending` 记录还在，看起来"还等着批"，实际早已失效。
+     * 清理是全局的（store 接口按时间批量过期），这里不针对单任务计数。
+     */
+    await this.store.expireApprovals(this.now())
 
     const openCalls = await this.store.openToolCalls(taskId)
     const unknownOutcomes: string[] = []
@@ -671,15 +713,30 @@ export class AgentRuntime {
    *
    * 审批**只生效一次**且与 `parameterHash` 绑定：批准 `npm test` 不等于批准
    * `npm install lodash`。参数变了必须重新问。
+   *
+   * 过期判定放在**决策这一刻**做，而不是只依赖后台清理：`expireApprovals()`
+   * 之前没有任何调用方，30 分钟的 TTL 等于一句注释。用户半夜批了、用户第二天
+   * 才回来点允许，这个动作已经不该再被执行了。
+   *
+   * @returns `expired` 表示审批已过期、什么都没生效；调用方应停在审批点让用户重发。
    */
   async decideApproval(
     approvalId: string,
     decision: "allowed" | "denied",
     by: string,
     options?: { parameterHash?: string; reason?: string },
-  ): Promise<void> {
+  ): Promise<"allowed" | "denied" | "expired"> {
+    await this.store.expireApprovals(this.now())
     const approval = await this.store.getApproval(approvalId)
     if (!approval) throw new AppError("INVALID_INPUT", `Approval not found: ${approvalId}`)
+    if (approval.status === "expired") {
+      await this.appendEvent(approval.taskId, "approval.expired", {
+        approvalId,
+        tool: approval.toolName,
+        expiresAt: approval.expiresAt,
+      })
+      return "expired"
+    }
     if (options?.parameterHash && options.parameterHash !== approval.parameterHash) {
       throw new AppError(
         "APPROVAL_DENIED",
@@ -699,6 +756,7 @@ export class AgentRuntime {
       parameterHash: approval.parameterHash,
     })
     void record
+    return decision
   }
 
   /**
@@ -819,6 +877,19 @@ export interface DoctorReport {
     askRules: number
   }
   policyVersion: string
+}
+
+/**
+ * 两个工作区根是否指向同一处。
+ *
+ * Windows 的盘符与路径大小写不敏感，而 `TaskState.workspaceRoot` 可能来自
+ * 上一个会话的 `path.resolve` 结果；直接字符串比较会把同一个目录判成两处，
+ * 把本来能续跑的任务挡掉。
+ */
+function sameWorkspace(left: string, right: string): boolean {
+  const a = path.resolve(left)
+  const b = path.resolve(right)
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 function toKind(id: string): ValidationCheck["kind"] {

@@ -200,14 +200,53 @@ describe("CLI · worktree 管理", () => {
 
     const listed = await run(["worktree", "list", "--json"], { cwd, homeDir })
     expect(listed.code).toBe(EXIT_OK)
-    const items = JSON.parse(listed.stdout) as Array<{ path: string; branch: string }>
+    const items = JSON.parse(listed.stdout) as Array<{
+      path: string
+      branch: string
+      status: { dirty: boolean; changedFiles: number; unmergedCommits: number }
+    }>
     expect(items.map((item) => item.path)).toContain(wtPath)
     expect(items[0]?.branch).toMatch(/^mod-agent\//)
+    // 干净检出必须自报干净：list 的价值就是"能不能直接 clean"
+    expect(items[0]?.status).toMatchObject({ dirty: false, unmergedCommits: 0 })
+
+    const textListed = await run(["worktree", "list"], { cwd, homeDir })
+    expect(textListed.stdout).toContain("干净")
 
     const cleaned = await run(["worktree", "clean"], { cwd, homeDir })
     expect(cleaned.code).toBe(EXIT_OK)
     expect(cleaned.stdout).toContain("已删除")
     await expect(fs.access(wtPath)).rejects.toThrow()
+  })
+
+  it("worktree diff 能看到该任务留下的未提交改动（--stat 只给统计）", async () => {
+    const { cwd, homeDir } = await setup()
+    await initGitRepo(cwd)
+    const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
+    const first = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
+    expect(first.code).toBe(EXIT_OK)
+    const wtPath = (/独立工作区：(.+)/.exec(first.stderr)?.[1] ?? "").trim()
+    temps.push(wtPath)
+
+    const listed = await run(["worktree", "list", "--json"], { cwd, homeDir })
+    const items = JSON.parse(listed.stdout) as Array<{ branch: string }>
+    const taskId = (items[0]?.branch ?? "").replace(/^mod-agent\//, "")
+    expect(taskId).not.toBe("")
+
+    // agent 的改动通常不提交：diff 看的就是工作区里这一份
+    await fs.writeFile(path.join(wtPath, "README.md"), "# changed by agent\n", "utf8")
+    const diff = await run(["worktree", "diff", taskId], { cwd, homeDir })
+    expect(diff.code).toBe(EXIT_OK)
+    expect(diff.stdout).toContain("-# repo")
+    expect(diff.stdout).toContain("+# changed by agent")
+
+    const stat = await run(["worktree", "diff", taskId, "--stat"], { cwd, homeDir })
+    expect(stat.code).toBe(EXIT_OK)
+    expect(stat.stdout).toContain("README.md")
+
+    const missing = await run(["worktree", "diff", "no-such-task"], { cwd, homeDir })
+    expect(missing.code).toBe(EXIT_ERROR)
+    expect(missing.stderr).toContain("没有找到")
   })
 
   it("clean 默认不删有未提交改动的检出，--force 才丢工作", async () => {
@@ -227,6 +266,39 @@ describe("CLI · worktree 管理", () => {
     const forced = await run(["worktree", "clean", "--force"], { cwd, homeDir })
     expect(forced.code).toBe(EXIT_OK)
     await expect(fs.access(wtPath)).rejects.toThrow()
+  })
+
+  it("clean --force 遇到未合并提交：删检出、保留分支（提交不能悄悄丢）", async () => {
+    const { cwd, homeDir } = await setup()
+    await initGitRepo(cwd)
+    const script = await writeScript(cwd, [{ type: "final", summary: "ok" }])
+    const first = await run(["-p", "do it", "--script", script, "--worktree"], { cwd, homeDir })
+    const wtPath = (/独立工作区：(.+)/.exec(first.stderr)?.[1] ?? "").trim()
+    expect(wtPath).not.toBe("")
+
+    const listed = await run(["worktree", "list", "--json"], { cwd, homeDir })
+    const branch = (JSON.parse(listed.stdout) as Array<{ branch: string }>)[0]?.branch
+    expect(branch).toMatch(/^mod-agent\//)
+
+    // 在 worktree 里提交一次：内容已离开工作区，但仍只存在于这条分支上
+    await promisify(execFile)("git", ["commit", "--allow-empty", "-m", "wip"], {
+      cwd: wtPath,
+      windowsHide: true,
+      shell: false,
+    })
+
+    const forced = await run(["worktree", "clean", "--force"], { cwd, homeDir })
+    expect(forced.code).toBe(EXIT_OK)
+    expect(forced.stdout).toContain("保留")
+    await expect(fs.access(wtPath)).rejects.toThrow()
+
+    // 分支必须还在：删 checkout 可以，删提交不行
+    const branches = await promisify(execFile)("git", ["branch", "--list", branch as string], {
+      cwd,
+      windowsHide: true,
+      shell: false,
+    })
+    expect(String(branches.stdout)).toContain(branch)
   })
 })
 

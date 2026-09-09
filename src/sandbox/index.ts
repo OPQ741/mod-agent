@@ -57,6 +57,7 @@ export class RestrictedSubprocessBackend implements SandboxBackend {
       maxOutputChars: number
       maxTotalOutputBytes: number
       assertCwd: (cwd: string) => string
+      envAllowlist?: readonly string[]
     },
   ) {}
 
@@ -100,6 +101,7 @@ export class RestrictedSubprocessBackend implements SandboxBackend {
         maxTotalOutputBytes: this.options.maxTotalOutputBytes,
         ...(signal ? { signal } : {}),
         ...(options?.onOutput ? { onOutput: options.onOutput } : {}),
+        ...(this.options.envAllowlist ? { envAllowlist: this.options.envAllowlist } : {}),
       },
       this.budget.get(),
     )
@@ -169,6 +171,7 @@ export class DockerBackend implements SandboxBackend {
       maxOutputChars: number
       maxTotalOutputBytes: number
       image?: string
+      envAllowlist?: readonly string[]
     },
   ) {}
 
@@ -215,6 +218,7 @@ export class DockerBackend implements SandboxBackend {
         maxTotalOutputBytes: this.options.maxTotalOutputBytes,
         ...(signal ? { signal } : {}),
         ...(options?.onOutput ? { onOutput: options.onOutput } : {}),
+        ...(this.options.envAllowlist ? { envAllowlist: this.options.envAllowlist } : {}),
       },
     )
     if (result.spawnError) {
@@ -318,6 +322,7 @@ export async function selectSandbox(options: {
     maxOutputChars: settings.limits.commandMaxOutputChars,
     maxTotalOutputBytes: settings.limits.commandMaxTotalOutputBytes,
     assertCwd,
+    envAllowlist: settings.envAllowlist,
   })
 
   if (!settings.sandbox.enabled) {
@@ -338,6 +343,7 @@ export async function selectSandbox(options: {
     workspaceRoot,
     maxOutputChars: settings.limits.commandMaxOutputChars,
     maxTotalOutputBytes: settings.limits.commandMaxTotalOutputBytes,
+    envAllowlist: settings.envAllowlist,
   })
   const available = options.probeDocker ? await options.probeDocker() : await docker.isAvailable()
   if (available) {

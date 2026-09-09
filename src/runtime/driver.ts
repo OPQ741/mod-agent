@@ -135,14 +135,27 @@ export async function driveTask(
     const resolver = options.resolveApproval
     if (!resolver) break
 
-    const resolution = await resolver(pendingApproval)
+    // 等审批的墙钟时间是"用户在等 agent"的真实成本，必须记进指标：
+    // 不计的话，一张任务报告里看不出时间花在模型上还是花在人身上。
+    const stopTimer = runtime.metrics.startTimer("approval.blocked_ms")
+    let resolution: ApprovalResolution
+    try {
+      resolution = await resolver(pendingApproval)
+    } finally {
+      stopTimer()
+    }
     const by = resolution.by ?? "user"
     if (resolution.decision !== "allowed") {
       await runtime.decideApproval(pendingApproval.approvalId, "denied", by)
       break
     }
     // 批准 → 会话放行表记账（runtime 内部完成）→ 从检查点恢复继续跑
-    await runtime.decideApproval(pendingApproval.approvalId, "allowed", by)
+    const recorded = await runtime.decideApproval(pendingApproval.approvalId, "allowed", by)
+    /**
+     * 过期时**不恢复**：动作还没执行，会话放行也没生效。
+     * 停在审批点等用户重新发起，比偷偷按旧批准跑一遍安全。
+     */
+    if (recorded === "expired") break
     await runtime.resume(taskId)
     void resolution.sessionScope
   }

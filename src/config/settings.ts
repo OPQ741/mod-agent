@@ -144,7 +144,7 @@ export type SettingsInput = z.input<typeof SettingsSchema>
 export const DEFAULT_SETTINGS: Settings = {
   mode: "plan",
   permissionMode: "default",
-  // 未实现的开关不声称"默认开启"（见 SettingsSchema 里 worktree 的说明）
+  // 隔离会改变"改动落在哪里"，所以默认关闭，必须由用户显式开启
   worktree: false,
   respectGitignore: true,
   permissions: { allow: [], ask: [], deny: [] },

@@ -34,6 +34,7 @@ import {
   findRepoRoot,
   listWorktrees,
   removeWorktree,
+  worktreeDiff,
   worktreeStatus,
   type WorktreeInfo,
 } from "../worktree/index.js"
@@ -172,6 +173,19 @@ export async function runCli(argv: string[], context: CliContext = {}): Promise<
   const worktree = program
     .command("worktree")
     .description("管理 --worktree 创建的独立检出（只清理 .mod-worktrees 下的托管目录）")
+  worktree
+    .command("diff <task>")
+    .description("查看某个托管检出里的未提交改动（任务 id / 分支名 / 目录名任选其一）")
+    .option("--stat", "只看改动统计，不输出完整 diff")
+    .option("-C, --cwd <dir>", "工作区目录")
+    .action(async (task: string, options: { stat?: boolean; cwd?: string }) => {
+      exitCode = await executeWorktreeDiff({
+        io,
+        cwd: resolveCwd(options, program, cwd),
+        target: task,
+        stat: Boolean(options.stat),
+      })
+    })
   worktree
     .command("list")
     .description("列出当前仓库托管的所有 worktree")
@@ -379,18 +393,67 @@ async function executeWorktreeList(input: {
 
   try {
     const items = await listWorktrees(repoRoot)
+    /**
+     * 列表要带上"敢不敢删"的信息：只有路径和分支的话，用户还得逐个 cd 进去
+     * 跑 git status 才知道这个检出能不能清掉。
+     */
+    const enriched = await Promise.all(
+      items.map(async (item) => ({ ...item, status: await worktreeStatus(item) })),
+    )
     if (input.asJson) {
-      input.io.out(`${JSON.stringify(items, null, 2)}\n`)
+      input.io.out(`${JSON.stringify(enriched, null, 2)}\n`)
       return EXIT_OK
     }
-    if (items.length === 0) {
+    if (enriched.length === 0) {
       input.io.out("（没有由 mod-agent 创建的 worktree）\n")
       return EXIT_OK
     }
-    for (const item of items) {
+    for (const item of enriched) {
       input.io.out(`${item.path}\n`)
-      input.io.out(`  分支 ${item.branch} · 基于 ${item.baseCommit.slice(0, 12)}\n`)
+      const state: string[] = []
+      if (item.status.dirty) state.push(`${item.status.changedFiles} 个未提交改动`)
+      if (item.status.unmergedCommits > 0) state.push(`${item.status.unmergedCommits} 个未合并提交`)
+      input.io.out(
+        `  分支 ${item.branch} · HEAD ${item.baseCommit.slice(0, 12)}` +
+          ` · ${state.length > 0 ? state.join(" / ") : "干净"}\n`,
+      )
     }
+    return EXIT_OK
+  } catch (err) {
+    input.io.err(`${err instanceof Error ? err.message : String(err)}\n`)
+    return EXIT_ERROR
+  }
+}
+
+async function executeWorktreeDiff(input: {
+  io: CliIo
+  cwd: string
+  target: string
+  stat: boolean
+}): Promise<number> {
+  let repoRoot: string
+  try {
+    repoRoot = await findRepoRoot(input.cwd)
+    const target = input.target.trim()
+    const candidates = (await listWorktrees(repoRoot)).filter(
+      (info) =>
+        info.branch === target ||
+        info.branch.endsWith(`/${target}`) ||
+        path.basename(info.path).endsWith(`-${target}`) ||
+        path.resolve(info.path) === path.resolve(input.cwd, target),
+    )
+    if (candidates.length === 0) {
+      input.io.err(`没有找到匹配 "${target}" 的托管检出（用 worktree list 查看）。\n`)
+      return EXIT_ERROR
+    }
+    if (candidates.length > 1) {
+      input.io.err(`"${target}" 匹配到多个检出，请改用完整分支名或目录：\n`)
+      for (const info of candidates) input.io.err(`  ${info.branch} · ${info.path}\n`)
+      return EXIT_ERROR
+    }
+    const info = candidates[0] as WorktreeInfo
+    const diff = await worktreeDiff(info, { stat: input.stat })
+    input.io.out(diff.length > 0 ? `${diff}\n` : "(没有未提交改动)\n")
     return EXIT_OK
   } catch (err) {
     input.io.err(`${err instanceof Error ? err.message : String(err)}\n`)

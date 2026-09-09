@@ -37,7 +37,11 @@ const CommandRunInput = z.object({
   /** 参数数组。每个元素是一个独立参数，不做 shell 解析。 */
   args: z.array(z.string()).default([]),
   cwd: AbsolutePath,
-  timeoutMs: z.number().int().positive().max(600_000).default(120_000),
+  /**
+   * 超时由运行时按 `settings.limits.commandTimeoutMs / commandMaxTimeoutMs`
+   * 补齐与封顶；schema 里写死默认值和上限会让配置完全失效。
+   */
+  timeoutMs: z.number().int().positive().optional(),
   reason: z.string().min(1, "reason is required: explain why this command is needed"),
   /**
    * 网络档位。**不在这里写默认值**：省略时由运行时按沙箱后端能力补齐
@@ -49,7 +53,30 @@ const CommandRunInput = z.object({
 })
 export type CommandRunInput = z.infer<typeof CommandRunInput>
 
-export function createCommandRunTool(deps: { pathGuard: PathGuard }): AgentTool<CommandRunInput> {
+export interface CommandLimits {
+  defaultTimeoutMs: number
+  maxTimeoutMs: number
+}
+
+const DEFAULT_COMMAND_LIMITS: CommandLimits = {
+  defaultTimeoutMs: 120_000,
+  maxTimeoutMs: 600_000,
+}
+
+/** 补齐默认值并封顶：策略层与执行层必须用同一个值，否则批准的超时会被悄悄换掉。 */
+export function resolvedCommandTimeout(
+  requested: number | undefined,
+  limits: CommandLimits = DEFAULT_COMMAND_LIMITS,
+): number {
+  const timeout = requested ?? limits.defaultTimeoutMs
+  return Math.min(Math.max(timeout, 1), limits.maxTimeoutMs)
+}
+
+export function createCommandRunTool(deps: {
+  pathGuard: PathGuard
+  limits?: Partial<CommandLimits>
+}): AgentTool<CommandRunInput> {
+  const limits: CommandLimits = { ...DEFAULT_COMMAND_LIMITS, ...deps.limits }
   return {
     name: "command.run",
     description:
@@ -64,7 +91,7 @@ export function createCommandRunTool(deps: { pathGuard: PathGuard }): AgentTool<
       executable: input.executable,
       args: input.args,
       cwd: input.cwd,
-      timeoutMs: input.timeoutMs,
+      timeoutMs: resolvedCommandTimeout(input.timeoutMs, limits),
       networkProfile: input.networkProfile,
       reason: input.reason,
       onTimeout: input.onTimeout,
@@ -79,7 +106,10 @@ export function createCommandRunTool(deps: { pathGuard: PathGuard }): AgentTool<
           executable: input.executable,
           args: input.args,
           cwd,
-          timeoutMs: Math.min(input.timeoutMs, ctx.timeoutMs || input.timeoutMs),
+          timeoutMs: Math.min(
+            resolvedCommandTimeout(input.timeoutMs, limits),
+            ctx.timeoutMs || resolvedCommandTimeout(input.timeoutMs, limits),
+          ),
           networkProfile: input.networkProfile,
           reason: input.reason,
           onTimeout: input.onTimeout,
@@ -124,7 +154,7 @@ const TestRunInput = z.object({
   command: z.array(z.string()).min(1).optional(),
   /** 只跑匹配这些关键词的目标（透传给测试框架）。 */
   filter: z.string().optional(),
-  timeoutMs: z.number().int().positive().max(600_000).default(300_000),
+  timeoutMs: z.number().int().positive().optional(),
 })
 export type TestRunInput = z.infer<typeof TestRunInput>
 
@@ -210,7 +240,13 @@ export function createTestRunTool(deps: {
   pathGuard: PathGuard
   /** 读取 package.json 的注入函数（避免工具直接依赖 fs 之外的环境假设）。 */
   readPackageJson: (cwd: string) => Promise<unknown>
+  limits?: Partial<CommandLimits>
 }): AgentTool<TestRunInput> {
+  const limits: CommandLimits = {
+    defaultTimeoutMs: 300_000,
+    maxTimeoutMs: DEFAULT_COMMAND_LIMITS.maxTimeoutMs,
+    ...deps.limits,
+  }
   return {
     name: "test.run",
     description:
@@ -230,7 +266,7 @@ export function createTestRunTool(deps: {
       // "执行的命令"差一个参数，审批绑定就形同虚设。
       args: [...(input.command?.slice(1) ?? ["test"]), ...(input.filter ? [input.filter] : [])],
       cwd: input.cwd,
-      timeoutMs: input.timeoutMs,
+      timeoutMs: resolvedCommandTimeout(input.timeoutMs, limits),
       networkProfile: "none",
       reason: "Run project verification",
       onTimeout: "move-to-background",
@@ -287,7 +323,10 @@ export function createTestRunTool(deps: {
           executable,
           args,
           cwd,
-          timeoutMs: Math.min(input.timeoutMs, ctx.timeoutMs || input.timeoutMs),
+          timeoutMs: Math.min(
+            resolvedCommandTimeout(input.timeoutMs, limits),
+            ctx.timeoutMs || resolvedCommandTimeout(input.timeoutMs, limits),
+          ),
           networkProfile: "none",
           reason: "Run project verification",
           onTimeout: "move-to-background",

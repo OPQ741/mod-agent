@@ -12,7 +12,12 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { CommandOutputChunk, CommandRequest, CommandResult } from "../shared/contracts.js"
 import { AppError } from "../shared/errors.js"
-import { filterEnv, isSensitiveEnvName, stripAnsi } from "../shared/sanitize.js"
+import {
+  filterEnv,
+  isSensitiveEnvName,
+  stripAnsi,
+  DEFAULT_ENV_ALLOWLIST,
+} from "../shared/sanitize.js"
 import { resolveExecutable } from "./executable-resolver.js"
 
 export interface RunProcessOptions {
@@ -29,6 +34,14 @@ export interface RunProcessOptions {
    * 半个序列当正文发出去；终态结果仍然统一清洗一次。
    */
   onOutput?: (chunk: CommandOutputChunk) => void
+  /**
+   * 透传环境变量的**补充**白名单（`settings.envAllowlist`）。
+   *
+   * 是补充而不是替换：默认白名单里有 `PATH` / `HOME` / `SystemRoot`，
+   * 直接拿配置替换会让 `npm` 这类依赖 PATH 的命令全部起不来。
+   * 仍然要过 `isSensitiveEnvName`，凭据类变量即使写进配置也不会透传。
+   */
+  envAllowlist?: readonly string[]
 }
 
 export interface RunProcessResult extends CommandResult {
@@ -81,7 +94,7 @@ export async function runProcess(
     }
   }
 
-  const env = filterEnv(process.env, undefined, request.env)
+  const env = filterEnv(process.env, envAllowlist(options.envAllowlist), request.env)
   /**
    * Windows 上 `npm` / `npx` / `yarn` 是 `.cmd` shim，`shell: false` 既做不了 PATHEXT 解析、
    * 又不允许直接 spawn 批处理（Node 对 CVE-2024-27980 的修复会抛 EINVAL）。
@@ -242,4 +255,11 @@ export function killTree(child: ChildProcess, reason: string): void {
 /** 可执行文件不存在时给出可操作提示，而不是让模型猜。 */
 export function describeSpawnFailure(executable: string): string {
   return `Failed to start "${executable}". Check that it is installed and on PATH; commands are executed without a shell (executable + args[]).`
+}
+
+/** 默认白名单 + 配置补充项（去重、大小写不敏感）。 */
+function envAllowlist(extra?: readonly string[]): readonly string[] {
+  if (!extra || extra.length === 0) return DEFAULT_ENV_ALLOWLIST
+  const merged = new Set([...DEFAULT_ENV_ALLOWLIST, ...extra].map((name) => name.toUpperCase()))
+  return [...merged]
 }

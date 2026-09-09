@@ -22,10 +22,15 @@ import {
   createTempWorkspace,
   createTestRuntime,
   settingsWith,
+  MemoryStore,
+  Metrics,
+  noopLogger,
+  ScriptedProvider,
   type TempWorkspace,
 } from "./helpers.js"
 import { final, toolUse } from "../src/model/scripted.js"
 import type { ModelRequest } from "../src/model/types.js"
+import { AgentRuntime } from "../src/runtime/runtime.js"
 
 const workspaces: TempWorkspace[] = []
 
@@ -101,6 +106,81 @@ describe("Runtime · 任务级状态隔离", () => {
     const messages = await runtime.store.getMessages(taskId)
     expect(JSON.stringify(messages)).toContain("has not been activated")
     expect(JSON.stringify(messages)).toContain("tool_search")
+  })
+})
+
+describe("Runtime · 启动清理过期审批", () => {
+  it("进程启动时把过期 pending 审批标成 expired", async () => {
+    const ws = await workspace()
+    const store = new MemoryStore()
+    await store.createApproval({
+      id: "apr_old",
+      taskId: "task_old",
+      toolCallId: "call_old",
+      toolName: "command.run",
+      requestSummary: "old request",
+      parameterHash: "abc123",
+      policyVersion: "v1",
+      status: "pending",
+      requestedAt: "2020-01-01T00:00:00.000Z",
+      expiresAt: "2020-01-01T00:30:00.000Z",
+    })
+    await AgentRuntime.create({
+      workspaceRoot: ws.root,
+      settings: settingsWith({ permissionMode: "acceptEdits" }),
+      provider: new ScriptedProvider([final("done")]),
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    })
+    expect((await store.getApproval("apr_old"))?.status).toBe("expired")
+  })
+})
+
+describe("Runtime · 恢复必须在原工作区", () => {
+  it("在另一个工作区恢复任务会被拒绝，并告诉用户去哪里恢复", async () => {
+    const wsA = await workspace()
+    const wsB = await workspace()
+    // 两个 runtime 共用同一个存储：模拟"同一个状态文件、换了当前目录"的 CLI 场景
+    const store = new MemoryStore()
+    const provider = new ScriptedProvider([final("done")])
+    const options = {
+      settings: settingsWith({ permissionMode: "acceptEdits" }),
+      provider,
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    }
+    const runtimeA = await AgentRuntime.create({ ...options, workspaceRoot: wsA.root })
+    const taskId = await runtimeA.createTask({ title: "t", userRequest: "x", mode: "edit" })
+    const runtimeB = await AgentRuntime.create({ ...options, workspaceRoot: wsB.root })
+
+    /**
+     * 静默在错误目录里续跑比直接报错危险：工具会对着 B 读写，
+     * 而任务记录、检查点、diff 都属于 A。
+     */
+    await expect(runtimeB.resume(taskId)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: expect.stringContaining(wsA.root),
+    })
+  })
+
+  it("同一工作区（Windows 大小写不同）仍可恢复", async () => {
+    if (process.platform !== "win32") return
+    const wsA = await workspace()
+    const store = new MemoryStore()
+    const provider = new ScriptedProvider([final("done")])
+    const options = {
+      settings: settingsWith({ permissionMode: "acceptEdits" }),
+      provider,
+      store,
+      logger: noopLogger(),
+      metrics: new Metrics(),
+    }
+    const runtime = await AgentRuntime.create({ ...options, workspaceRoot: wsA.root })
+    const taskId = await runtime.createTask({ title: "t", userRequest: "x", mode: "edit" })
+    const alias = await AgentRuntime.create({ ...options, workspaceRoot: wsA.root.toUpperCase() })
+    await expect(alias.resume(taskId)).resolves.toBeDefined()
   })
 })
 
