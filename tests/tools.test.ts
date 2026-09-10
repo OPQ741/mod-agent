@@ -1033,8 +1033,8 @@ describe("tools/builtin: plan / tool_search", () => {
   it("plan.enter_plan_mode 返回激活状态与下一步提示", async () => {
     await withWorkspace(async (ws) => {
       const controller = {
-        enter: () => ({ active: true as const }),
-        exit: () => ({ status: "submitted" as const, steps: 0 }),
+        enter: async () => ({ active: true as const, planFilePath: "plan.md" }),
+        exit: async () => ({ status: "submitted" as const, steps: 0, planFilePath: "plan.md" }),
         isActive: () => true,
       }
       const tool = createEnterPlanModeTool(controller)
@@ -1053,10 +1053,10 @@ describe("tools/builtin: plan / tool_search", () => {
     await withWorkspace(async (ws) => {
       const submitted: unknown[] = []
       const controller = {
-        enter: () => ({ active: true as const }),
-        exit: (plan: unknown) => {
+        enter: async () => ({ active: true as const, planFilePath: "plan.md" }),
+        exit: async (plan: unknown) => {
           submitted.push(plan)
-          return { status: "submitted" as const, steps: 1 }
+          return { status: "submitted" as const, steps: 1, planFilePath: "plan.md" }
         },
         isActive: () => true,
       }

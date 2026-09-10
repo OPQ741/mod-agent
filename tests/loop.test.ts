@@ -935,6 +935,42 @@ describe("主循环 · 检查点与恢复", () => {
     expect(await count()).toBe(1)
   })
 
+  it("项目技能只注入索引；激活并调用后才回灌正文一次", async () => {
+    const ws = await workspace({
+      ".mod/skills/release/SKILL.md": [
+        "---",
+        "name: release-checklist",
+        "description: Cut a release safely",
+        "when: user asks to release",
+        "---",
+        "",
+        "RELEASE BODY: run the checklist before tagging",
+      ].join("\n"),
+    })
+    const requests: ModelRequest[] = []
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [
+        toolUse("tool_search", { query: "release" }),
+        toolUse("skill.release-checklist", {}),
+        final("ok"),
+      ],
+      onRequest: (request) => requests.push(request),
+    })
+    await collect(runtime.run(taskId))
+
+    const firstRequest = String(requests[0]?.system ?? "")
+    // 索引在：模型知道有这个技能，也知道该什么时候用
+    expect(firstRequest).toContain("release-checklist")
+    expect(firstRequest).toContain("Cut a release safely")
+    // 正文不在：没有激活就不该付这份上下文成本
+    expect(firstRequest).not.toContain("RELEASE BODY")
+
+    const messages = await runtime.store.getMessages(taskId)
+    const occurrences = JSON.stringify(messages).split("RELEASE BODY").length - 1
+    expect(occurrences).toBe(1)
+  })
+
   it("请求点名了子目录文件时，就近的 AGENTS.md 也会进规则（不是只读根规则）", async () => {
     const ws = await workspace({
       "src/AGENTS.md": "# src 规则\n\n- 改动必须带测试\n",
@@ -1013,6 +1049,12 @@ describe("主循环 · 任务模式", () => {
     expect(latest?.plan?.steps.map((step) => step.id)).toEqual(["s1"])
     expect(latest?.completedStepIds).toEqual([])
 
+    // 计划必须真的落成一个人能打开的文件，而不是只活在事件与数据库里
+    const planText = await fs.readFile(ws.abs(`.mod/plans/${taskId}.md`), "utf8")
+    expect(planText).toContain("状态：已提交")
+    expect(planText).toContain("s1：extract parseStep")
+    expect(planText).toContain("完成标准：parser tests pass")
+
     // 2) 提交后的第一轮请求就带上待办步骤（模型不必回头翻历史工具调用）。
     const lastRequest = requests.at(-1)
     const afterSubmit = String(
@@ -1027,7 +1069,9 @@ describe("主循环 · 任务模式", () => {
     // 3) 事件流仍要留下可审计的 plan_ready。
     expect(eventTypes(events)).toContain("task.plan_ready")
     const ready = events.find((event) => event.type === "task.plan_ready")
-    expect((ready?.payload as { steps?: number } | undefined)?.steps).toBe(1)
+    const payload = ready?.payload as { steps?: number; planFilePath?: string } | undefined
+    expect(payload?.steps).toBe(1)
+    expect(payload?.planFilePath).toContain(`${taskId}.md`)
   })
 
   it("ask 模式同样是只读", async () => {

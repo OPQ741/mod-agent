@@ -420,6 +420,21 @@ export class PolicyEngine {
 
     const readOnly = request.risk === "read"
 
+    /**
+     * 外部副作用（MCP 等）在 bypassPermissions 下仍要显式点头。
+     *
+     * `bypassPermissions` 表达的是"信任这个 agent 在本工作区里的判断"，
+     * 不是"信任任意第三方 server 拿你的凭据去外面做事"。要免打扰只有一条路：
+     * 在 `permissions.allow` 里点名这条规则（那一步在 ② 已经返回 allow 了）。
+     */
+    if (request.risk === "external_side_effect" && request.permissionMode === "bypassPermissions") {
+      return {
+        effect: "ask",
+        reason:
+          "External side effects require explicit approval even in bypassPermissions; add an allow rule to pre-approve",
+      }
+    }
+
     switch (request.permissionMode) {
       case "bypassPermissions":
         return {

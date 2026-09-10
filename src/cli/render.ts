@@ -83,8 +83,10 @@ export function renderEventText(event: TaskEvent): string | undefined {
      */
     case "retry.api":
       return `[重试] 第 ${String(payload.attempt ?? "?")}/${String(payload.maxRetries ?? "?")} 次 · 等待 ${String(payload.retryDelayMs ?? "?")}ms · ${String(payload.error ?? "")}`
-    case "task.plan_ready":
-      return `[计划] 已提交 ${String(payload.steps ?? 0)} 个步骤`
+    case "task.plan_ready": {
+      const file = payload.planFilePath ? ` · ${String(payload.planFilePath)}` : ""
+      return `[计划] 已提交 ${String(payload.steps ?? 0)} 个步骤${file}`
+    }
     case "task.completed":
       return undefined
     case "task.failed":

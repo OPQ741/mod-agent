@@ -224,7 +224,8 @@ export class ToolRegistry {
       specs.push({
         name: entry.name,
         description: entry.tool.description,
-        inputSchema: assertConvertible(entry.tool.inputSchema, entry.name),
+        inputSchema:
+          entry.tool.externalInputSchema ?? assertConvertible(entry.tool.inputSchema, entry.name),
       })
     }
 

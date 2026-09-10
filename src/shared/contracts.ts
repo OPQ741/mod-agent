@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod"
+import type { JsonSchemaObject } from "./json-schema.js"
 
 /* ------------------------------------------------------------------ *
  * 基础枚举
@@ -329,6 +330,14 @@ export interface AgentTool<I = unknown> {
    * 不变性会让所有带默认值的 schema 都编译不过。
    */
   inputSchema: z.ZodType<I, z.ZodTypeDef, unknown>
+  /**
+   * 外部工具（MCP）的真实 JSON Schema。
+   *
+   * Zod 只负责把"入参是个对象"守住；外部 schema 才是下发给模型、并用于
+   * 独立校验的那一份。不塞进 Zod 是因为外部 schema 可能包含 Zod 表达不了的
+   * 组合（oneOf、$ref），硬转只会静默丢约束。
+   */
+  externalInputSchema?: JsonSchemaObject
   outputSchema?: z.ZodType
   risk: ToolRisk
   idempotency: ToolIdempotency

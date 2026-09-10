@@ -44,6 +44,24 @@ export const SettingsSchema = z.object({
    * 且要求当前目录位于一个 Git 仓库内，否则报错而不是静默退回主检出。
    */
   worktree: z.boolean().optional(),
+  /**
+   * 外部 MCP server（stdio）。
+   *
+   * 连接失败不阻塞启动：runtime 会记录诊断并跳过该 server，`doctor` 里可见。
+   * 工具默认按 `external_side_effect` 处理，即使 `bypassPermissions` 也需要显式放行。
+   */
+  mcpServers: z
+    .record(
+      z.string(),
+      z.object({
+        command: z.string().min(1),
+        args: z.array(z.string()).default([]),
+        env: z.record(z.string(), z.string()).default({}),
+        /** 单次 initialize / tools/call 的超时；默认 10s。 */
+        timeoutMs: z.number().int().positive().default(10_000),
+      }),
+    )
+    .default({}),
   respectGitignore: z.boolean().optional(),
   permissions: z
     .object({
@@ -147,6 +165,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // 隔离会改变"改动落在哪里"，所以默认关闭，必须由用户显式开启
   worktree: false,
   respectGitignore: true,
+  mcpServers: {},
   permissions: { allow: [], ask: [], deny: [] },
   budget: {},
   limits: {

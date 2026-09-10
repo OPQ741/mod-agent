@@ -15,6 +15,7 @@ import os from "node:os"
 import type {
   Budget,
   CommandResult,
+  ExecutionPlan,
   PermissionMode,
   TaskEvent,
   TaskMode,
@@ -36,6 +37,13 @@ import {
   type DiscoveredCheck,
 } from "../tools/builtin/command.js"
 import { createEditFileTool, createWriteFileTool } from "../tools/builtin/edit.js"
+import {
+  createProjectSkillTool,
+  discoverProjectSkills,
+  skillToolName,
+  type ProjectSkill,
+} from "../skills/loader.js"
+import { McpClient, createMcpTool } from "../mcp/client.js"
 import {
   createGitStatusTool,
   createListFilesTool,
@@ -146,6 +154,13 @@ export class AgentRuntime {
    * 计划模式与延迟加载本来都只对"当前这个任务"有意义，作用域必须是 taskId。
    */
   private readonly taskStates = new Map<string, TaskScopedState>()
+  /** 项目技能只扫描 / 注册一次；`.mod/skills` 变更需要重启进程才生效。 */
+  private skillsLoaded = false
+  private projectSkills: ProjectSkill[] = []
+  /** MCP 连接与工具注册只做一次；连接失败的 server 不重试，避免阻塞每一轮。 */
+  private mcpLoaded = false
+  private readonly mcpClients: McpClient[] = []
+  private readonly mcpServerStatus: McpServerStatus[] = []
   /**
    * 正在运行的任务集合（单飞锁）。
    *
@@ -333,19 +348,122 @@ export class AgentRuntime {
 
   private planController(): PlanController {
     return {
-      enter: (taskId) => {
+      enter: async (taskId) => {
         this.taskState(taskId).planModeActive = true
-        this.logger.info("plan.entered", { taskId, workspaceRoot: this.workspaceRoot })
-        return { active: true as const }
+        const planFilePath = await this.writePlanFile(taskId)
+        this.logger.info("plan.entered", {
+          taskId,
+          workspaceRoot: this.workspaceRoot,
+          planFilePath,
+        })
+        return { active: true as const, planFilePath }
       },
-      exit: (plan, taskId) => {
+      exit: async (plan, taskId) => {
         const state = this.taskStates.get(taskId)
         if (!state?.planModeActive) throw new AppError("INVALID_INPUT", "Not in plan mode")
         state.planModeActive = false
-        this.logger.info("plan.submitted", { taskId, steps: plan.steps.length })
-        return { status: "submitted" as const, steps: plan.steps.length }
+        const planFilePath = await this.writePlanFile(taskId, plan)
+        this.logger.info("plan.submitted", { taskId, steps: plan.steps.length, planFilePath })
+        return { status: "submitted" as const, steps: plan.steps.length, planFilePath }
       },
       isActive: (taskId) => this.taskStates.get(taskId)?.planModeActive ?? false,
+    }
+  }
+
+  /**
+   * 把计划写到工作区的 `.mod/plans/<taskId>.md`。
+   *
+   * 为什么放在 `.mod`：它是运行时产物（`.gitignore` 已忽略），不是源码改动；
+   * 计划模式"只读"约束的是仓库内容，不允许模型借计划工具去写源码。这里由
+   * runtime 落盘，不经过工具，工具的能力声明仍然是 read。
+   *
+   * 进入时写骨架、提交时覆盖为完整计划：用户不需要模型把计划贴一遍，
+   * 任务结束后直接打开这个文件就能 review。
+   */
+  private async writePlanFile(taskId: string, plan?: ExecutionPlan): Promise<string> {
+    const dir = path.join(this.workspaceRoot, ".mod", "plans")
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, `${taskId.replace(/[^A-Za-z0-9_-]/g, "_")}.md`)
+    await fs.writeFile(file, renderPlanMarkdown(taskId, plan, this.now()), "utf8")
+    return file
+  }
+
+  private async loadProjectSkills(): Promise<void> {
+    if (this.skillsLoaded) return
+    this.skillsLoaded = true
+    try {
+      this.projectSkills = await discoverProjectSkills(this.workspaceRoot)
+    } catch (err) {
+      this.logger.warn("skills.discovery_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      this.projectSkills = []
+      return
+    }
+    for (const skill of this.projectSkills) {
+      const name = skillToolName(skill)
+      if (this.registry.get(name)) {
+        this.logger.warn("skills.duplicate_tool_name", { name })
+        continue
+      }
+      try {
+        this.registry.registerWithLengthCheck(createProjectSkillTool(skill), "skill")
+      } catch (err) {
+        // 技能名过长等问题只丢掉这一个技能，不能让启动失败
+        this.logger.warn("skills.register_failed", {
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    if (this.projectSkills.length > 0) {
+      this.logger.info("skills.loaded", { count: this.projectSkills.length })
+    }
+  }
+
+  private async loadMcpServers(): Promise<void> {
+    if (this.mcpLoaded) return
+    this.mcpLoaded = true
+    for (const [serverName, config] of Object.entries(this.settings.mcpServers ?? {})) {
+      const client = new McpClient(serverName, config, this.workspaceRoot)
+      try {
+        const definitions = await client.connect()
+        this.mcpClients.push(client)
+        const registered: string[] = []
+        for (const definition of definitions) {
+          const tool = createMcpTool({ serverName, definition, client })
+          if (this.registry.get(tool.name)) {
+            this.logger.warn("mcp.duplicate_tool_name", { server: serverName, tool: tool.name })
+            continue
+          }
+          try {
+            this.registry.registerWithLengthCheck(tool, "mcp")
+            registered.push(tool.name)
+          } catch (err) {
+            // 超长工具名不能进工具表；显式记录，doctor 里能看到，而不是静默消失
+            this.logger.error("mcp.tool_registration_failed", {
+              server: serverName,
+              tool: tool.name,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        this.mcpServerStatus.push({
+          name: serverName,
+          connected: true,
+          tools: registered,
+        })
+        this.logger.info("mcp.connected", { server: serverName, tools: registered.length })
+      } catch (err) {
+        await client.close()
+        const reason = err instanceof Error ? err.message : String(err)
+        this.mcpServerStatus.push({ name: serverName, connected: false, error: reason })
+        this.logger.warn("mcp.connection_failed", {
+          server: serverName,
+          error: reason,
+          stderr: client.lastStderr,
+        })
+      }
     }
   }
 
@@ -454,6 +572,8 @@ export class AgentRuntime {
       ? await inferRuleTarget(state.userRequest, this.workspaceRoot)
       : undefined
     const rules = wantRules ? await bundleRules(this.workspaceRoot, ruleTarget) : { combined: "" }
+    if (wantRules) await this.loadProjectSkills()
+    await this.loadMcpServers()
     const assembled = this.registry.assemble({
       taskMode: state.mode,
       permissionMode: this.settings.permissionMode ?? "default",
@@ -466,6 +586,11 @@ export class AgentRuntime {
       toolPrompts: assembled.executable
         .map((name) => this.registry.get(name)?.prompt?.())
         .filter((p): p is string => typeof p === "string" && p.length > 0),
+      ...(this.projectSkills.length > 0
+        ? {
+            skillIndex: this.projectSkills.map((skill) => `${skill.name}: ${skill.description}`),
+          }
+        : {}),
     })
 
     const validationChecks = options.validationChecks ?? (await this.autoDiscoverChecks())
@@ -818,6 +943,8 @@ export class AgentRuntime {
   /** 环境自检（CLI 的 `doctor` 子命令）。 */
   async doctor(): Promise<DoctorReport> {
     const packageJson = await readPackageJson(this.workspaceRoot)
+    // 诊断要看到真实连接状态：连不上也要给出原因，而不是"配置里写了就算有"
+    await this.loadMcpServers()
     return {
       workspaceRoot: this.workspaceRoot,
       node: process.version,
@@ -830,6 +957,7 @@ export class AgentRuntime {
         coverage: this.sandboxSelection.coverage,
       },
       tools: this.registry.names(),
+      mcpServers: [...this.mcpServerStatus],
       discoveredChecks: discoverChecks(packageJson).map((c) => ({ id: c.id, command: c.command })),
       settingsLayers: {
         mode: this.settings.mode,
@@ -859,8 +987,18 @@ export class AgentRuntime {
   }
 
   async close(): Promise<void> {
+    for (const client of this.mcpClients) await client.close()
+    this.mcpClients.length = 0
     await this.store.close()
   }
+}
+
+export interface McpServerStatus {
+  name: string
+  connected: boolean
+  /** 已注册的工具名；连接失败时为空。 */
+  tools?: string[]
+  error?: string
 }
 
 export interface DoctorReport {
@@ -871,6 +1009,7 @@ export interface DoctorReport {
   storeDegradedReason?: string
   sandbox: { backend: string; degraded: boolean; coverage: string[] }
   tools: string[]
+  mcpServers: McpServerStatus[]
   discoveredChecks: Array<{ id: string; command: string[] }>
   settingsLayers: {
     mode?: string
@@ -893,6 +1032,49 @@ function sameWorkspace(left: string, right: string): boolean {
   const a = path.resolve(left)
   const b = path.resolve(right)
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** 计划文件的人类可读渲染；骨架与完整计划共用一套格式，diff 更直观。 */
+function renderPlanMarkdown(taskId: string, plan: ExecutionPlan | undefined, now: Date): string {
+  const lines = [
+    `# 执行计划 · ${taskId}`,
+    "",
+    `- 状态：${plan ? "已提交" : "草拟中"}`,
+    `- 更新时间：${now.toISOString()}`,
+    "",
+  ]
+  if (!plan) {
+    lines.push(
+      "## 摘要",
+      "",
+      "（等待模型提交：`plan.exit_plan_mode`）",
+      "",
+      "## 步骤",
+      "",
+      "- [ ] 提交后会在这里列出步骤、依赖、完成标准与风险",
+      "",
+    )
+    return lines.join("\n")
+  }
+  lines.push("## 摘要", "", plan.summary || "（未填写）", "")
+  if (plan.assumptions.length > 0) {
+    lines.push("## 假设", "", ...plan.assumptions.map((item) => `- ${item}`), "")
+  }
+  lines.push("## 步骤", "")
+  for (const step of plan.steps) {
+    lines.push(`- [ ] ${step.id}：${step.objective}`)
+    if (step.dependencies.length > 0) lines.push(`  - 依赖：${step.dependencies.join(", ")}`)
+    lines.push(`  - 风险：${step.risk}`)
+    if (step.filesLikelyAffected.length > 0)
+      lines.push(`  - 可能改动：${step.filesLikelyAffected.join(", ")}`)
+    if (step.toolsAllowed.length > 0) lines.push(`  - 工具：${step.toolsAllowed.join(", ")}`)
+    for (const criterion of step.doneWhen) lines.push(`  - 完成标准：${criterion}`)
+  }
+  lines.push("")
+  if (plan.validation.length > 0) {
+    lines.push("## 验证", "", ...plan.validation.map((item) => `- ${item}`), "")
+  }
+  return lines.join("\n")
 }
 
 /**

@@ -1430,13 +1430,16 @@ export async function* runTask(
 
       // 计划提交成功 → 对外发一条可审计的 `task.plan_ready`
       if (call.toolName === "plan.exit_plan_mode" && result.status === "succeeded") {
-        const submitted = result.output as { steps?: number; plan?: unknown } | undefined
+        const submitted = result.output as
+          { steps?: number; plan?: unknown; planFilePath?: string } | undefined
         // 计划必须交回主循环：它要进检查点、进下一轮的动态上下文。
         const plan = submitted?.plan as ExecutionPlan | undefined
         if (plan) activePlan = plan
         yield await sink.emit("task.plan_ready", {
           steps: submitted?.steps ?? 0,
           plan: submitted?.plan ?? null,
+          // 计划文件是给人看的落点；事件里带上它，CLI 才能直接指路。
+          planFilePath: submitted?.planFilePath ?? null,
         })
       }
 

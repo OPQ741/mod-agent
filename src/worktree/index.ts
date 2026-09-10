@@ -202,18 +202,76 @@ export async function worktreeStatus(info: WorktreeInfo): Promise<WorktreeStatus
 }
 
 /**
- * 查看某个托管检出里的**未提交改动**（`git diff`）。
+ * 查看某个托管检出里的**未提交改动**（`git diff` + 未跟踪文件）。
  *
  * 为什么不 diff 分支：agent 的改动默认不提交，"改了什么"就是工作区里那份 diff；
  * 已提交的内容由 `worktreeStatus.unmergedCommits` 单独报告，`clean` 也会拦。
- * 未跟踪文件不在 `git diff` 里 —— 这里不偷偷 `git add`，那会改变用户的工作区状态。
+ *
+ * 未跟踪文件不能只列名字：那等于告诉用户"有新文件，但我不给你看"。这里用
+ * `git diff --no-index /dev/null <file>` 生成标准补丁，**全程不 `git add`** ——
+ * 暂存区属于用户的工作区状态，看 diff 不该改它。
  */
 export async function worktreeDiff(
   info: WorktreeInfo,
   options: { stat?: boolean } = {},
 ): Promise<string> {
-  const args = ["diff", ...(options.stat ? ["--stat"] : [])]
-  return git(info.path, args)
+  if (options.stat) {
+    const tracked = await git(info.path, ["diff", "--stat"])
+    const untracked = await listUntracked(info.path)
+    const section =
+      untracked.length > 0 ? `未跟踪文件（${untracked.length}）：\n${untracked.join("\n")}` : ""
+    return [tracked, section].filter((part) => part.length > 0).join("\n\n")
+  }
+
+  const tracked = await git(info.path, ["diff"])
+  const untracked = await listUntracked(info.path)
+  const MAX_UNTRACKED_PATCHES = 20
+  const patches: string[] = []
+  for (const file of untracked.slice(0, MAX_UNTRACKED_PATCHES)) {
+    patches.push(await diffUntracked(info.path, file))
+  }
+  if (untracked.length > MAX_UNTRACKED_PATCHES) {
+    patches.push(
+      `（还有 ${untracked.length - MAX_UNTRACKED_PATCHES} 个未跟踪文件未展开，用 git status 查看）`,
+    )
+  }
+  return [tracked, ...patches].filter((part) => part.trim().length > 0).join("\n")
+}
+
+/** `git ls-files -z` 的输出按 NUL 切分，能安全处理带空格 / 中文的文件名。 */
+async function listUntracked(cwd: string): Promise<string[]> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["ls-files", "--others", "--exclude-standard", "-z"],
+    {
+      cwd,
+      timeout: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true,
+      shell: false,
+    },
+  )
+  return stdout.split("\0").filter((name) => name.length > 0)
+}
+
+/** 未跟踪文件相对空文件做 no-index diff；git 用退出码 1 表示"有差异"，不是失败。 */
+async function diffUntracked(cwd: string, file: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["diff", "--no-index", "--", "/dev/null", file], {
+      cwd,
+      timeout: 30_000,
+      maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true,
+      shell: false,
+    })
+    return stdout
+  } catch (err) {
+    const typed = err as { code?: number; stdout?: string }
+    if (typed.code === 1 && typeof typed.stdout === "string") return typed.stdout
+    throw new AppError("WORKSPACE_CONFLICT", `git diff --no-index 失败：${messageOf(err)}`, {
+      cause: err,
+    })
+  }
 }
 
 function isManagedPath(candidate: string): boolean {

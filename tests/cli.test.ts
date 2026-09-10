@@ -235,14 +235,18 @@ describe("CLI · worktree 管理", () => {
 
     // agent 的改动通常不提交：diff 看的就是工作区里这一份
     await fs.writeFile(path.join(wtPath, "README.md"), "# changed by agent\n", "utf8")
+    // 新文件是 agent 最常见产物：未跟踪也要能看到内容，而不是只给一个文件名
+    await fs.writeFile(path.join(wtPath, "new.txt"), "brand new\n", "utf8")
     const diff = await run(["worktree", "diff", taskId], { cwd, homeDir })
     expect(diff.code).toBe(EXIT_OK)
     expect(diff.stdout).toContain("-# repo")
     expect(diff.stdout).toContain("+# changed by agent")
+    expect(diff.stdout).toContain("+brand new")
 
     const stat = await run(["worktree", "diff", taskId, "--stat"], { cwd, homeDir })
     expect(stat.code).toBe(EXIT_OK)
     expect(stat.stdout).toContain("README.md")
+    expect(stat.stdout).toContain("new.txt")
 
     const missing = await run(["worktree", "diff", "no-such-task"], { cwd, homeDir })
     expect(missing.code).toBe(EXIT_ERROR)

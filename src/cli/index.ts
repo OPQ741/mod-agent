@@ -582,6 +582,13 @@ async function executeDoctor(input: {
       )
       io.out(`沙箱        ${report.sandbox.backend}${report.sandbox.degraded ? "（降级）" : ""}\n`)
       for (const line of report.sandbox.coverage) io.out(`            ${line}\n`)
+      for (const server of report.mcpServers) {
+        io.out(
+          server.connected
+            ? `MCP         ${server.name} 已连接 · ${server.tools?.length ?? 0} 个工具\n`
+            : `MCP         ${server.name} 连接失败：${server.error ?? "未知原因"}\n`,
+        )
+      }
       io.out(
         `模型后端    ${credentials.provider} · 凭证 ${credentials.credentialsPresent ? "已配置" : "缺失"}\n`,
       )

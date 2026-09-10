@@ -20,8 +20,11 @@ export interface PlanController {
    * 被 SDK / 调度器同时跑多个任务，用 runtime 级布尔值会让任务 A 一进计划模式，
    * 任务 B 的下一次请求也变成只读 —— 一个任务的状态污染另一个任务。
    */
-  enter(taskId: string): { active: true }
-  exit(plan: ExecutionPlan, taskId: string): { status: "submitted"; steps: number }
+  enter(taskId: string): Promise<{ active: true; planFilePath: string }>
+  exit(
+    plan: ExecutionPlan,
+    taskId: string,
+  ): Promise<{ status: "submitted"; steps: number; planFilePath: string }>
   isActive(taskId: string): boolean
 }
 
@@ -47,10 +50,11 @@ export function createEnterPlanModeTool(controller: PlanController): AgentTool<E
     isReadOnly: true,
     isConcurrencySafe: () => true,
     async execute(input, ctx: ToolExecutionContext) {
-      controller.enter(ctx.taskId)
+      const entered = await controller.enter(ctx.taskId)
       return {
         active: true,
         reason: input.reason,
+        planFilePath: entered.planFilePath,
         note:
           "Plan mode is active. From your next turn on, write and command tools are not registered — " +
           "you cannot request them. Read and search freely, then submit the plan via plan.exit_plan_mode.",
@@ -103,11 +107,12 @@ export function createExitPlanModeTool(controller: PlanController): AgentTool<Ex
       }
     },
     async execute(input, ctx: ToolExecutionContext) {
-      const { status, steps } = controller.exit(input.plan, ctx.taskId)
+      const { status, steps, planFilePath } = await controller.exit(input.plan, ctx.taskId)
       return {
         status,
         steps,
         plan: input.plan,
+        planFilePath,
         note: "Plan submitted and recorded. Plan mode is off; write tools are available again.",
       }
     },
