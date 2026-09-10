@@ -43,7 +43,7 @@ import {
   skillToolName,
   type ProjectSkill,
 } from "../skills/loader.js"
-import { McpClient, createMcpTool } from "../mcp/client.js"
+import { createMcpConnection, createMcpTool, type McpConnection } from "../mcp/client.js"
 import {
   createGitStatusTool,
   createListFilesTool,
@@ -159,7 +159,7 @@ export class AgentRuntime {
   private projectSkills: ProjectSkill[] = []
   /** MCP 连接与工具注册只做一次；连接失败的 server 不重试，避免阻塞每一轮。 */
   private mcpLoaded = false
-  private readonly mcpClients: McpClient[] = []
+  private readonly mcpClients: McpConnection[] = []
   private readonly mcpServerStatus: McpServerStatus[] = []
   /**
    * 正在运行的任务集合（单飞锁）。
@@ -425,12 +425,21 @@ export class AgentRuntime {
     if (this.mcpLoaded) return
     this.mcpLoaded = true
     for (const [serverName, config] of Object.entries(this.settings.mcpServers ?? {})) {
-      const client = new McpClient(serverName, config, this.workspaceRoot)
+      const client = createMcpConnection(serverName, config, this.workspaceRoot)
       try {
         const definitions = await client.connect()
         this.mcpClients.push(client)
         const registered: string[] = []
-        for (const definition of definitions) {
+        // 一个 server 声明的工具数不设上限会把工具表和系统提示词一起撑爆
+        const limit = 100
+        if (definitions.length > limit) {
+          this.logger.warn("mcp.too_many_tools", {
+            server: serverName,
+            declared: definitions.length,
+            limit,
+          })
+        }
+        for (const definition of definitions.slice(0, limit)) {
           const tool = createMcpTool({ serverName, definition, client })
           if (this.registry.get(tool.name)) {
             this.logger.warn("mcp.duplicate_tool_name", { server: serverName, tool: tool.name })

@@ -9,6 +9,9 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest"
+import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
+import { once } from "node:events"
 
 import { PolicyEngine } from "../src/policy/engine.js"
 import { createTempWorkspace, createTestRuntime, settingsWith } from "./helpers.js"
@@ -100,7 +103,9 @@ describe("MCP · stdio 客户端", () => {
     })
 
     expect(result.outcome?.status).toBe("completed")
-    expect(JSON.stringify(await runtime.store.getMessages(taskId))).toContain("ECHO:hi")
+    const messages = JSON.stringify(await runtime.store.getMessages(taskId))
+    expect(messages).toContain("ECHO:hi")
+    expect(messages).toContain("UNTRUSTED EXTERNAL CONTENT")
     await runtime.close()
   })
 
@@ -147,6 +152,106 @@ describe("MCP · stdio 客户端", () => {
       await runtime.close()
     } finally {
       delete process.env.MCP_TEST_SECRET
+    }
+  })
+
+  it("Streamable HTTP server 能注册并调用工具，返回内容带不可信标记", async () => {
+    const ws = await createTempWorkspace()
+    workspaces.push(ws)
+    const server = createServer((req, res) => {
+      let raw = ""
+      req.on("data", (chunk: Buffer) => {
+        raw += chunk.toString("utf8")
+      })
+      req.on("end", () => {
+        const message = JSON.parse(raw) as {
+          id?: number
+          method?: string
+          params?: { name?: string; arguments?: { text?: string } }
+        }
+        if (message.method === "initialize") {
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "mcp-session-id": "test-session",
+          })
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { protocolVersion: "2024-11-05", capabilities: { tools: {} } },
+            }),
+          )
+          return
+        }
+        if (req.headers["mcp-session-id"] !== "test-session") {
+          res.writeHead(400).end("missing session")
+          return
+        }
+        if (message.method === "notifications/initialized") {
+          res.writeHead(202).end()
+          return
+        }
+        if (message.method === "tools/list") {
+          res.writeHead(200, { "content-type": "application/json" })
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { tools: [{ name: "echo", description: "Remote echo" }] },
+            }),
+          )
+          return
+        }
+        if (message.method === "tools/call") {
+          res.writeHead(200, { "content-type": "text/event-stream" })
+          const text = `REMOTE:${String(message.params?.arguments?.text ?? "")}`
+          res.end(
+            `event: message\ndata: ${JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { content: [{ type: "text", text }], isError: false },
+            })}\n\n`,
+          )
+          return
+        }
+        res.writeHead(400).end("unsupported")
+      })
+    })
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const port = (server.address() as AddressInfo).port
+    try {
+      const settings = settingsWith({
+        permissionMode: "bypassPermissions",
+        permissions: { allow: ["mcp.remote.echo"], ask: [], deny: [] },
+        mcpServers: {
+          remote: { transport: "http", url: `http://127.0.0.1:${port}/mcp`, timeoutMs: 5_000 },
+        },
+      })
+      const runtime = await createTestRuntime({
+        workspace: ws,
+        script: [
+          toolUse("tool_search", { query: "echo" }),
+          toolUse("mcp.remote.echo", { text: "hi" }),
+          final("done"),
+        ],
+        settings,
+      })
+      const taskId = await runtime.createTask({
+        title: "mcp http",
+        userRequest: "call echo",
+        mode: "edit",
+      })
+      const result = await driveTask(runtime, taskId, {
+        resolveApproval: async () => ({ decision: "allowed", by: "tester" }),
+      })
+      expect(result.outcome?.status).toBe("completed")
+      const messages = JSON.stringify(await runtime.store.getMessages(taskId))
+      expect(messages).toContain("REMOTE:hi")
+      expect(messages).toContain("UNTRUSTED EXTERNAL CONTENT")
+      await runtime.close()
+    } finally {
+      server.close()
     }
   })
 

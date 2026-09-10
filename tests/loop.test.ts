@@ -23,12 +23,13 @@ import {
   type TempWorkspace,
   type TestRuntime,
 } from "./helpers.js"
-import { ask, final, toolUse } from "../src/model/scripted.js"
+import { ask, final, parallelToolUse, toolUse } from "../src/model/scripted.js"
 import { driveTask, exitCodeFor, EXIT_BLOCKED, EXIT_ERROR, EXIT_OK } from "../src/runtime/driver.js"
 import type { LoopOutcome } from "../src/runtime/loop.js"
 import type { ModelRequest } from "../src/model/types.js"
 import type { Settings } from "../src/config/settings.js"
 import type { ScriptStep } from "../src/model/scripted.js"
+import type { HookDefinition } from "../src/tools/hooks.js"
 import type { TaskEvent } from "../src/shared/contracts.js"
 import type { ValidationCheck } from "../src/validation/runner.js"
 import { DEFAULT_BUDGET } from "../src/shared/contracts.js"
@@ -62,6 +63,7 @@ async function boot(options: {
   mode?: "ask" | "plan" | "edit" | "autopilot"
   now?: () => Date
   userRequest?: string
+  hooks?: readonly HookDefinition[]
 }): Promise<{ ws: TempWorkspace; runtime: TestRuntime; taskId: string }> {
   const { ws } = options
   const runtime = await createTestRuntime({
@@ -71,6 +73,7 @@ async function boot(options: {
     ...(options.hasTty !== undefined ? { hasTty: options.hasTty } : {}),
     ...(options.onRequest ? { onRequest: options.onRequest } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.hooks ? { hooks: options.hooks } : {}),
   })
   const taskId = await runtime.createTask({
     title: "test task",
@@ -1072,6 +1075,120 @@ describe("主循环 · 任务模式", () => {
     const payload = ready?.payload as { steps?: number; planFilePath?: string } | undefined
     expect(payload?.steps).toBe(1)
     expect(payload?.planFilePath).toContain(`${taskId}.md`)
+  })
+
+  it("同一轮的连续只读调用真的并行执行，结果按原顺序回灌", async () => {
+    const ws = await workspace({ "a.txt": "A\n", "b.txt": "B\n" })
+    let active = 0
+    let maxActive = 0
+    const delayReadHook: HookDefinition = {
+      name: "delay-reads",
+      kind: "observer",
+      matches: (toolName) => toolName === "repo.read_file",
+      preToolUse: async () => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        active -= 1
+      },
+    }
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [
+        parallelToolUse(
+          { toolName: "repo.read_file", args: { path: ws.abs("a.txt") } },
+          { toolName: "repo.read_file", args: { path: ws.abs("b.txt") } },
+        ),
+        final("done"),
+      ],
+      hooks: [delayReadHook],
+    })
+    const { events, outcome } = await collect(runtime.run(taskId))
+    expect(outcome.status).toBe("completed")
+    // 串行实现下第二个钩子只会在第一个结束后开始，maxActive 永远到不了 2
+    expect(maxActive).toBeGreaterThanOrEqual(2)
+    const reads = events.filter((event) => {
+      const payload = event.payload as { tool?: string } | undefined
+      return (
+        (event.type === "tool.started" || event.type === "tool.completed") &&
+        payload?.tool === "repo.read_file"
+      )
+    })
+    expect(reads.slice(0, 2).every((event) => event.type === "tool.started")).toBe(true)
+    expect(reads.slice(2).every((event) => event.type === "tool.completed")).toBe(true)
+    await runtime.close()
+  })
+
+  it("写操作是屏障：前后只读调用不同时跑", async () => {
+    const ws = await workspace({ "a.txt": "A\n", "b.txt": "B\n" })
+    let active = 0
+    let maxActive = 0
+    const delayReadHook: HookDefinition = {
+      name: "delay-reads",
+      kind: "observer",
+      matches: (toolName) => toolName === "repo.read_file",
+      preToolUse: async () => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        active -= 1
+      },
+    }
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [
+        parallelToolUse(
+          { toolName: "repo.read_file", args: { path: ws.abs("a.txt") } },
+          { toolName: "repo.write_file", args: { path: ws.abs("new.txt"), content: "N\n" } },
+          { toolName: "repo.read_file", args: { path: ws.abs("b.txt") } },
+        ),
+        final("done"),
+      ],
+      hooks: [delayReadHook],
+      settings: settingsWith({ mode: "edit", permissionMode: "bypassPermissions" }),
+    })
+    const { outcome } = await collect(runtime.run(taskId))
+    expect(outcome.status).toBe("completed")
+    expect(maxActive).toBe(1)
+    expect(await ws.exists("new.txt")).toBe(true)
+    await runtime.close()
+  })
+
+  it("显式 deny 的只读调用仍并行执行，但都以失败结果回灌", async () => {
+    const ws = await workspace({ "a.txt": "A\n", "b.txt": "B\n" })
+    let active = 0
+    let maxActive = 0
+    const delayReadHook: HookDefinition = {
+      name: "delay-reads",
+      kind: "observer",
+      matches: (toolName) => toolName === "repo.read_file",
+      preToolUse: async () => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        active -= 1
+      },
+    }
+    const { runtime, taskId } = await boot({
+      ws,
+      script: [
+        parallelToolUse(
+          { toolName: "repo.read_file", args: { path: ws.abs("a.txt") } },
+          { toolName: "repo.read_file", args: { path: ws.abs("b.txt") } },
+        ),
+        final("done"),
+      ],
+      hooks: [delayReadHook],
+      settings: settingsWith({
+        mode: "edit",
+        permissions: { allow: [], ask: [], deny: ["repo.read_file"] },
+      }),
+    })
+    const { outcome } = await collect(runtime.run(taskId))
+    expect(outcome.status).toBe("completed")
+    expect(maxActive).toBe(2)
+    expect(outcome.permissionDenials).toHaveLength(2)
+    await runtime.close()
   })
 
   it("ask 模式同样是只读", async () => {

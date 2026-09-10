@@ -49,7 +49,7 @@ import type { ModelGateway, RetryEvent } from "../model/gateway.js"
 import type { Store } from "../store/types.js"
 import { updateTaskWithRetry } from "./task-write.js"
 import type { ExecutionOutcome, ToolExecutor } from "../tools/executor.js"
-import type { ToolRegistry } from "../tools/registry.js"
+import { ToolRegistry } from "../tools/registry.js"
 import type { PolicyEngine } from "../policy/engine.js"
 import type { PathGuard } from "../policy/pathguard.js"
 import type { EditEngine } from "../patch/edit.js"
@@ -1123,7 +1123,352 @@ export async function* runTask(
       await flushMessages()
     }
 
+    /**
+     * 只读工具并发执行的边界。
+     *
+     * 只并行**连续、只读、`risk:"read"`、`isConcurrencySafe(args)` 为真、不产流**的调用：
+     * - 写操作 / 命令是屏障，前后所有调用都退回串行；
+     * - `auto` 档与显式 ask 规则下不并行：这些配置可能让只读调用也进入审批，
+     *   而"先执行再弹审批"会让模型看到已经发生的副作用，边界就破了；
+     * - deny 规则不阻止并行：被拒的只读调用会作为失败结果回灌，累计拒绝上限仍由组结束点收口；
+     * - 上限 6 条，避免一次模型返回几十个调用把所有文件描述符和事件表同时压满。
+     */
+    const parallelAllowed =
+      options.permissionMode !== "auto" && (deps.settings.permissions.ask?.length ?? 0) === 0
+    const maxParallelReads = 6
+    const collectParallelReads = (
+      start: number,
+    ): Array<{
+      call: PreparedCall
+      tool: NonNullable<ReturnType<ToolRegistry["get"]>>
+      index: number
+    }> => {
+      const group: Array<{
+        call: PreparedCall
+        tool: NonNullable<ReturnType<ToolRegistry["get"]>>
+        index: number
+      }> = []
+      for (let j = start; j < batch.length && group.length < maxParallelReads; j += 1) {
+        const call = batch[j]
+        if (!call || call.argsParseError || !availableToolNames.has(call.toolName)) break
+        const tool = deps.registry.get(call.toolName)
+        if (!tool) break
+        if (tool.risk !== "read" || !ToolRegistry.isReadOnly(tool)) break
+        if (tool.streamsOutput) break
+        if (!ToolRegistry.isConcurrencySafe(tool, call.args)) break
+        group.push({ call, tool, index: j })
+      }
+      return group
+    }
+
     for (let index = 0; index < batch.length; index += 1) {
+      const parallelGroup = parallelAllowed ? collectParallelReads(index) : []
+      if (parallelGroup.length > 1) {
+        /* ---------------- 并行只读组 ---------------- */
+        const startedAtByCall = new Map<string, Date>()
+        for (const item of parallelGroup) {
+          const callId = item.call.callId
+          yield await sink.emit("tool.started", {
+            callId,
+            tool: item.call.toolName,
+            risk: item.tool.risk,
+          })
+          const startedAt = now()
+          startedAtByCall.set(callId, startedAt)
+          deps.metrics.increment("tool.invoked")
+          deps.metrics.increment(`tool.${item.call.toolName}.invoked`)
+          await deps.store.startToolCall({
+            id: callId,
+            taskId: options.taskId,
+            toolName: item.call.toolName,
+            inputHash: sha256(stableStringify(item.call.args)),
+            idempotencyKey: parameterHash({ tool: item.call.toolName, args: item.call.args }),
+            idempotency: item.tool.idempotency ?? "non_idempotent",
+            status: "started",
+            startedAt: startedAt.toISOString(),
+            retryCount: 0,
+          })
+        }
+
+        const settled = await Promise.allSettled(
+          parallelGroup.map((item) =>
+            deps.executor.execute({
+              toolName: item.call.toolName,
+              args: item.call.args,
+              ctx: buildToolContext(
+                deps,
+                options,
+                item.call.callId,
+                () => {},
+                state.workspaceRoot,
+                undefined,
+              ),
+              decide: async (args) => {
+                const command = item.tool.policyCommand?.(args)
+                return deps.policy.evaluate({
+                  toolName: item.call.toolName,
+                  risk: item.tool.risk ?? "read",
+                  args,
+                  ...(command ? { command: normalizeCommandRequest(command) } : {}),
+                  ...(item.tool.policyPaths ? { paths: item.tool.policyPaths(args) } : {}),
+                  ...(item.tool.policyDomains ? { domains: item.tool.policyDomains(args) } : {}),
+                  permissionMode: options.permissionMode,
+                  taskMode: effectiveTaskMode(),
+                })
+              },
+              taskMode: effectiveTaskMode(),
+              permissionMode: options.permissionMode,
+            }),
+          ),
+        )
+
+        type GroupControl =
+          | {
+              kind: "approval"
+              index: number
+              callId: string
+              startedAt: Date
+              outcome: Extract<ExecutionOutcome, { kind: "approval" }>
+            }
+          | { kind: "denial"; index: number; message: string }
+          | {
+              kind: "no-progress"
+              index: number
+              message: string
+              diagnosis: string
+            }
+        let control: GroupControl | undefined
+        const groupEnd = parallelGroup[parallelGroup.length - 1]!.index
+
+        for (let g = 0; g < parallelGroup.length; g += 1) {
+          const item = parallelGroup[g]!
+          const callId = item.call.callId
+          const settledItem = settled[g]
+          if (!settledItem || settledItem.status === "rejected") {
+            throw settledItem?.reason ?? new Error("parallel tool execution failed")
+          }
+          const outcome = settledItem.value
+          usage.toolCalls += 1
+
+          // 已经决定停止后，后续 executor 若返回 approval，说明它并没有真的执行：
+          // 补一条"未执行"，不能谎报成成功，也不能留下一个假的 started 记录。
+          if (control && control.index < g) {
+            if (outcome.kind === "approval") {
+              batchResults.push({
+                type: "tool_result",
+                toolUseId: callId,
+                content:
+                  control.kind === "approval"
+                    ? "Not executed: an earlier tool call in this batch is awaiting approval. Re-issue it after the decision."
+                    : "Not executed: the task stopped earlier in this batch.",
+                isError: true,
+              })
+              await deps.store.finishToolCall(callId, {
+                status: "failed",
+                finishedAt: now().toISOString(),
+                durationMs: 0,
+                errorCode: "NOT_EXECUTED",
+              })
+              yield await sink.emit("tool.completed", {
+                callId,
+                tool: item.call.toolName,
+                status: "failed",
+                durationMs: 0,
+                errorCode: "NOT_EXECUTED",
+                truncated: false,
+              })
+              continue
+            }
+          }
+
+          if (outcome.kind === "approval") {
+            /* 只读调用只有在显式规则下才会走到这里；防御性保留，语义与串行路径一致。 */
+            const startedAt = startedAtByCall.get(callId) ?? now()
+            if (!control) {
+              control = {
+                kind: "approval",
+                index: g,
+                callId,
+                startedAt,
+                outcome,
+              }
+            }
+            batchResults.push({
+              type: "tool_result",
+              toolUseId: callId,
+              content: `Approval required: ${outcome.approval.reason}. The task is paused pending a decision.`,
+              isError: true,
+            })
+            continue
+          }
+
+          const result = outcome.result
+          yield await sink.emit("tool.completed", {
+            callId,
+            tool: result.toolName,
+            status: result.status,
+            durationMs: result.durationMs,
+            errorCode: result.error?.code,
+            truncated: result.truncated,
+          })
+          deps.metrics.recordTiming("tool.duration_ms", result.durationMs)
+          await deps.store.finishToolCall(callId, {
+            status: toolCallStatusFor(result.status),
+            finishedAt: now().toISOString(),
+            durationMs: result.durationMs,
+            ...(result.error ? { errorCode: result.error.code } : {}),
+          })
+          if (result.status === "succeeded") deps.metrics.increment("tool.succeeded")
+          else deps.metrics.increment("tool.failed")
+
+          if (
+            result.error?.code === "TOOL_PERMISSION_DENIED" ||
+            result.error?.code === "DENIAL_LIMIT_REACHED"
+          ) {
+            permissionDenials.push({ toolName: result.toolName, reason: result.error.message })
+            deps.metrics.increment("policy.decision.deny")
+          } else {
+            deps.metrics.increment("policy.decision.allow")
+          }
+
+          batchResults.push({
+            type: "tool_result",
+            toolUseId: callId,
+            content: renderToolResultForModel(result),
+            isError: result.status !== "succeeded",
+          })
+
+          if (result.error?.code === "DENIAL_LIMIT_REACHED" && !control) {
+            control = { kind: "denial", index: g, message: result.error.message }
+          }
+
+          if (control && control.index < g) continue
+
+          try {
+            progressGuard.assertProgress({
+              toolName: result.toolName,
+              argsFingerprint: sha256(stableStringify(item.call.args)),
+              resultFingerprint: fingerprintResult(result.output ?? result.error),
+              ok: result.status === "succeeded",
+              changedFiles: [],
+              ...(result.error ? { errorCode: result.error.code } : {}),
+            })
+          } catch (err) {
+            const appError = toAppError(err, "NO_PROGRESS")
+            const diagnosis = progressGuard.buildDiagnosis()
+            if (appError.details?.action === "stop-and-escalate") {
+              if (!control) {
+                control = {
+                  kind: "no-progress",
+                  index: g,
+                  message: appError.message,
+                  diagnosis,
+                }
+              }
+              continue
+            }
+            batchNotes.push(
+              `[progress-guard] ${appError.message}\n\n${diagnosis}\n\nForm a new hypothesis and change your approach.`,
+            )
+            progressGuard.reset()
+            deps.metrics.increment("loop.no_progress")
+            yield await sink.emit("task.warning", { reason: "no_progress_compressed", diagnosis })
+          }
+        }
+
+        if (control) {
+          closeBatch(
+            groupEnd + 1,
+            control.kind === "approval"
+              ? "Not executed: an earlier tool call in this batch is awaiting approval. Re-issue it after the decision."
+              : "Not executed: the task stopped earlier in this batch.",
+          )
+          await flushBatch()
+
+          if (control.kind === "approval") {
+            const approvalId = `apr_${sha256(`${options.taskId}:${control.callId}`).slice(0, 12)}`
+            await deps.store.createApproval({
+              id: approvalId,
+              taskId: options.taskId,
+              toolCallId: control.callId,
+              toolName: control.outcome.approval.toolName,
+              requestSummary: control.outcome.approval.reason,
+              parameterHash: control.outcome.approval.parameterHash,
+              policyVersion: control.outcome.approval.policyVersion,
+              status: "pending",
+              requestedAt: control.startedAt.toISOString(),
+              expiresAt: new Date(control.startedAt.getTime() + 30 * 60_000).toISOString(),
+            })
+            const awaiting = await saveCheckpoint(
+              deps,
+              options,
+              "awaiting_approval",
+              messages,
+              changedFiles,
+              sink,
+              activePlan,
+            )
+            yield awaiting
+            yield await sink.emit("approval.required", {
+              approvalId,
+              tool: control.outcome.approval.toolName,
+              parameterHash: control.outcome.approval.parameterHash,
+              reason: control.outcome.approval.reason,
+            })
+            deps.metrics.increment("policy.decision.ask")
+            const latestState = await deps.store.getTask(options.taskId)
+            if (latestState) {
+              await updateTaskWithRetry(
+                deps.store,
+                options.taskId,
+                { status: "awaiting_approval", usage },
+                {
+                  stopIf: (current) => !assertSafeTransition(current.status, "awaiting_approval"),
+                },
+              )
+            }
+            const settledTask = await finish(
+              "awaiting_approval",
+              "approval_required",
+              control.outcome.approval.reason,
+            )
+            if (settledTask.event) yield settledTask.event
+            return settledTask.outcome
+          }
+
+          if (control.kind === "denial") {
+            yield await sink.emit("task.warning", {
+              reason: "denial_limit_reached",
+              message: control.message,
+              denials: permissionDenials.length,
+            })
+            const settledTask = await finish("failed", "error_during_execution", control.message)
+            if (settledTask.event) yield settledTask.event
+            return settledTask.outcome
+          }
+
+          yield await sink.emit("task.warning", {
+            reason: "no_progress",
+            diagnosis: control.diagnosis,
+          })
+          yield await sink.emit("task.failed", {
+            code: "NO_PROGRESS",
+            message: control.message,
+            diagnosis: control.diagnosis,
+          })
+          const settledTask = await finish(
+            "failed",
+            "error_no_progress",
+            `${control.message}\n\n${control.diagnosis}`,
+          )
+          if (settledTask.event) yield settledTask.event
+          return settledTask.outcome
+        }
+
+        index = groupEnd
+        continue
+      }
+
       const call = batch[index]
       if (!call) continue
       const callId = call.callId

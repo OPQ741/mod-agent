@@ -45,7 +45,7 @@ export const SettingsSchema = z.object({
    */
   worktree: z.boolean().optional(),
   /**
-   * 外部 MCP server（stdio）。
+   * 外部 MCP server（stdio 或 Streamable HTTP）。
    *
    * 连接失败不阻塞启动：runtime 会记录诊断并跳过该 server，`doctor` 里可见。
    * 工具默认按 `external_side_effect` 处理，即使 `bypassPermissions` 也需要显式放行。
@@ -53,13 +53,23 @@ export const SettingsSchema = z.object({
   mcpServers: z
     .record(
       z.string(),
-      z.object({
-        command: z.string().min(1),
-        args: z.array(z.string()).default([]),
-        env: z.record(z.string(), z.string()).default({}),
-        /** 单次 initialize / tools/call 的超时；默认 10s。 */
-        timeoutMs: z.number().int().positive().default(10_000),
-      }),
+      z.union([
+        z.object({
+          transport: z.literal("stdio").optional(),
+          command: z.string().min(1),
+          args: z.array(z.string()).default([]),
+          env: z.record(z.string(), z.string()).default({}),
+          /** 单次 initialize / tools/call 的超时；默认 10s。 */
+          timeoutMs: z.number().int().positive().default(10_000),
+        }),
+        z.object({
+          transport: z.literal("http"),
+          /** Streamable HTTP endpoint（POST JSON-RPC）。 */
+          url: z.string().url(),
+          headers: z.record(z.string(), z.string()).default({}),
+          timeoutMs: z.number().int().positive().default(10_000),
+        }),
+      ]),
     )
     .default({}),
   respectGitignore: z.boolean().optional(),
