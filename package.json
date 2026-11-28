@@ -1,6 +1,6 @@
 {
   "name": "mod-agent",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "TypeScript 实现的 AI Coding Agent CLI，形态对标 Claude Code。",
   "type": "module",
